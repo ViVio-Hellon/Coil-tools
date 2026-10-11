@@ -747,6 +747,7 @@ def run_import():
         "summary": result.summary(),
         "imported": result.imported,
         "errors": result.errors,
+        "notes": result.notes,
         "note": note,
         "stamps": [s.to_dict() for s in data_sync.stamps(conn)],
     })

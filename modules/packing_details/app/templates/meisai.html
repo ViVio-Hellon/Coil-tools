@@ -201,6 +201,29 @@
         <p class="set-note" id="setLotResult" role="status" hidden></p>
       </section>
 
+      {#- 仕掛台帳の2つ目(統合 1.2.6。python-web-tools と同じ決まり)。1つ目のファイル名は決まったまま、
+          2つ目はファイル名も変えられる。名前は変えてよいが、中身の要る列はそろえる約束(現場) -#}
+      <section class="set-box" aria-labelledby="setLot2Head">
+        <div class="set-box-head"><span id="setLot2Head">仕掛台帳(2つ目)のフォルダ</span><span class="where where-local">このPCに保存</span></div>
+        <span class="stamp">1つ目で見つからないときに見ます。1つ目に無いファイルは2つ目から読み、1つ目に無いロット・受注は2つ目から足します(両方にあれば1つ目)。空なら使いません。</span>
+        <input type="text" id="setLot2Dir" spellcheck="false" autocomplete="off" aria-labelledby="setLot2Head"
+               placeholder="空なら2つ目は使いません">
+        <div class="set-lot2-files">
+          <label for="setLot2FileLot">2つ目の名前(SIKALOT の代わり)</label>
+          <input type="text" id="setLot2FileLot" data-lot-file2="仕掛ロット" spellcheck="false" autocomplete="off">
+          <label for="setLot2FileHiki">2つ目の名前(SIKAHIKI の代わり)</label>
+          <input type="text" id="setLot2FileHiki" data-lot-file2="仕掛引当" spellcheck="false" autocomplete="off">
+          <label for="setLot2FileOdr">2つ目の名前(SIKAODR の代わり)</label>
+          <input type="text" id="setLot2FileOdr" data-lot-file2="仕掛受注" spellcheck="false" autocomplete="off">
+        </div>
+        <span class="stamp" id="setLot2Note"></span>
+        <div class="set-stamps" id="setLot2State"></div>
+        <div class="set-qa-buttons">
+          <button type="button" class="primary" id="btnLot2Save">保存して取り込み</button>
+        </div>
+        <p class="set-note" id="setLot2Result" role="status" hidden></p>
+      </section>
+
       <section class="set-box" aria-labelledby="setKonpoHead">
         <div class="set-box-head"><span id="setKonpoHead">梱包課共有の仕掛フォルダ</span><span class="where where-local">このPCに保存</span></div>
         <span class="stamp files" id="setKonpoFiles"></span>

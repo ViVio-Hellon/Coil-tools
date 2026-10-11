@@ -71,6 +71,12 @@ def _local_state() -> dict:
         # まとめて1つの表で渡すと、画面側が「どちらの欄の話か」を
         # 名前から推し量ることになる
         "lot_files": list(config.LOT_DB_FILES.values()),
+        # 仕掛台帳の2つ目(統合 1.2.6)。フォルダと、表ごとの2つ目のファイル名(空なら1つ目と同じ)
+        "lot_db_dir2": str(config.lot_db_dir2() or ""),
+        "lot_db_dir2_setting": user_settings.get(config.KEY_LOT_DB_DIR2, "") or "",
+        "lot_files2": [{"table": t, "first": config.LOT_DB_FILES[t],
+                        "name": user_settings.get(k, "") or ""}
+                       for t, k in config.KEY_LOT_DB2_FILES.items()],
         "konpo_files": list(config.KONPO_DB_FILES.values()),
         "lot_tables": list(config.LOT_DB_FILES),
         "konpo_tables": list(config.KONPO_DB_FILES),
@@ -395,6 +401,68 @@ def write_settings():
         "missing": missing,
         "stamps": [s.to_dict() for s in data_sync.stamps(conn)],
     })
+
+
+def _second_state() -> dict:
+    """仕掛台帳の2つ目の「いまの状態」: 表ごとに、見つかった場所と足りない列。
+
+    現場の約束「名前は変えても、中身の要る列は必ずそろえる」を、ここで確かめる。
+    """
+    folder = config.lot_db_dir2()
+    if folder is None:
+        return {"lot_db_dir2": "", "lot_second": []}
+    found = data_sync.find_second_lots()
+    rows = []
+    for table, name in config.lot_db2_files().items():
+        path = found.get(table)
+        rows.append({"table": table, "name": name, "found": str(path) if path else "",
+                     "missing_columns": data_sync.second_missing_columns(path, table) if path else []})
+    return {"lot_db_dir2": str(folder), "lot_second": rows}
+
+
+@bp.post("/api/settings/lot2")
+def write_second_lot():
+    """仕掛台帳の2つ目(フォルダと、表ごとのファイル名)を書き換える。
+
+    フォルダが空なら2つ目を使わない。ファイル名が空ならその表は1つ目と同じ名前。
+    ほかの置き場所の欄と同じく、この端末の設定(管理者パスワードは要らない)。
+    """
+    body = request.get_json(silent=True) or {}
+    folder = str(body.get("dir", "")).strip()
+    names = body.get("files") or {}
+    if not isinstance(names, dict):
+        return jsonify(error_body("bad_files", "ファイル名の形が違います。", "files")), 400
+    if folder:
+        try:
+            config.resolve_dir(folder)
+        except ValueError as exc:
+            return jsonify(error_body("bad_path", str(exc), "dir")), 400
+    clean: dict[str, str] = {}
+    for table, key in config.KEY_LOT_DB2_FILES.items():
+        name = str(names.get(table, "") or "").strip()
+        problem = config.file_name_problem(name)
+        if problem:
+            return jsonify(error_body("bad_name", f"{table}: {problem}", "files")), 400
+        clean[key] = name
+    ok = user_settings.save(config.KEY_LOT_DB_DIR2, folder)
+    for key, name in clean.items():
+        ok = user_settings.save(key, name) and ok
+    if not ok:
+        return jsonify(error_body("write_failed", "設定ファイルに書けませんでした。")), 500
+    if not folder:
+        note = "2つ目は使いません(1つ目だけを見ます)。"
+    elif config.lot_db_dir2() is None:
+        note = "1つ目と同じフォルダなので、2つ目としては使いません。"
+    else:
+        note = ("アプリのフォルダからの相対として読みました: "
+                f"{config.lot_db_dir2()}") if config.is_relative_setting(folder) else ""
+    return jsonify({"ok": True, "note": note, **_second_state(), **_local_state()})
+
+
+@bp.get("/api/settings/lot2")
+def read_second_lot():
+    """仕掛台帳の2つ目のいまの状態(見つかった場所・足りない列)。設定画面が後から読む。"""
+    return jsonify(_second_state())
 
 
 def _writable_problem(folder) -> str:

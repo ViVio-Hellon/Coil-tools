@@ -208,6 +208,33 @@ def lot_db_dir_fallback() -> Path | None:
     return DEFAULT_LOT_DB_DIR_FALLBACK
 
 
+def lot_db2_files() -> dict[str, str]:
+    """仕掛台帳の**2つ目の**ファイル名(手元の表名 → ファイル名。統合 1.2.6)。
+
+    設定していない表は1つ目と同じ名前(`LOT_DB_FILES`)。拡張子まで書けばその名前そのもの、
+    省けば `.sqlite3` / `.db` を付けて探す(`source_db.find_named`)。python-web-tools と同じ。
+    """
+    from . import user_settings
+    names = dict(LOT_DB_FILES)
+    for table, key in KEY_LOT_DB2_FILES.items():
+        value = user_settings.get(key)
+        if isinstance(value, str) and value.strip():
+            names[table] = value.strip()
+    return names
+
+
+def file_name_problem(name: str) -> str:
+    """2つ目のファイル名として使えない理由(使えれば空)。フォルダは別の欄に入れる。"""
+    text = (name or "").strip()
+    if not text:
+        return ""
+    bad = sorted({c for c in text if c in BAD_FILE_CHARS})
+    if bad:
+        return ("ファイル名に使えない文字があります: " + " ".join(bad)
+                + "(フォルダは「仕掛台帳(2つ目)のフォルダ」の欄に入れてください)")
+    return ""
+
+
 def lot_db_dirs() -> list[Path]:
     """仕掛台帳を探す順。本命 → 予備。
 
@@ -232,6 +259,14 @@ def export_dir() -> Path:
 KEY_MASTER_DB_DIR = "master_db_dir"
 KEY_LOT_DB_DIR = "lot_db_dir"
 KEY_LOT_DB_DIR_2 = "lot_db_dir_2"
+# 仕掛台帳の2つ目のファイル名(表ごと。空なら1つ目と同じ名前。統合 1.2.6)。
+# このツールが読むのは 仕掛引当・仕掛受注 の2つだけ(SIKALOT は読まない)
+KEY_LOT_DB2_FILES = {
+    "仕掛引当": "lot_db2_file_hiki",
+    "仕掛受注": "lot_db2_file_odr",
+}
+# ファイル名に使えない文字(Windows)。2つ目のファイル名の欄で断る
+BAD_FILE_CHARS = '\\/:*?"<>|'
 KEY_EXPORT_DIR = "export_dir"
 KEY_AUTO_IMPORT = "auto_import_on_start"
 KEY_LINE = "line"

@@ -59,6 +59,7 @@ export function wire(given) {
   }
 
   $("btnLotSave").addEventListener("click", () => saveFolder("lot"));
+  $("btnLot2Save").addEventListener("click", saveSecondLot);
   $("btnKonpoSave").addEventListener("click", () => saveFolder("konpo"));
   $("btnShareSave").addEventListener("click", saveShareDir);
   $("btnHistorySave").addEventListener("click", () => savePlace("history"));
@@ -181,7 +182,8 @@ function renderStamps(stamps, tables, boxId, problem = "") {
 }
 
 /** 置き場所の入力欄と、この端末の設定の鍵 */
-const PLACE_FIELDS = [["setLotDir", "lot_db_dir_setting"], ["setKonpoDir", "konpo_db_dir_setting"],
+const PLACE_FIELDS = [["setLotDir", "lot_db_dir_setting"], ["setLot2Dir", "lot_db_dir2_setting"],
+                      ["setKonpoDir", "konpo_db_dir_setting"],
                       ["setShareDir", "share_setting"], ["setHistoryDir", "history_setting"],
                       ["setJsonDir", "json_setting"], ["setExportDir", "export_dir_setting"]];
 
@@ -199,6 +201,12 @@ export function unsaved() {
     const head = $(id).getAttribute("aria-labelledby");
     out.push(`設定: ${(head && $(head) && $(head).textContent.trim()) || id}`);
   }
+  for (const f of local.lot_files2 || []) {
+    const box = document.querySelector(`[data-lot-file2="${f.table}"]`);
+    if (box && (box.value || "").trim() !== (f.name || "").trim()) {
+      out.push(`設定: 仕掛台帳(2つ目)の名前(${f.first} の代わり)`);
+    }
+  }
   if (($("setQaValue").value || "").trim()) out.push("設定: QAマークの新しい文字");
   return out;
 }
@@ -208,6 +216,11 @@ function renderLocal(body, { fill = false } = {}) {
   local = body;
   if (fill) {
     $("setLotDir").value = body.lot_db_dir_setting || "";
+    $("setLot2Dir").value = body.lot_db_dir2_setting || "";
+    for (const f of body.lot_files2 || []) {
+      const box = document.querySelector(`[data-lot-file2="${f.table}"]`);
+      if (box) box.value = f.name || "";
+    }
     $("setKonpoDir").value = body.konpo_db_dir_setting || "";
     $("setShareDir").value = body.share_setting || "";
     $("setHistoryDir").value = body.history_setting || "";
@@ -230,6 +243,17 @@ function renderLocal(body, { fill = false } = {}) {
       + (setting ? "" : "（梱包資材マスタのフォルダと同じ）");
   }
   $("setLotNote").textContent = `いま見ている場所: ${body.lot_db_dir}`;
+  for (const f of body.lot_files2 || []) {
+    const box = document.querySelector(`[data-lot-file2="${f.table}"]`);
+    if (box) box.placeholder = `空なら ${f.first}(1つ目と同じ名前)`;
+  }
+  $("setLot2Note").textContent = body.lot_db_dir2
+    ? `いま見ている場所: ${body.lot_db_dir2}` : "いまは2つ目を使っていません";
+  if (fill && body.lot_db_dir2) {
+    api.get("/api/settings/lot2").then(renderSecond).catch(() => { /* 開き直せば分かる */ });
+  } else if (!body.lot_db_dir2) {
+    renderSecond({ lot_second: [] });
+  }
   $("setKonpoNote").textContent = `いま見ている場所: ${body.konpo_db_dir}`;
   $("setLotDir").placeholder = `空なら既定: ${body.lot_db_dir_default}`;
   $("setKonpoDir").placeholder = `空なら既定: ${body.konpo_db_dir_default}`;
@@ -252,6 +276,53 @@ function renderLocal(body, { fill = false } = {}) {
     $("setQaKind").textContent = "（共有を確かめています）";
     $("setShare").className = "set-share";
     $("setShare").textContent = "共有フォルダを確かめています…";
+  }
+}
+
+/**
+ * 仕掛台帳の2つ目の「いまの状態」: 表ごとに、見つかった場所・足りない列。
+ * 現場の約束「名前は変えても、中身の要る列は必ずそろえる」をここで見る。
+ */
+function renderSecond(body) {
+  const box = $("setLot2State");
+  box.textContent = "";
+  for (const s of body.lot_second || []) {
+    const line = document.createElement("div");
+    if (!s.found) {
+      line.className = "miss";
+      line.textContent = `${s.table}  ${s.name} が見つかりません(1つ目にあれば1つ目だけを使います)`;
+    } else if (s.missing_columns.length) {
+      line.className = "miss";
+      line.textContent = `${s.table}  ${s.name}  足りない列: ${s.missing_columns.join("・")}`;
+    } else {
+      line.className = "ok";
+      line.textContent = `${s.table}  ${s.name}  見つかりました・要る列はそろっています`;
+    }
+    box.appendChild(line);
+  }
+}
+
+/** 仕掛台帳の2つ目を保存して、仕掛台帳を取り込み直す(1つ目のあとで2つ目にだけある分を足す) */
+async function saveSecondLot() {
+  const button = $("btnLot2Save");
+  button.disabled = true;
+  showNote("setLot2Result", "");
+  try {
+    const files = {};
+    for (const box of document.querySelectorAll("[data-lot-file2]")) files[box.dataset.lotFile2] = box.value;
+    const saved = await api.post("/api/settings/lot2", { dir: $("setLot2Dir").value, files });
+    renderSecond(saved);
+    const body = await importWithProgress({ force: true, only: "lot" }, "仕掛台帳 を取り込み中");
+    showNote("setLot2Result", [saved.note, body.summary, ...(body.notes || []), body.note, ...body.errors]
+      .filter(Boolean).join("\n"), !body.ok);
+    hooks.afterImport(body);
+    const next = await api.get("/api/settings");
+    renderLocal(next, { fill: true });
+    renderStamps(body.stamps, next.lot_tables, "setLotStamps");
+  } catch (err) {
+    refused(err, "setLot2Result");
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -366,7 +437,7 @@ async function saveFolder(kind) {
     // **保存したら、その欄の分だけ取り込む。** 置き場所を変えただけでは何も起きない
     const body = await importWithProgress({ force: true, only: kind },
                                           `${f.label} を取り込み中`);
-    showNote(f.note, [saved.note, body.summary, body.note, ...body.errors]
+    showNote(f.note, [saved.note, body.summary, ...(body.notes || []), body.note, ...body.errors]
       .filter(Boolean).join("\n"), !body.ok);
     hooks.afterImport(body);
     const next = await api.get("/api/settings");

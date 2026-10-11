@@ -63,16 +63,47 @@ def find_sources(lot_dir: Optional[Path] = None,
         (config.LOT_DB_FILES, lot_dir if lot_dir is not None else config.lot_db_dir()),
         (config.KONPO_DB_FILES, konpo_dir if konpo_dir is not None else config.konpo_db_dir()),
     )
+    # 仕掛台帳の2つ目(設定していれば)。1つ目に無いファイルだけ、2つ目の名前で読む。
+    # フォルダを明示されたとき(試験・設定画面の確かめ)は1つ目だけ
+    second = find_second_lots() if lot_dir is None else {}
     for files, primary in pairs:
         for table, filename in files.items():
+            path = source_db.find(primary, filename) or second.get(table)
             # 次点はアプリのフォルダ(統合アプリの根)。共有に届かない端末は
             # そこに写しを置く(統合版で直した: 機能のフォルダを見ていた)
-            for base in (primary, config.APP_DIR):
-                path = source_db.find(base, filename)
-                if path is not None:
-                    found[table] = path
-                    break
+            path = path or source_db.find(config.APP_DIR, filename)
+            if path is not None:
+                found[table] = path
     return found
+
+
+def find_second_lots() -> dict[str, Path]:
+    """仕掛台帳の**2つ目**のファイル(手元の表名 → 場所)。2つ目を設定していなければ空。
+
+    2つ目のフォルダでは**2つ目のファイル名だけ**を探す(`config.lot_db2_files`)。名前を変えて
+    いれば、2つ目に SIKALOT.sqlite3 があっても読まない(取り違えを防ぐ)。
+    """
+    second = config.lot_db_dir2()
+    if second is None:
+        return {}
+    found: dict[str, Path] = {}
+    for table, name in config.lot_db2_files().items():
+        path = source_db.find_named(second, name)
+        if path is not None:
+            found[table] = path
+    return found
+
+
+def second_missing_columns(path: Path, table: str) -> list[str]:
+    """2つ目のファイルに**足りない列**(取り込み元の列名)。現場の約束「名前は変えても、
+    中身の要る列は必ずそろえる」を設定画面で確かめるため。読めなければ空。"""
+    try:
+        have = set(source_db.columns(Path(path), import_specs.SOURCE_TABLE))
+    except (source_db.SourceError, OSError):
+        return []
+    if not have:
+        return []
+    return [src for _col, src, _conv in import_specs.IMPORT_SPECS[table] if src not in have]
 
 
 def missing_sources(found: dict[str, Path]) -> dict[str, str]:
@@ -91,6 +122,8 @@ class ImportResult:
     imported: dict[str, int] = field(default_factory=dict)
     skipped: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    # 知らせ(失敗ではない)。仕掛台帳の2つ目から足した件数など
+    notes: list[str] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -104,6 +137,7 @@ class ImportResult:
         self.imported.update(other.imported)
         self.skipped.update(other.skipped)
         self.errors.extend(other.errors)
+        self.notes.extend(other.notes)
         return self
 
     def summary(self) -> str:
@@ -249,6 +283,11 @@ def import_all(conn: sqlite3.Connection, *,
         if wanted & set(config.LOT_DB_FILES):
             places.append(f"{config.lot_db_dir()} に "
                           f"{', '.join(n for t, n in config.LOT_DB_FILES.items() if t in wanted)} を")
+            second_dir = config.lot_db_dir2()
+            if second_dir is not None and lot_dir is None:
+                # 2つ目は2つ目の名前で探した(見つからない文もその名前で言う)
+                places.append(f"(2つ目は {second_dir} に "
+                              f"{', '.join(n for t, n in config.lot_db2_files().items() if t in wanted)})")
         if wanted & set(config.KONPO_DB_FILES):
             places.append(f"{config.konpo_db_dir()} に "
                           f"{', '.join(n for t, n in config.KONPO_DB_FILES.items() if t in wanted)} を")
@@ -257,13 +296,20 @@ def import_all(conn: sqlite3.Connection, *,
         return result
 
     items = list(found.items())
+    second = find_second_lots() if lot_dir is None else {}
     for index, (table, path) in enumerate(items):
         pct = 100 * index // len(items)
         notify(pct, f"{table} を読み込み中...（{index + 1}/{len(items)}）")
-        if not force and not needs_import(conn, path):
+        # 1つ目にファイルがあり、2つ目にも同じ表のファイルがあれば、あとで足す
+        extra = second.get(table)
+        extra = extra if extra is not None and extra != path else None
+        if (not force and not needs_import(conn, path)
+                and (extra is None or not needs_import(conn, extra))):
             log.info("%s: 元が変わっていないので飛ばします (%s)", table, path.name)
             continue
         import_table(conn, table, path, result=result)
+        if extra is not None and table in result.imported:
+            merge_second(conn, table, extra, result)
         if result.errors and table in [e.split(":")[0] for e in result.errors]:
             notify(pct, f"{table} を読み込み中...", False)
 
@@ -273,6 +319,75 @@ def import_all(conn: sqlite3.Connection, *,
 
     notify(100, result.summary(), result.ok)
     return result
+
+
+# 2つ目から足すときの「同じもの」の決め方。この鍵が1つ目に無いものだけ足す
+LOT_MERGE_KEYS = {"仕掛ロット": "ロット番号", "仕掛引当": "ロット番号", "仕掛受注": "受注番号"}
+#: 2つ目の取り込みを覚える名前(取り込み記録。表の記録とは別に持つ)
+SECOND_NOTE = "{table}(2つ目)"
+
+
+def merge_second(conn: sqlite3.Connection, table: str, path: Path,
+                 result: ImportResult) -> int:
+    """仕掛台帳の2つ目のファイルから、**1つ目に無いもの**だけを手元に足す。足した行数。
+
+    1つ目にファイルはあるが、目当てのロット(受注)が入っていないとき、2つ目にあれば
+    それを使う(python-web-tools と同じ)。同じロット・受注が両方にあれば1つ目を正とする
+    (2つ目の行は足さない)。読めなければ一言残して何もしない(1つ目の分は入っている)。
+    """
+    spec = import_specs.IMPORT_SPECS[table]
+    key = LOT_MERGE_KEYS[table]
+    try:
+        rows = read_table(path)
+    except SyncError as exc:
+        result.errors.append(f"{table}: 2つ目のファイルを読めませんでした({exc})")
+        log.warning("%s: 2つ目 %s を読めません: %s", table, path, exc)
+        return 0
+    missing = second_missing_columns(path, table)
+    lost = [src for col, src, _conv in spec
+            if col in import_specs.REQUIRED_KEY_COLUMNS.get(table, ()) and src in missing]
+    if lost:
+        result.errors.append(f"{table}: 2つ目のファイル {path.name} に鍵の列がありません"
+                             f"({', '.join(lost)})。2つ目からは足していません")
+        return 0
+    columns = [c[0] for c in spec]
+    col_list = ", ".join(f'"{c}"' for c in columns)
+    placeholders = ", ".join("?" for _ in columns)
+    required = import_specs.REQUIRED_KEY_COLUMNS.get(table, ())
+    blanks = import_specs.BLANK_IS_MISSING.get(table, ())
+    fallbacks = import_specs.NULL_FALLBACKS
+    have = {str(r[0]) for r in conn.execute(f'SELECT DISTINCT "{key}" FROM "{table}"')}
+    added = 0
+    keys: set[str] = set()
+    try:
+        with conn:
+            for row in rows:
+                values = {col: conv(row.get(src)) for col, src, conv in spec}
+                if any(values[k] is None for k in required):
+                    continue
+                if any(str(values[k] or "").strip() == "" for k in blanks):
+                    continue
+                value = values.get(key)
+                if value is None or str(value).strip() == "" or str(value) in have:
+                    continue
+                conn.execute(
+                    f'INSERT INTO "{table}" ({col_list}) VALUES ({placeholders})',
+                    [values[col] if values[col] is not None else fallbacks.get(conv)
+                     for col, _src, conv in spec])
+                added += 1
+                keys.add(str(value))
+    except sqlite3.Error as exc:
+        log.exception("%s: 2つ目から足す途中でエラー", table)
+        result.errors.append(f"{table}: 2つ目から足せませんでした({exc})")
+        return 0
+    _note_imported(conn, SECOND_NOTE.format(table=table), path, added)
+    if added:
+        result.imported[table] = result.imported.get(table, 0) + added
+        what = "受注" if key == "受注番号" else "ロット"
+        result.notes.append(f"{table}: 1つ目に無い{what} {len(keys):,}件"
+                            f"({added:,}行)を2つ目({path.name})から足しました")
+    log.info("%s: 2つ目(%s)から %s行 足しました", table, path, added)
+    return added
 
 
 # ==================================================================

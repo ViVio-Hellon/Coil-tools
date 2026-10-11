@@ -46,6 +46,8 @@ class TableResult:
     # 鍵が重なっていて飛ばした行の鍵。**黙って捨てない** ──
     # 元のマスタに同じ番号の行が2つある、ということなので画面に出す
     duplicates: list[str] = field(default_factory=list)
+    # 知らせ(失敗ではない)。仕掛台帳の2つ目から足した件数など(統合 1.2.6)
+    note: str = ""
 
 
 @dataclass
@@ -95,15 +97,112 @@ def find_master_db() -> Optional[Path]:
 
 
 def find_lot_db(table: str) -> Optional[Path]:
-    """仕掛台帳の1ファイルを探す。本命 → 予備の順(VBA の2系統)。"""
+    """仕掛台帳の1ファイルを探す。1つ目 → 2つ目の順(VBA の2系統)。
+
+    1つ目は決まった名前(`LOT_DB_FILES`)、2つ目は**2つ目のファイル名**で探す
+    (統合 1.2.6。python-web-tools と同じ決まり)。
+    """
     name = config.LOT_DB_FILES.get(table)
     if not name:
         return None
-    for directory in config.lot_db_dirs():
-        found = source_db.find(directory, name)
-        if found is not None:
-            return found
-    return None
+    found = source_db.find(config.lot_db_dir(), name)
+    if found is not None:
+        return found
+    return find_second_lot(table)
+
+
+def find_second_lot(table: str) -> Optional[Path]:
+    """仕掛台帳の**2つ目**のその表のファイル。2つ目を設定していなければ None。
+
+    2つ目のフォルダでは**2つ目のファイル名だけ**を探す。名前を変えていれば、2つ目に
+    SIKAHIKI.sqlite3 があっても読まない(取り違えを防ぐ)。
+    """
+    dirs = config.lot_db_dirs()
+    if len(dirs) < 2:
+        return None
+    name = config.lot_db2_files().get(table)
+    return source_db.find_named(dirs[1], name) if name else None
+
+
+def second_missing_columns(path: Path, table: str) -> list[str]:
+    """2つ目のファイルに**足りない列**。現場の約束「名前は変えても、中身の要る列は
+    必ずそろえる」を設定画面で確かめるため。読めなければ空。"""
+    try:
+        available = set(source_db.columns(Path(path), import_specs.LOT_SOURCE_TABLE))
+    except (source_db.SourceError, OSError):
+        return []
+    if not available:
+        return []
+    return import_specs.missing_columns(table, available)
+
+
+#: 2つ目の取り込みを覚える名前(取り込み履歴。表の記録とは別に持つ)
+SECOND_NOTE = "{table}(2つ目)"
+#: 2つ目から足すときの「同じもの」の決め方。この鍵が1つ目に無いものだけ足す
+LOT_MERGE_KEYS = {"仕掛引当": "ロット番号", "仕掛受注": "受注番号"}
+
+
+def import_lot_table(conn: Any, table: str, path: Path) -> TableResult:
+    """仕掛台帳の1表を写し、2つ目にだけあるロット・受注を足す(統合 1.2.6)。
+
+    1つ目にファイルはあるが、目当てのロット(受注)が入っていないとき、2つ目にあれば
+    それを使う(python-web-tools と同じ)。両方にあれば1つ目を正とする。
+    """
+    result = _import_table(conn, dest_table=table, source_path=path,
+                           source_table=import_specs.LOT_SOURCE_TABLE)
+    second = find_second_lot(table)
+    if result.ok and second is not None and second != path:
+        _merge_second(conn, table, second, result)
+    return result
+
+
+def _merge_second(conn: Any, table: str, path: Path, result: TableResult) -> int:
+    """2つ目のファイルから、**1つ目に無いもの**だけを手元に足す。足した行数。"""
+    missing = second_missing_columns(path, table)
+    if missing:
+        result.note = (f"2つ目のファイル {path.name} に列がありません: {', '.join(missing)}"
+                       "(2つ目からは足していません)")
+        return 0
+    try:
+        rows = source_db.read_table(path, import_specs.LOT_SOURCE_TABLE)
+    except source_db.SourceError as exc:
+        result.note = f"2つ目のファイルを読めませんでした({exc})"
+        return 0
+    key = LOT_MERGE_KEYS[table]
+    specs = import_specs.LOT_IMPORT_SPECS[table]
+    columns = [dest for dest, _, _ in specs]
+    quoted_table = source_db.quote_identifier(table)
+    have = {str(r[0]) for r in conn.execute(
+        f"SELECT DISTINCT {source_db.quote_identifier(key)} FROM {quoted_table}")}
+    adding = []
+    keys: set[str] = set()
+    for row in rows:
+        converted = import_specs.convert_row(table, row)
+        if converted is None:
+            continue
+        value = converted.get(key)
+        if value is None or str(value).strip() == "" or str(value) in have:
+            continue
+        adding.append([converted[c] for c in columns])
+        keys.add(str(value))
+    placeholders = ", ".join("?" for _ in columns)
+    quoted = ", ".join(source_db.quote_identifier(c) for c in columns)
+    try:
+        with conn:
+            conn.executemany(f"INSERT OR IGNORE INTO {quoted_table} ({quoted})"
+                             f" VALUES ({placeholders})", adding)
+    except Exception as exc:  # noqa: BLE001 - 1つ目の分は入っている
+        result.note = f"2つ目から足せませんでした({exc})"
+        log.warning("2つ目から足せませんでした %s: %s", table, exc)
+        return 0
+    _record_import(conn, SECOND_NOTE.format(table=table), path, len(adding))
+    if adding:
+        result.rows += len(adding)
+        what = "受注" if key == "受注番号" else "ロット"
+        result.note = (f"1つ目に無い{what} {len(keys):,}件({len(adding):,}行)を"
+                       f"2つ目({path.name})から足しました")
+    log.info("取り込み %s: 2つ目(%s)から %d 行足しました", table, path, len(adding))
+    return len(adding)
 
 
 # ==================================================================
@@ -214,11 +313,11 @@ def import_lot(conn: Any) -> list[TableResult]:
             dirs = " / ".join(str(d) for d in config.lot_db_dirs())
             results.append(TableResult(
                 table=table, ok=False,
-                error=f"{config.LOT_DB_FILES[table]} が見つかりません: {dirs}"))
+                error=f"{config.LOT_DB_FILES[table]} が見つかりません: {dirs}"
+                  + (f"(2つ目は {config.lot_db2_files()[table]} で探しました)"
+                     if len(config.lot_db_dirs()) > 1 else "")))
             continue
-        results.append(_import_table(
-            conn, dest_table=table, source_path=path,
-            source_table=import_specs.LOT_SOURCE_TABLE))
+        results.append(import_lot_table(conn, table, path))
     return results
 
 
@@ -341,6 +440,17 @@ def _source_stamp(path: Path) -> str:
         return ""
 
 
+def _unchanged(record: Optional[dict], path: Path) -> bool:
+    """前に取り込んだときから、そのファイルが変わっていないか(同じ場所・更新時刻が前)。"""
+    if not record or not _source_stamp(path) or record.get("元ファイル") != str(path):
+        return False
+    try:
+        when = datetime.strptime(record.get("取り込み日時", ""), "%Y-%m-%d %H:%M:%S")
+        return path.stat().st_mtime <= when.timestamp()
+    except (ValueError, OSError):
+        return False
+
+
 def auto_import(conn: Any, *, progress=None) -> SyncResult:
     """**更新されたものだけ**取り込む(起動時に走る)。
 
@@ -370,23 +480,22 @@ def auto_import(conn: Any, *, progress=None) -> SyncResult:
         if progress is not None:
             progress(i - 1, total, f"{dest} を取り込み中")
 
-        # 元が変わっていなければ飛ばす
+        # 元が変わっていなければ飛ばす。仕掛台帳は2つ目(足す分)も変わっていないときだけ
         record = known.get(dest)
-        stamp = _source_stamp(path)
-        if record and stamp and record.get("元ファイル") == str(path):
-            imported_when = record.get("取り込み日時", "")
-            try:
-                when = datetime.strptime(imported_when, "%Y-%m-%d %H:%M:%S")
-                if path.stat().st_mtime <= when.timestamp():
-                    result.tables.append(TableResult(
-                        table=dest, ok=True, rows=int(record.get("件数", 0)),
-                        source=str(path)))
-                    continue
-            except (ValueError, OSError):
-                pass
+        is_lot = dest in import_specs.LOT_IMPORT_SPECS
+        second = find_second_lot(dest) if is_lot else None
+        second = second if second is not None and second != path else None
+        if _unchanged(record, path) and (
+                second is None or _unchanged(known.get(SECOND_NOTE.format(table=dest)), second)):
+            result.tables.append(TableResult(
+                table=dest, ok=True, rows=int(record.get("件数", 0)), source=str(path)))
+            continue
 
-        result.tables.append(_import_table(
-            conn, dest_table=dest, source_path=path, source_table=source_table))
+        if is_lot:
+            result.tables.append(import_lot_table(conn, dest, path))
+        else:
+            result.tables.append(_import_table(
+                conn, dest_table=dest, source_path=path, source_table=source_table))
 
     if not plan:
         log.warning("取り込み元が1つも見つかりません: マスタ=%s 台帳=%s",
@@ -427,5 +536,7 @@ def reimport_table(conn: Any, table: str, *,
                            error="取り込み元が見つかりません")
 
     db.apply_schema(conn)
+    if table in import_specs.LOT_IMPORT_SPECS:
+        return import_lot_table(conn, table, found)
     return _import_table(conn, dest_table=table, source_path=found,
                          source_table=source_table)

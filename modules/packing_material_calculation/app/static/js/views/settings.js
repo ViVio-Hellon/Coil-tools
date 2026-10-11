@@ -376,6 +376,8 @@ $('#import').addEventListener('click', async () => {
   const bad = (r.tables || []).filter(t => !t.ok);
   const filled = (r.tables || []).filter(t => t.ok && t.filled && t.filled.length);
   const dup = (r.tables || []).filter(t => t.duplicates && t.duplicates.length);
+  // 仕掛台帳の2つ目から足した件数など(統合 1.2.6)
+  const notes = (r.tables || []).filter(t => t.note);
 
   let html = '';
   if (bad.length) {
@@ -394,6 +396,11 @@ $('#import').addEventListener('click', async () => {
     html += `<div class="note note--warn"><b>取り込み元に同じ番号の行が2つ以上あります</b>`
       + `（先に出てきた行を使いました。元のマスタを直してください）<ul>`
       + dup.map(t => `<li>${esc(t.table)}: ${esc(t.duplicates.join(', '))}</li>`).join('')
+      + `</ul></div>`;
+  }
+  if (notes.length) {
+    html += `<div class="note"><b>仕掛台帳(2つ目)</b><ul>`
+      + notes.map(t => `<li>${esc(t.table)}: ${esc(t.note)}</li>`).join('')
       + `</ul></div>`;
   }
   box.innerHTML = html;

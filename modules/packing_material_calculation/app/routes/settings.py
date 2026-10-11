@@ -52,14 +52,29 @@ FIELDS: tuple[dict[str, Any], ...] = (
         "default": str(config.DEFAULT_LOT_DB_DIR),
     },
     {
+        # 仕掛台帳の2つ目(統合 1.2.6 で名前も設定できるようにした。python-web-tools と同じ決まり)
         "key": config.KEY_LOT_DB_DIR_2,
-        "label": "仕掛台帳の予備フォルダ",
-        "detail": "本命が読めないときに見る先。空でよい",
+        "label": "仕掛台帳(2つ目)のフォルダ",
+        "detail": ("1つ目で見つからないときに見る先。1つ目に無いファイルは2つ目から読み、"
+                   "1つ目に無いロット・受注は2つ目から足す(両方にあれば1つ目)。空でよい"),
         "vba": "PATH_梱包_仕掛",
-        "expect": ", ".join(config.LOT_DB_FILES.values()),
+        "expect": "下の「2つ目の名前」(空なら 1つ目と同じ "
+                  + ", ".join(config.LOT_DB_FILES[t] for t in config.KEY_LOT_DB2_FILES) + ")",
         "default": "",
         "optional": True,
     },
+    *({
+        "key": key,
+        "label": f"仕掛台帳(2つ目)の名前: {Path(config.LOT_DB_FILES[table]).stem} の代わり",
+        "detail": ("2つ目のフォルダで探すファイル名(ファイル名だけ。拡張子を省けば .sqlite3 / .db)。"
+                   "空なら1つ目と同じ名前。名前は変えてよいが、中身の要る列はそろえる約束"),
+        "vba": "",
+        "expect": "",
+        "default": config.LOT_DB_FILES[table],
+        "optional": True,
+        "kind": "file",
+        "table": table,
+    } for table, key in config.KEY_LOT_DB2_FILES.items()),
     {
         "key": config.KEY_EXPORT_DIR,
         "label": "書き出し先",
@@ -80,6 +95,7 @@ FIELDS: tuple[dict[str, Any], ...] = (
 PATH_KEYS = frozenset({
     config.KEY_MASTER_DB_DIR, config.KEY_LOT_DB_DIR,
     config.KEY_LOT_DB_DIR_2, config.KEY_EXPORT_DIR,
+    *config.KEY_LOT_DB2_FILES.values(),
 })
 
 REFUSE_NEEDS_PASSWORD = "needs_password"
@@ -101,6 +117,20 @@ _RESOLVERS = {
     config.KEY_LOT_DB_DIR_2: lambda: config.lot_db_dir_fallback() or "",
     config.KEY_EXPORT_DIR: config.export_dir,
 }
+
+
+def _second_file_place(table: str) -> str:
+    """2つ目のファイル名の欄の「いま見に行く場所」。"""
+    if len(config.lot_db_dirs()) < 2:
+        return "(2つ目のフォルダが空なので使いません)"
+    found = data_sync.find_second_lot(table)
+    if found is None:
+        return f"{config.lot_db2_files()[table]}(2つ目のフォルダに見つかりません)"
+    return str(found)
+
+
+for _table, _key in config.KEY_LOT_DB2_FILES.items():
+    _RESOLVERS[_key] = (lambda t: lambda: _second_file_place(t))(_table)
 
 
 # ==================================================================
@@ -265,6 +295,8 @@ def _probe_dir(field: dict[str, Any], text: str) -> dict[str, Any]:
     out: dict[str, Any] = {"key": field["key"], "ok": False,
                            "resolved": "", "message": "", "found": []}
     text = (text or "").strip()
+    if field.get("kind") == "file":
+        return _probe_file(field, text, out)
     if not text:
         if field.get("optional"):
             out.update(ok=True, message="空のままにします(使いません)")
@@ -315,6 +347,30 @@ def _probe_dir(field: dict[str, Any], text: str) -> dict[str, Any]:
     return out
 
 
+def _probe_file(field: dict[str, Any], text: str, out: dict[str, Any]) -> dict[str, Any]:
+    """仕掛台帳の2つ目のファイル名を確かめる: 使える名前か・2つ目のフォルダにあるか・要る列がそろっているか。"""
+    name = text or field["default"]
+    problem = config.file_name_problem(name)
+    if problem:
+        out["message"] = problem
+        return out
+    dirs = config.lot_db_dirs()
+    if len(dirs) < 2:
+        out.update(ok=True, message="2つ目のフォルダが空なので、この名前は使いません")
+        return out
+    path = source_db.find_named(dirs[1], name)
+    if path is None:
+        out["message"] = f"2つ目のフォルダ({dirs[1]})に {name} が見つかりません"
+        return out
+    out["resolved"] = str(path)
+    missing = data_sync.second_missing_columns(path, field["table"])
+    if missing:
+        out["message"] = "見つかりましたが、足りない列があります: " + "・".join(missing)
+        return out
+    out.update(ok=True, message="見つかりました・要る列はそろっています")
+    return out
+
+
 @bp.post("/api/settings/probe")
 def probe():
     """打たれた場所に届くかを確かめる。保存はしない。"""
@@ -347,6 +403,10 @@ def save_settings():
         key = field["key"]
         if key in payload:
             values[key] = str(payload[key] or "").strip()
+            if field.get("kind") == "file":
+                problem = config.file_name_problem(values[key])
+                if problem:
+                    return jsonify(ok=False, reason="bad_name", message=problem), 422
 
     if "line" in payload:
         line = str(payload["line"] or "")
@@ -418,6 +478,8 @@ def run_import():
             "source": t.source, "error": t.error, "filled": t.filled,
             # 鍵が重なっていて飛ばした行。**黙って捨てない**
             "duplicates": t.duplicates,
+            # 仕掛台帳の2つ目から足した件数など(統合 1.2.6)
+            "note": t.note,
         } for t in result.tables],
         view=_view(conn),
     )

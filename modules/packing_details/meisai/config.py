@@ -100,6 +100,16 @@ USER_CONFIG_PATH = Path(os.environ.get(
 LOT_DB_DIR = Path(os.environ.get(
     "PACKING_DETAILS_LOT_DB_DIR", r"\\nlmsrvngy03\Read\【New】仕掛\台帳"))
 
+# 仕掛台帳の**2つ目**の置き場所(統合 1.2.6。python-web-tools VER4.4.0・VER4.8.15 と同じ決まり)。
+# 既定は無い(設定画面か環境変数で入れたときだけ見る)。1つ目で見つからないときに見る:
+#   ファイルが無い        … そのファイルは2つ目から読む
+#   ファイルに対象が無い  … 1つ目を取り込んだあと、2つ目にだけあるロット・受注を足す
+#                           (両方にあれば1つ目を正とする)
+# 2つ目は**ファイル名も設定できる**(1つ目は SIKALOT / SIKAHIKI / SIKAODR のまま)。
+# 名前は変えてよいが、中身の要る列はそろえる約束(現場)
+LOT_DB_DIR2 = (Path(os.environ["PACKING_DETAILS_LOT_DB_DIR_2"])
+               if os.environ.get("PACKING_DETAILS_LOT_DB_DIR_2") else None)
+
 # 梱包課共有の仕掛。VBA `mDB.PATH_梱包課共有仕掛` と同じ場所。
 # **仕掛台帳とは別フォルダ**なので設定キーも分ける
 KONPO_DB_DIR = Path(os.environ.get(
@@ -175,6 +185,15 @@ URL_HOSO_SHIYOSHO = os.environ.get(
 
 # `user_settings` に入れるキー
 KEY_LOT_DB_DIR = "lot_db_dir"
+# 仕掛台帳の2つ目の置き場所と、2つ目のファイル名(表ごと。空なら1つ目と同じ名前)
+KEY_LOT_DB_DIR2 = "lot_db_dir_2"
+KEY_LOT_DB2_FILES = {
+    "仕掛ロット": "lot_db2_file_lot",
+    "仕掛引当": "lot_db2_file_hiki",
+    "仕掛受注": "lot_db2_file_odr",
+}
+# ファイル名に使えない文字(Windows)。2つ目のファイル名の欄で断る
+BAD_FILE_CHARS = '\\/:*?"<>|'
 KEY_KONPO_DB_DIR = "konpo_db_dir"
 KEY_AUTO_IMPORT = "auto_import_on_start"
 # VER 0.7.0 で端末ごとに持っていた値。**いまは使わない**(全ラインで共有。
@@ -272,6 +291,49 @@ def lot_db_dir() -> Path:
     if isinstance(configured, str) and configured.strip():
         return resolve_dir(configured)
     return LOT_DB_DIR
+
+
+def lot_db_dir2() -> Optional[Path]:
+    """仕掛台帳の**2つ目の**フォルダ。設定していなければ None(既定は無い)。
+
+    1つ目と同じフォルダなら None(同じ場所を2度見ない)。
+    """
+    from . import user_settings
+    configured = user_settings.get(KEY_LOT_DB_DIR2)
+    if isinstance(configured, str) and configured.strip():
+        second = resolve_dir(configured)
+    else:
+        second = LOT_DB_DIR2
+    if second is None or second == lot_db_dir():
+        return None
+    return second
+
+
+def lot_db2_files() -> dict[str, str]:
+    """仕掛台帳の**2つ目の**ファイル名(手元の表名 → ファイル名)。
+
+    設定していない表は1つ目と同じ名前(`LOT_DB_FILES`)。拡張子まで書けばその名前そのもの、
+    省けば `.sqlite3` / `.db` を付けて探す(`source_db.find_named`)。
+    """
+    from . import user_settings
+    names = dict(LOT_DB_FILES)
+    for table, key in KEY_LOT_DB2_FILES.items():
+        value = user_settings.get(key)
+        if isinstance(value, str) and value.strip():
+            names[table] = value.strip()
+    return names
+
+
+def file_name_problem(name: str) -> str:
+    """2つ目のファイル名として使えない理由(使えれば空)。フォルダは別の欄に入れる。"""
+    text = (name or "").strip()
+    if not text:
+        return ""
+    bad = sorted({c for c in text if c in BAD_FILE_CHARS})
+    if bad:
+        return ("ファイル名に使えない文字があります: " + " ".join(bad)
+                + "(フォルダは「仕掛台帳(2つ目)のフォルダ」の欄に入れてください)")
+    return ""
 
 
 def konpo_db_dir() -> Path:
