@@ -376,7 +376,7 @@ $('#import').addEventListener('click', async () => {
   const bad = (r.tables || []).filter(t => !t.ok);
   const filled = (r.tables || []).filter(t => t.ok && t.filled && t.filled.length);
   const dup = (r.tables || []).filter(t => t.duplicates && t.duplicates.length);
-  // 仕掛台帳の2つ目から足した件数など(統合 1.2.6)
+  // 仕掛台帳の2つ目から足した件数など(統合 1.2.7)
   const notes = (r.tables || []).filter(t => t.note);
 
   let html = '';

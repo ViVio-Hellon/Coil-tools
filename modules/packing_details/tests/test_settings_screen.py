@@ -172,7 +172,7 @@ class ScreenMarkupTest(unittest.TestCase):
                        'id="btnQaSave"', 'id="btnAdminSave"', 'id="btnDistExport"'):
             self.assertIn(button, self.html)
         self.assertNotIn("btnSettingsSave", self.html)              # まとめて保存は無い
-        # 仕掛台帳・仕掛台帳(2つ目)・梱包課共有(統合 1.2.6 で2つ目を足した)
+        # 仕掛台帳・仕掛台帳(2つ目)・梱包課共有(統合 1.2.7 で2つ目を足した)
         self.assertEqual(self.html.count(">保存して取り込み<"), 3)
         self.assertIn('id="btnLot2Save"', self.html)
 

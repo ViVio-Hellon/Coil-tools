@@ -100,7 +100,7 @@ USER_CONFIG_PATH = Path(os.environ.get(
 LOT_DB_DIR = Path(os.environ.get(
     "PACKING_DETAILS_LOT_DB_DIR", r"\\nlmsrvngy03\Read\【New】仕掛\台帳"))
 
-# 仕掛台帳の**2つ目**の置き場所(統合 1.2.6。python-web-tools VER4.4.0・VER4.8.15 と同じ決まり)。
+# 仕掛台帳の**2つ目**の置き場所(統合 1.2.7。python-web-tools VER4.4.0・VER4.8.15 と同じ決まり)。
 # 既定は無い(設定画面か環境変数で入れたときだけ見る)。1つ目で見つからないときに見る:
 #   ファイルが無い        … そのファイルは2つ目から読む
 #   ファイルに対象が無い  … 1つ目を取り込んだあと、2つ目にだけあるロット・受注を足す

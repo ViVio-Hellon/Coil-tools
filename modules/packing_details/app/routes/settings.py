@@ -71,7 +71,7 @@ def _local_state() -> dict:
         # まとめて1つの表で渡すと、画面側が「どちらの欄の話か」を
         # 名前から推し量ることになる
         "lot_files": list(config.LOT_DB_FILES.values()),
-        # 仕掛台帳の2つ目(統合 1.2.6)。フォルダと、表ごとの2つ目のファイル名(空なら1つ目と同じ)
+        # 仕掛台帳の2つ目(統合 1.2.7)。フォルダと、表ごとの2つ目のファイル名(空なら1つ目と同じ)
         "lot_db_dir2": str(config.lot_db_dir2() or ""),
         "lot_db_dir2_setting": user_settings.get(config.KEY_LOT_DB_DIR2, "") or "",
         "lot_files2": [{"table": t, "first": config.LOT_DB_FILES[t],

@@ -52,7 +52,7 @@ FIELDS: tuple[dict[str, Any], ...] = (
         "default": str(config.DEFAULT_LOT_DB_DIR),
     },
     {
-        # 仕掛台帳の2つ目(統合 1.2.6 で名前も設定できるようにした。python-web-tools と同じ決まり)
+        # 仕掛台帳の2つ目(統合 1.2.7 で名前も設定できるようにした。python-web-tools と同じ決まり)
         "key": config.KEY_LOT_DB_DIR_2,
         "label": "仕掛台帳(2つ目)のフォルダ",
         "detail": ("1つ目で見つからないときに見る先。1つ目に無いファイルは2つ目から読み、"
@@ -478,7 +478,7 @@ def run_import():
             "source": t.source, "error": t.error, "filled": t.filled,
             # 鍵が重なっていて飛ばした行。**黙って捨てない**
             "duplicates": t.duplicates,
-            # 仕掛台帳の2つ目から足した件数など(統合 1.2.6)
+            # 仕掛台帳の2つ目から足した件数など(統合 1.2.7)
             "note": t.note,
         } for t in result.tables],
         view=_view(conn),

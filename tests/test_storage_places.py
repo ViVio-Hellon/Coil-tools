@@ -88,8 +88,8 @@ class DetailsStorageTest(unittest.TestCase):
         html = self.client.get(f"/details/meisai?t={TOKEN}").get_data(as_text=True)
         self.assertIn('id="tabStore"', html)
         self.assertIn('id="panelStore"', html)
-        # 置き場所の4欄はこのPC、右上の文字・管理者パスワードは共有
-        self.assertEqual(html.count('class="where where-local"'), 6)
+        # 置き場所の欄はこのPC(仕掛台帳の2つ目を統合 1.2.6 で足した)、右上の文字・管理者パスワードは共有
+        self.assertEqual(html.count('class="where where-local"'), 7)
         self.assertEqual(html.count('class="where where-shared"'), 2)
         self.assertIn("どのフォルダを見るかは<b>このPCに保存</b>", html)
 
