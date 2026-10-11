@@ -24,12 +24,13 @@ EXE_NAME = APP_NAME & ".exe"                                             ' ƒRƒCƒ
 BROWSER = U("0028 30D6 30E9 30A6 30B6 7248 0029")                        ' (ƒuƒ‰ƒEƒU”Å)
 DESKTOP = U("0028 30C7 30B9 30AF 30C8 30C3 30D7 7248 0029")              ' (ƒfƒXƒNƒgƒbƒv”Å)
 
-Dim shell, fso, here, made, missing
+Dim shell, fso, here, made, missing, failed
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 here = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
 made = ""
 missing = ""
+failed = ""
 
 MakeLink APP_NAME & BROWSER & ".lnk", "Start.vbs", False
 MakeLink APP_NAME & DESKTOP & ".lnk", EXE_NAME, True
@@ -42,6 +43,9 @@ Else
 End If
 If missing <> "" Then
     msg = msg & vbCrLf & vbCrLf & "Ÿ‚ÍŒ©‚Â‚©‚ç‚È‚¢‚Ì‚Åì‚Á‚Ä‚¢‚Ü‚¹‚ñ:" & missing
+End If
+If failed <> "" Then
+    msg = msg & vbCrLf & vbCrLf & "Ÿ‚Íì‚ê‚Ü‚¹‚ñ‚Å‚µ‚½:" & failed
 End If
 WScript.Echo msg
 
@@ -63,11 +67,20 @@ Sub MakeLink(linkName, targetName, useIcon)
         missing = missing & vbCrLf & "  " & targetName
         Exit Sub
     End If
+    ' ì‚ê‚È‚©‚Á‚½‚Æ‚«(‘‚¯‚È‚¢ƒtƒHƒ‹ƒ_E‰pŒê‚Ì Windows ‚Å“ú–{Œê‚Ì–¼‘O‚ğ•Û‘¶‚Å‚«‚È‚¢ ‚È‚Ç)‚ÍA
+    ' ƒGƒ‰[‚Ì‘‹‚Å~‚Ü‚ç‚¸‚ÉŒ‹‰Ê‚Ì‘‹‚Å’m‚ç‚¹‚é(python-web-tools VER4.8.14 ‚Æ“¯‚¶)
+    On Error Resume Next
     Set lnk = shell.CreateShortcut(fso.BuildPath(here, linkName))
     lnk.TargetPath = target
     lnk.WorkingDirectory = here
     lnk.Description = APP_NAME & "‚ğ‹N“®‚·‚é"
     If useIcon Then lnk.IconLocation = target & ",0"
     lnk.Save
+    If Err.Number <> 0 Then
+        failed = failed & vbCrLf & "  " & linkName & "(" & Err.Description & ")"
+        Err.Clear
+        Exit Sub
+    End If
+    On Error GoTo 0
     made = made & vbCrLf & "  " & linkName & " ¨ " & targetName
 End Sub
