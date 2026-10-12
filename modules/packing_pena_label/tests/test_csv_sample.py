@@ -45,6 +45,17 @@ class SampleTest(unittest.TestCase):
                                  csv_text.read_rows(csv_sample.SAMPLES[key].bundled(self.cfg)))
                 self.assertGreater(r["rows"], 0)
 
+    def test_拡張子が無ければcsvを付ける(self):
+        """「ペナ型番」と入れたら、拡張子の無いファイルではなく ペナ型番.csv を出す(現場の指摘)。"""
+        r = csv_sample.write_sample(self.cfg, "kataban_csv_file", os.path.join(self.tmp, "ペナ型番"))
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["path"], os.path.join(self.tmp, "ペナ型番.csv"))
+        self.assertTrue(r["addedExt"])
+        self.assertEqual(os.listdir(self.tmp), ["ペナ型番.csv"])
+        r = csv_sample.write_sample(self.cfg, "kataban_csv_file", os.path.join(self.tmp, "型番.CSV"))
+        self.assertEqual(r["path"], os.path.join(self.tmp, "型番.CSV"), "大文字の .CSV はそのまま")
+        self.assertFalse(r["addedExt"])
+
     def test_あるファイルは上書きしない(self):
         path = os.path.join(self.tmp, "資材重量.csv")
         with open(path, "w", encoding="utf-8") as f:

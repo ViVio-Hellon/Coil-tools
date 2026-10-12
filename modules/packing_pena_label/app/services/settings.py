@@ -369,6 +369,11 @@ def describe(cfg: Config) -> List[dict]:
         if spec.kind in ("dir", "file"):
             r = check_path(spec, str(value))
             item["check"] = {"ok": r.ok, "level": r.level, "message": r.message}
+            if (spec.key in ("material_csv_file", "kataban_csv_file") and str(value).strip()
+                    and not str(value).strip().strip('"').lower().endswith(".csv")):
+                # 拡張子の無い名前(「ペナ型番」など)は Excel で開けない。気づけるように出す
+                item["check"] = {"ok": r.ok, "level": "warn",
+                                 "message": r.message + "（名前が .csv で終わっていません）"}
             item["resolved"] = _resolved_path(cfg, spec.key)
         out.append(item)
     return out

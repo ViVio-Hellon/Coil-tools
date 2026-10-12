@@ -1718,6 +1718,8 @@ class PageRoutes:
       pplPost("/api/settings/csv-sample", {key: key, path: box ? box.value : ""})
         .then(function(j){
           pplToast(j.message.split("\\n")[0], j.ok ? "info" : "warn");
+          // .csv を付けて出したときは、欄もその名前にする(保存すればそのファイルを読む)
+          if (j.ok && j.path && box) { box.value = j.path; }
           if (out) {
             out.className = (j.ok ? "okbox" : (j.level === "error" ? "errbox" : "warnbox"));
             out.style.cssText = "margin:6px 0 0;padding:5px 9px;font-size:11.5px;white-space:pre-line";

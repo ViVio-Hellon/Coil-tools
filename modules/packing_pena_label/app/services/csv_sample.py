@@ -6,6 +6,7 @@
 
 - 出す先は**欄に入れたパス**（保存していなくてよい）。空なら断る
 - フォルダーを入れたときは、その中に同梱と同じ名前（資材重量.csv / 型番.csv）で出す
+- 名前が .csv で終わらないときは .csv を付ける（「ペナ型番」→「ペナ型番.csv」）
 - **すでにあるファイルは上書きしない**（使っているマスタを手本で消さない）
 - 出す先のフォルダーが無ければ断る（打ち間違いで知らない場所にフォルダーを作らない）
 - 文字は UTF-8（BOM 付き。Excel でそのまま開ける）・改行は CRLF。
@@ -57,8 +58,14 @@ def write_sample(cfg: Config, key: str, raw_path) -> dict:
         return {"ok": False, "level": "warn",
                 "message": "%s の欄に、手本を出す先のパスを入れてください" % sample.label}
     bundled = sample.bundled(cfg)
+    added_ext = False
     if os.path.isdir(path):
         path = os.path.join(path, os.path.basename(bundled))
+    elif os.path.splitext(path)[1].lower() != ".csv":
+        # 「ペナ型番」のように拡張子の無い名前で、拡張子の無いファイルを出していた(現場の指摘)。
+        # 手本は必ず .csv で出す
+        path += ".csv"
+        added_ext = True
     folder = os.path.dirname(os.path.abspath(path))
     if not os.path.isdir(folder):
         return {"ok": False, "level": "warn",
@@ -79,8 +86,10 @@ def write_sample(cfg: Config, key: str, raw_path) -> dict:
         return {"ok": False, "level": "error", "path": path,
                 "message": "手本を書けませんでした: %s（%s）" % (path, exc)}
     rows = max(len([ln for ln in lines if ln.strip()]) - 1, 0)
-    return {"ok": True, "level": "info", "path": path, "rows": rows,
+    return {"ok": True, "level": "info", "path": path, "rows": rows, "addedExt": added_ext,
             "message": ("%s の手本を出しました（見出しと例 %d 行）: %s\n"
+                        + ("名前に .csv が無かったので付けました（欄も .csv の名前にしました）。\n"
+                           if added_ext else "") +
                         "Excel で開いて直してください。読む順: %s。"
                         "この欄が保存されていなければ「この欄を保存」も押してください。")
                        % (sample.label, rows, path, sample.order)}
