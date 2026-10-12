@@ -85,18 +85,23 @@ SETTINGS: List[SettingSpec] = [
         group=GROUP_MASTER, placeholder=r"\\サーバー名\共有\梱包資材マスタ.sqlite3",
         help=("設定すると **Access より優先** して読む（読取専用で開く）。"
               "テーブル 資材重量 の 梱包資材名 / 単位質量 / 係数 を使う。"
-              "Access からの移行先。"),
+              "表「型番」（サイズ名 / 記号 / 型番 / 備考）があれば、"
+              "型番マスタもここから読む（CSV より先）。Access からの移行先。"),
         default_hint="未設定（Access → CSV の順に読む）"),
     SettingSpec(
-        key="material_csv_file", label="資材マスタ CSV（Access の代替）", kind="file",
+        key="material_csv_file", label="資材マスタ CSV（DB が無いとき）", kind="file",
         group=GROUP_MASTER, placeholder=r"C:\...\資材重量.csv",
-        help=("Access へ到達できないときに使う代替。"
-              "列は 管理番号 / 梱包資材名 / 単位質量 / 係数。"),
+        help=("読む順は DB > CSV。梱包資材マスタ（SQLite）・旧 Access を読めないときだけ使う。"
+              "列は 管理番号 / 梱包資材名 / 単位質量 / 係数。"
+              "「手本を出す」で、欄に入れたパスへ列の見出しと例を出す（あるファイルは上書きしない）。"),
         default_hint="同梱 data/資材重量.csv"),
     SettingSpec(
         key="kataban_csv_file", label="型番マスタ CSV", kind="file",
         group=GROUP_MASTER, placeholder=r"C:\...\型番.csv",
-        help="全サイズ画面のサイズ一覧。VBA の 型番 シートに相当。",
+        help=("全サイズ画面のサイズ一覧。VBA の 型番 シートに相当。"
+              "読む順は DB > CSV。梱包資材マスタ（SQLite）に表「型番」があればそちらを読み、"
+              "無ければこの CSV。列は サイズ名 / 記号 / 型番 / 備考。"
+              "「手本を出す」で、欄に入れたパスへ列の見出しと例を出す（あるファイルは上書きしない）。"),
         default_hint="同梱 data/型番.csv"),
 
     # ---------------- ラベル印刷 ----------------
@@ -482,7 +487,7 @@ def apply_live(cfg: Config, ctx) -> List[str]:
         applied.append("サイズ構成マスタ")
 
     # 型番マスタ
-    if ctx.wf.all_size.reload_master(cfg.kataban_csv_path):
+    if ctx.wf.all_size.reload_master(cfg.kataban_csv_path, cfg.material_db_file):
         applied.append("型番マスタ")
 
     # 状態DB のアイドル解放

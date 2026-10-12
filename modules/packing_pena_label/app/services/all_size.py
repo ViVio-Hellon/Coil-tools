@@ -15,11 +15,11 @@ VBA -> Python 対応
 
 from __future__ import annotations
 
-import csv
 import logging
 import os
 from typing import Dict, List, Optional, Tuple
 
+from ..repositories import csv_text
 from . import validation as V
 
 log = logging.getLogger(__name__)
@@ -46,28 +46,70 @@ PREFIX_2KETA = {1: "01", 2: "02"}
 PREFIX_3KETA = {1: ("11", "12"), 2: ("21", "22")}
 
 
-class KatabanMaster:
-    """型番マスタ（VBA の ``型番`` シート）。A=サイズ名 / B=記号 / C=型番。"""
+#: 型番マスタの表（梱包資材マスタ SQLite の中。列は CSV と同じ サイズ名 / 記号 / 型番 / 備考）
+KATABAN_TABLE = "型番"
 
-    def __init__(self, rows: List[Dict[str, str]]):
+
+class KatabanMaster:
+    """型番マスタ（VBA の ``型番`` シート）。A=サイズ名 / B=記号 / C=型番。
+
+    読む順は **DB > CSV**（統合 1.2.8。現場の指定）。
+    梱包資材マスタ（SQLite）に表「型番」があって 1 行以上あればそれを読み、
+    無ければ（表が無い・空・読めない）型番マスタ CSV を読む。
+    """
+
+    def __init__(self, rows: List[Dict[str, str]], source: str = "", kind: str = ""):
         self.rows = rows
+        #: 読んだファイル
+        self.source = source
+        #: "sqlite" / "csv"（何も読めなければ空）
+        self.kind = kind
+
+    @staticmethod
+    def _row(r) -> Optional[Dict[str, str]]:
+        def get(col):
+            v = r.get(col)
+            return "" if v is None else str(v).strip()
+        name = get("サイズ名")
+        if not name:
+            return None
+        return {"name": name, "symbol": get("記号"), "kataban": get("型番"), "note": get("備考")}
 
     @classmethod
-    def load(cls, csv_path: str) -> "KatabanMaster":
-        rows: List[Dict[str, str]] = []
+    def _load_db(cls, db_path: str) -> List[Dict[str, str]]:
+        """梱包資材マスタ（SQLite）の表「型番」。表が無い・読めないときは空。読取専用で開く。"""
+        import sqlite3
+        uri = "file:%s?mode=ro" % db_path.replace("?", "%3f").replace("#", "%23")
+        try:
+            conn = sqlite3.connect(uri, uri=True, timeout=10)
+        except sqlite3.Error as exc:
+            log.warning("型番マスタ: DB を開けません、CSV を読みます: %s", exc)
+            return []
+        try:
+            conn.row_factory = sqlite3.Row
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                                (KATABAN_TABLE,)).fetchone():
+                return []
+            cur = conn.execute('SELECT * FROM "%s" ORDER BY rowid' % KATABAN_TABLE)
+            rows = [cls._row(dict(r)) for r in cur.fetchall()]
+        except sqlite3.Error as exc:
+            log.warning("型番マスタ: DB の表「%s」を読めません、CSV を読みます: %s",
+                        KATABAN_TABLE, exc)
+            return []
+        finally:
+            conn.close()
+        return [r for r in rows if r]
+
+    @classmethod
+    def load(cls, csv_path: str, db_path: str = "") -> "KatabanMaster":
+        if db_path and os.path.exists(db_path):
+            rows = cls._load_db(db_path)
+            if rows:
+                return cls(rows, source=db_path, kind="sqlite")
         if csv_path and os.path.exists(csv_path):
-            with open(csv_path, encoding="utf-8-sig", newline="") as f:
-                for r in csv.DictReader(f):
-                    name = (r.get("サイズ名") or "").strip()
-                    if not name:
-                        continue
-                    rows.append({
-                        "name": name,
-                        "symbol": (r.get("記号") or "").strip(),
-                        "kataban": (r.get("型番") or "").strip(),
-                        "note": (r.get("備考") or "").strip(),
-                    })
-        return cls(rows)
+            rows = [r for r in map(cls._row, csv_text.read_dicts(csv_path)) if r]
+            return cls(rows, source=csv_path, kind="csv")
+        return cls([])
 
     def names(self) -> List[str]:
         return [r["name"] for r in self.rows]
@@ -194,25 +236,31 @@ class AllSizeService:
 
     KV_KEY = "all_size_state"
 
-    def __init__(self, store, kataban_csv: str):
+    def __init__(self, store, kataban_csv: str, kataban_db: str = ""):
         self.store = store
-        self.master = KatabanMaster.load(kataban_csv)
+        try:
+            self.master = KatabanMaster.load(kataban_csv, kataban_db)
+        except Exception as exc:
+            # 読めない CSV で起動まで止めない（全サイズの一覧が空になるだけ）
+            log.warning("型番マスタを読めません: %s", exc)
+            self.master = KatabanMaster([])
 
-    def reload_master(self, csv_path: str) -> bool:
+    def reload_master(self, csv_path: str, db_path: str = "") -> bool:
         """型番マスタを読み直す（設定でファイルを差し替えたとき）。
 
         読み込めない場合は今の内容を保持して False を返す。
         """
         try:
-            new = KatabanMaster.load(csv_path)
+            new = KatabanMaster.load(csv_path, db_path)
         except Exception as exc:
             log.warning("型番マスタを読み直せません（従来の内容を維持）: %s", exc)
             return False
         if not new.rows:
-            log.warning("型番マスタが空です（従来の内容を維持）: %s", csv_path)
+            log.warning("型番マスタが空です（従来の内容を維持）: DB=%s CSV=%s",
+                        db_path or "(未設定)", csv_path)
             return False
         self.master = new
-        log.info("型番マスタを読み直しました: %s (%d 件)", csv_path, len(new.rows))
+        log.info("型番マスタを読み直しました: %s (%d 件)", new.source, len(new.rows))
         return True
 
     # ------------------------------------------------------------

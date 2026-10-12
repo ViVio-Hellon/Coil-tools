@@ -105,6 +105,7 @@ class ApiRoutes:
             "/api/all-size/print-targets": self._all_size_print_targets,
             "/api/settings/save": self._settings_save,
             "/api/settings/test-master": self._settings_test_master,
+            "/api/settings/csv-sample": self._settings_csv_sample,
             "/api/settings/reset": self._settings_reset,
             "/api/settings/check-password": self._settings_check_password,
             "/api/label/align": self._label_align,
@@ -630,6 +631,14 @@ class ApiRoutes:
                                "このままパスの変更やマスタの書き換えができます。"}
         return {"ok": False, "valid": False, "level": "warn",
                 "message": "合言葉が違います"}
+
+    def _settings_csv_sample(self, body):
+        """資材マスタ CSV・型番マスタ CSV の手本を、欄に入れたパスへ出す(統合 1.2.8)。
+
+        設定は変えない(合言葉は要らない)。すでにあるファイルは上書きしない。
+        """
+        from ..services import csv_sample
+        return csv_sample.write_sample(self.cfg, str(body.get("key") or ""), body.get("path"))
 
     def _settings_test_master(self, body):
         """入力中の参照先で資材マスタを実際に読んでみる。

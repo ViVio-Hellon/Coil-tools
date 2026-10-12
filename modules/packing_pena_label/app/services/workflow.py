@@ -113,7 +113,7 @@ class Workflow:
         #: 重量計算_DB の進み具合(画面が聞く)
         self.progress = Progress()
         #: テスラ全サイズ画面の業務処理
-        self.all_size = AllSizeService(store, cfg.kataban_csv_path)
+        self.all_size = AllSizeService(store, cfg.kataban_csv_path, cfg.material_db_file)
         #: 共有マスタの ラベル台紙一覧（シート名・型番）
         self.label_sheets = LSM.LabelSheetMaster()
         self.refresh_label_sheets()

@@ -23,6 +23,7 @@ import threading
 import time
 from typing import Dict, List, Optional, Tuple
 
+from . import csv_text
 from .access_bridge import AccessBridge, AccessError
 
 log = logging.getLogger(__name__)
@@ -262,13 +263,17 @@ class MaterialRepository:
                 log.warning("Access 読取に失敗、CSV へフォールバックします: %s", exc)
 
         if self.csv_path and os.path.exists(self.csv_path):
-            table = self._load_csv(self.csv_path)
-            self.last_source = "csv"
-            self.last_error = "; ".join(errors)
-            self._remember(table, self.csv_path)
-            return table
-
-        errors.append("CSV: %s が見つかりません" % (self.csv_path or "(未設定)"))
+            try:
+                table = self._load_csv(self.csv_path)
+            except (OSError, UnicodeDecodeError, csv.Error) as exc:
+                errors.append("CSV: %s を読めません（%s）" % (self.csv_path, exc))
+            else:
+                self.last_source = "csv"
+                self.last_error = "; ".join(errors)
+                self._remember(table, self.csv_path)
+                return table
+        else:
+            errors.append("CSV: %s が見つかりません" % (self.csv_path or "(未設定)"))
         self.last_error = "; ".join(errors)
 
         # 取得元へ一時的に到達できないだけなら、直前のマスタで業務を続けさせる。
@@ -329,9 +334,8 @@ class MaterialRepository:
 
     @staticmethod
     def _load_csv(path: str) -> MaterialTable:
-        with open(path, encoding="utf-8-sig", newline="") as f:
-            reader = csv.reader(f)
-            rows = [r for r in reader if any((c or "").strip() for c in r)]
+        # UTF-8 でも Shift_JIS（Excel で保存した CSV）でも読む（統合 1.2.8）
+        rows = csv_text.read_rows(path)
         if not rows:
             return MaterialTable([], [], source=path)
         return MaterialTable([c.strip() for c in rows[0]], rows[1:], source=path)

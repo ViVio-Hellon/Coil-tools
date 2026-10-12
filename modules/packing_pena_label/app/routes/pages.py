@@ -45,6 +45,9 @@ _SIZE_ORDER = ["0.8mm×53.5mm", "1.0mm×33.0mm", "1.0mm×73.0mm",
                "1.0mm×40.0mm"]
 
 #: サイズ名から (厚み, 巾) を取り出す
+#: 資材マスタの取得元の表示名（設定画面の「いま読んでいる先」）
+_SOURCE_NAMES = {"sqlite": "梱包資材マスタ（SQLite）", "access": "旧 Access(ACE)",
+                 "csv": "CSV"}
 _DIM_RE = re.compile(r"(\d+(?:\.\d+)?)")
 
 
@@ -1522,6 +1525,19 @@ class PageRoutes:
             '</div>')
         return head + body
 
+    def _read_from(self, key: str) -> str:
+        """資材マスタ・型番マスタを、いまどこから読んでいるか(設定画面に出す)。"""
+        if key == "kataban_csv_file":
+            m = self.wf.all_size.master
+            return {"sqlite": "梱包資材マスタ（SQLite）の表「型番」",
+                    "csv": "CSV"}.get(m.kind, "読めていません") + (
+                        f"（{m.source}・{len(m.rows)} 件）" if m.kind else "")
+        info = self.wf.materials.cache_info()
+        if not info["cached"]:
+            return "まだ読んでいません（計算・風袋の画面で読みます）"
+        return _SOURCE_NAMES.get(info["source"], info["source"] or "読めていません") + (
+            f"（{info['sourcePath']}）" if info["sourcePath"] else "")
+
     def _setting_field(self, it: dict) -> str:
         """設定 1 項目の入力欄。"""
         key = it["key"]
@@ -1569,17 +1585,28 @@ class PageRoutes:
         # 参照先(フォルダー・ファイル)は**欄ごとに保存できる**ようにする(現場の指摘)。
         # 下の「保存する」は全部の欄をまとめて書く。1つだけ直したいときに、
         # ほかの欄の打ちかけまで書いてしまわないように(資材計算の置き場所と同じ形)
+        from ..services import csv_sample
+        sample = csv_sample.SAMPLES.get(key)
         if it["kind"] in ("dir", "file"):
+            # 資材マスタ CSV・型番マスタ CSV は「手本を出す」も置く(統合 1.2.8。現場の指定)。
+            # 出す先は欄に入れたパス。すでにあるファイルは上書きしない
+            sample_btn = (f'<button type="button" class="btn btn-sm" data-sample="{esc(key)}">'
+                          '手本を出す</button>' if sample else "")
             control = (f'<div class="setone">{control}'
                        f'<button type="button" class="btn btn-sm" data-save-one="{esc(key)}">'
-                       f'この欄を保存</button></div>')
+                       f'この欄を保存</button>{sample_btn}</div>')
+        order = ""
+        if sample:
+            order = (f'<div class="hint" style="margin-top:4px">読む順: {esc(sample.order)}'
+                     f'（DB が無いときだけ CSV）。いま読んでいる先: <b>{esc(self._read_from(key))}</b></div>'
+                     f'<div id="sample_{esc(key)}" hidden></div>')
 
         return (f'<div class="setrow" data-field="{esc(key)}">'
                 f'<div class="setlab"><label for="set_{esc(key)}">{esc(it["label"])}</label>'
                 f'{badge}</div>'
                 f'<div class="setctl">{control}'
                 f'<div class="err" id="err_{esc(key)}" hidden></div>'
-                f'{check}{resolved}'
+                f'{check}{resolved}{order}'
                 f'<div class="hint">{esc(it["help"])}</div></div></div>')
 
     @staticmethod
@@ -1676,6 +1703,28 @@ class PageRoutes:
       var box = document.getElementById("setPassword");
       btn.disabled = true;
       save(box ? box.value : "", btn.dataset.saveOne).then(saved)
+        .catch(function(e){ pplToast(String(e), "error"); })
+        .then(function(){ btn.disabled = false; });
+    });
+  });
+
+  // 「手本を出す」(資材マスタ CSV・型番マスタ CSV)。出す先は欄に入れたパス(保存していなくてよい)
+  document.querySelectorAll("[data-sample]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var key = btn.dataset.sample;
+      var box = document.getElementById("set_" + key);
+      var out = document.getElementById("sample_" + key);
+      btn.disabled = true;
+      pplPost("/api/settings/csv-sample", {key: key, path: box ? box.value : ""})
+        .then(function(j){
+          pplToast(j.message.split("\\n")[0], j.ok ? "info" : "warn");
+          if (out) {
+            out.className = (j.ok ? "okbox" : (j.level === "error" ? "errbox" : "warnbox"));
+            out.style.cssText = "margin:6px 0 0;padding:5px 9px;font-size:11.5px;white-space:pre-line";
+            out.textContent = j.message;
+            out.hidden = false;
+          }
+        })
         .catch(function(e){ pplToast(String(e), "error"); })
         .then(function(){ btn.disabled = false; });
     });
