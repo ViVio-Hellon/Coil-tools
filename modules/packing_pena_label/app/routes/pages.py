@@ -1530,7 +1530,8 @@ class PageRoutes:
         if key == "kataban_csv_file":
             m = self.wf.all_size.master
             return {"sqlite": "梱包資材マスタ（SQLite）の表「型番」",
-                    "csv": "CSV"}.get(m.kind, "読めていません") + (
+                    "csv": "CSV"}.get(m.kind, "読めていません（保存してあるファイルが見つかりません。"
+                                              "全サイズのサイズ一覧が空です）") + (
                         f"（{m.source}・{len(m.rows)} 件）" if m.kind else "")
         info = self.wf.materials.cache_info()
         if not info["cached"]:
@@ -1571,8 +1572,9 @@ class PageRoutes:
             c = it["check"]
             cls = {"ok": "okbox", "warn": "warnbox", "error": "errbox"}.get(
                 c["level"], "hint")
-            check = (f'<div class="{cls}" style="margin:6px 0 0;padding:5px 9px;'
-                     f'font-size:11.5px">{esc(c["message"])}</div>')
+            # 欄の下の確かめ(保存してある値について)。「手本を出す」のあとは画面で書き換える
+            check = (f'<div class="{cls}" id="check_{esc(key)}" style="margin:6px 0 0;padding:5px 9px;'
+                     f'font-size:11.5px">保存してある値: {esc(c["message"])}</div>')
 
         resolved = ""
         if it.get("resolved") and not it["value"]:
@@ -1598,7 +1600,7 @@ class PageRoutes:
         order = ""
         if sample:
             order = (f'<div class="hint" style="margin-top:4px">読む順: {esc(sample.order)}'
-                     f'（DB が無いときだけ CSV）。いま読んでいる先: <b>{esc(self._read_from(key))}</b></div>'
+                     f'（DB が無いときだけ CSV）。いま読んでいる先: <b id="readfrom_{esc(key)}">{esc(self._read_from(key))}</b></div>'
                      f'<div id="sample_{esc(key)}" hidden></div>')
 
         return (f'<div class="setrow" data-field="{esc(key)}">'
@@ -1719,7 +1721,15 @@ class PageRoutes:
         .then(function(j){
           pplToast(j.message.split("\\n")[0], j.ok ? "info" : "warn");
           // .csv を付けて出したときは、欄もその名前にする(保存すればそのファイルを読む)
-          if (j.ok && j.path && box) { box.value = j.path; }
+          if (j.ok && j.path && box) {
+            box.value = j.path;
+            // 欄の下の確かめは保存してある値のこと。まだ保存していないと分かるように書き換える
+            var chk = document.getElementById("check_" + key);
+            if (chk) {
+              chk.className = "warnbox";
+              chk.textContent = "まだ保存していません。「この欄を保存」を押すと、出した手本のファイルを読みます。";
+            }
+          }
           if (out) {
             out.className = (j.ok ? "okbox" : (j.level === "error" ? "errbox" : "warnbox"));
             out.style.cssText = "margin:6px 0 0;padding:5px 9px;font-size:11.5px;white-space:pre-line";

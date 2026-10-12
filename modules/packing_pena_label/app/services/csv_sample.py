@@ -90,6 +90,6 @@ def write_sample(cfg: Config, key: str, raw_path) -> dict:
             "message": ("%s の手本を出しました（見出しと例 %d 行）: %s\n"
                         + ("名前に .csv が無かったので付けました（欄も .csv の名前にしました）。\n"
                            if added_ext else "") +
-                        "Excel で開いて直してください。読む順: %s。"
-                        "この欄が保存されていなければ「この欄を保存」も押してください。")
+                        "次に「この欄を保存」を押すと、このファイルを読みます（押すまでは前の設定のまま）。"
+                        "中身は Excel で開いて直してください。読む順: %s。")
                        % (sample.label, rows, path, sample.order)}
