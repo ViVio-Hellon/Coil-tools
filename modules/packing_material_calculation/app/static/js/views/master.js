@@ -137,6 +137,16 @@ function render(next) {
   view = next;
   const page = view.page || {};
 
+  // 書き先の場所。置き場所を変えたら、読み直さずにここも新しくする(統合 1.2.11)
+  const src = document.getElementById("mSource");
+  if (src && typeof view.source_dir === "string") {
+    src.textContent = "";
+    src.append(`書き先は取り込み元(${view.source_dir})です。手元の写しではなく`);
+    const b = document.createElement("b");
+    b.textContent = "元のファイル";
+    src.append(b, "を直すので、他の端末にも効きます。");
+  }
+
   // --- 左: 表の一覧 ---
   const items = (view.tables || []).map((info) => {
     const row = document.createElement("button");

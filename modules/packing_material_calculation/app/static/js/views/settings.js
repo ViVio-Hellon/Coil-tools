@@ -4,7 +4,7 @@
   ここがするのは「打たれた値をサーバへ渡す」「返ってきた一式を写す」だけ。
   どこを実際に見に行くか、そこに届くかの判断はすべてサーバ側にある。
 */
-import { call, toast, $, $$, text, esc, watchUnsaved } from '../core.js';
+import { call, toast, $, $$, text, esc, watchUnsaved, syncRibbon } from '../core.js';
 import { refresh as refreshMaster } from './master.js';
 
 let view = null;
@@ -131,9 +131,38 @@ function renderStore(store) {
     </div>`).join('');
 }
 
-function render(v) {
+/*
+  一式を写す。**打ちかけの欄と「確かめる」の結果は残す**(統合 1.2.11)。
+  欄はサーバの値で作り直すので、以前はほかの欄を保存しただけで、まだ保存していない
+  欄の打ちかけと確かめた結果が消えていた。いま保存した欄・戻した欄(`opts.done`)だけは
+  サーバの値にする。`opts.master` … 置き場所が変わり得るので、マスタ管理の面も新しくする
+*/
+function render(v, opts = {}) {
   view = v;
+  const keep = {};
+  $$('#fields .setrow').forEach((row) => {
+    const key = row.dataset.key;
+    const input = $('input.input', row);
+    if (!key || key === opts.done || !input) return;
+    const probe = $('#pr-' + key);
+    keep[key] = {
+      value: input.value !== input.defaultValue ? input.value : null,
+      probe: probe && probe.textContent ? { cls: probe.className, text: probe.textContent } : null,
+    };
+  });
   $('#fields').innerHTML = v.fields.map(fieldHtml).join('');
+  Object.keys(keep).forEach((key) => {
+    const input = $('#in-' + key);
+    const probe = $('#pr-' + key);
+    if (input && keep[key].value !== null) input.value = keep[key].value;
+    if (probe && keep[key].probe) {
+      probe.className = keep[key].probe.cls;
+      probe.textContent = keep[key].probe.text;
+    }
+  });
+  // 上の帯(取り込み日時・古い・ライン・担当者)もその場でそろえる
+  syncRibbon(v, { announce: false });
+  if (opts.master) refreshMaster();
 
   $('#line').value = v.line;
   renderWorkers(v.workers, v.worker);
@@ -166,7 +195,7 @@ function render(v) {
       const key = btn.dataset.save;
       const r = await call('/api/settings', { [key]: $('#in-' + key).value });
       if (!r.ok) { refuse(r, '保存できません'); return; }
-      render(r.view);
+      render(r.view, { done: key, master: true });
       toast(`${label(key)} を保存しました。`
             + '置き場所を変えたときは「いま取り込む」を押してください');
     });
@@ -188,7 +217,7 @@ function render(v) {
     btn.addEventListener('click', async () => {
       const r = await call('/api/settings/reset', { key: btn.dataset.reset });
       if (!r.ok) { refuse(r, '戻せません'); return; }
-      render(r.view);
+      render(r.view, { done: btn.dataset.reset, master: true });
       toast('既定に戻しました');
     });
   });
@@ -302,7 +331,11 @@ function renderDistribution(d) {
 async function sendDistribution(path, body) {
   const r = await call(path, body);
   if (!r.ok) { refuse(r, 'できませんでした'); return; }
-  render(r.view);
+  // 読み込み直しは置き場所を変え得るので、欄もマスタ管理もサーバの値にする
+  if (path.endsWith('/reapply')) {
+    $$('#fields input.input').forEach((input) => { input.value = input.defaultValue; });
+  }
+  render(r.view, { master: true });
   toast(r.message || '済みました');
 }
 
@@ -349,19 +382,25 @@ function showProbe(res) {
 // ライン・担当者・自動取り込みは**選んだ時点で保存する**。
 // 置き場所と違って間違えても害が小さく、押し忘れのほうが困る
 // (「選んだのに票に出ない」になる)
-['#line', '#worker', '#auto-import'].forEach(sel => {
+// **変えた1つだけを送る**(統合 1.2.11)。以前は3つまとめて送っていて、帯でラインを
+// 変えたあとに自動取り込みを押すと、この面に残っていた古いラインで上書きしていた
+[['#line', 'line', el => el.value], ['#worker', 'worker', el => el.value],
+ ['#auto-import', 'auto_import', el => el.checked]].forEach(([sel, key, read]) => {
   const el = $(sel);
   if (!el) return;
   el.addEventListener('change', async () => {
-    const r = await call('/api/settings', {
-      line: $('#line').value,
-      worker: $('#worker').value,
-      auto_import: $('#auto-import').checked,
-    });
+    const r = await call('/api/settings', { [key]: read(el) });
     if (!r.ok) { toast(r.message || '保存できません', 'warn'); return; }
     render(r.view);
     toast('保存しました');
   });
+});
+
+// 帯でラインや担当者を変えたら、この面の欄もその場でそろえる
+window.addEventListener('mc:ribbon', (e) => {
+  const rb = e.detail || {};
+  if (rb.line && $('#line')) $('#line').value = rb.line;
+  if (rb.workers) renderWorkers(rb.workers, rb.worker);
 });
 
 $('#import').addEventListener('click', async () => {
@@ -405,17 +444,21 @@ $('#import').addEventListener('click', async () => {
   }
   box.innerHTML = html;
 
-  if (r.view) render(r.view);
+  if (r.view) render(r.view, { master: true });
   toast(r.ok ? `取り込みました（${r.total} 件）`
              : `${bad.length} 件取り込めませんでした`, r.ok ? '' : 'warn');
 });
 
 // ------------------------------------------------------------------
-(async function start() {
+async function start() {
   const r = await call('/api/settings');
   if (r.ok) render(r.view);
   else toast(r.message || '設定を読めません', 'warn');
-}());
+}
+start();
+// 別の画面から「この画面で使う」で取り戻したときは、その間に変わった中身を読み直す
+// (ページは読み直さない。統合 1.2.11)
+window.addEventListener('mc:reclaimed', () => start());
 
 
 // ------------------------------------------------------------------
@@ -460,6 +503,17 @@ function renderAuth(state) {
   // 置き場所の関門も同じパスワードで開く。**ここで出し直さないと**、
   // 認証したのに「この欄を保存」が押せないままに見える
   renderPathLock(state.open);
+  // 時間切れで閉じたら、操作して断られる前に「見るだけ」へ戻す(統合 1.2.11)
+  clearTimeout(authTimer);
+  if (state.open && state.remains) {
+    authTimer = setTimeout(checkAuth, state.remains * 1000 + 1500);
+  }
+}
+
+let authTimer = null;
+async function checkAuth() {
+  const r = await call('/api/master/auth/state');
+  if (r && r.auth) renderAuth(r.auth);
 }
 
 async function sendAuth(body) {
@@ -489,6 +543,9 @@ if (pwSave) {
     if (r.auth) renderAuth(r.auth);
     if (r.ok) {
       $('#pwNow').value = $('#pwNew').value = $('#pwConfirm').value = '';
+      // 配布設定の「管理者パスワード」の行(いま: … / 既定のまま)もその場で新しくする
+      const s = await call('/api/settings');
+      if (s.ok) render(s.view);
     }
     toast(r.message || '変えられませんでした', r.ok ? '' : 'warn');
   });

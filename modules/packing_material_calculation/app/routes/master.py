@@ -90,6 +90,12 @@ def delete_row():
 # ==================================================================
 # 画面は設定の中にあるが、**関門と同じ場所に置く**。何を守っている
 # ものかが、守っている当人の隣にあるほうが追いやすい。
+@bp.get("/api/master/auth/state")
+def auth_state():
+    """いまの認証の状態だけを返す(時間切れを画面に出すため。延ばさない。統合 1.2.11)。"""
+    return jsonify(ok=True, auth=_auth_state())
+
+
 @bp.post("/api/master/auth")
 def auth():
     """パスワードを入れて開ける / 閉じる。`{"password":…}` / `{"close":true}`"""

@@ -23,11 +23,24 @@ function sheetHtml(s) {
   </section>`;
 }
 
-function render(sheets, extra) {
+/** 記録したあとは、その場で「記録済み」にする(統合 1.2.11)。押せるままだと
+    同じ発注を2度記録できてしまい、記録できたのかも画面から分からなかった */
+function showCommitted(n) {
+  if (n) $('#commit').hidden = true;
+  const done = $('#committed');
+  if (done) {
+    done.hidden = !n;
+    done.textContent = n ? `発注済みとして記録しました（${n > 0 ? n : 0} 件）。`
+      + 'もう一度記録するときは、発注票を作り直してください' : '';
+  }
+}
+
+function render(sheets, extra, committedCount = 0) {
   $('#sheets').innerHTML = sheets.map(sheetHtml).join('');
   const on = sheets.length > 0;
   $('#print').hidden = !on;
   $('#commit').hidden = !on;
+  showCommitted(on ? committedCount : 0);
   $('#print').href = `${BASE}/report/order?t=${encodeURIComponent(token)}`;
 
   if (extra && extra.length) {
@@ -39,6 +52,7 @@ function render(sheets, extra) {
 
 async function build(confirmed) {
   $('#note').innerHTML = '';
+  showCommitted(0);
   const r = await call('/api/order/build', { 確認済み: !!confirmed });
 
   if (!r.ok) {
@@ -80,7 +94,11 @@ $('#build').addEventListener('click', () => build(false));
 $('#commit').addEventListener('click', async () => {
   if (!confirm('この内容を発注済みとして記録します。よろしいですか？')) return;
   const r = await call('/api/order/commit', {});
-  if (r.ok) { committed = true; markPending('order', ''); }
+  if (r.ok || r.reason === 'already_committed') {
+    committed = true;
+    markPending('order', '');
+    showCommitted(r.committed || r.saved || -1);
+  }
   toast(r.ok ? `${r.saved} 件を履歴に残しました`
              : (r.message || '記録できません'), r.ok ? '' : 'warn');
 });
@@ -99,14 +117,18 @@ new MutationObserver(() => markPending('order', orderPending()))
   .observe($('#commit'), { attributes: true, attributeFilter: ['hidden'] });
 watchUnsaved(() => (orderPending() ? [orderPending()] : []));
 
-(async function start() {
+async function start() {
   const r = await call('/api/order');
   if (r.ok && r.sheets.length) {
     // 開き直したとき: このタブで「記録していない」と覚えていれば訊く。覚えていなければ、
     // 前に記録したかは分からないので訊かない(読み直しのたびに訊かない)
-    committed = !readPending('order');
-    render(r.sheets, []);
+    committed = !!r.committed || !readPending('order');
+    render(r.sheets, [], r.committed || 0);
   } else if (r.ok) {
     markPending('order', '');       // 発注票が無い(入口を起こし直した など)。覚えを消す
   }
-}());
+}
+start();
+// 別の画面から「この画面で使う」で取り戻したときは、その間に変わった中身を読み直す
+// (ページは読み直さない。統合 1.2.11)
+window.addEventListener('mc:reclaimed', () => start());

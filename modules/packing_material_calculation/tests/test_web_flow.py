@@ -351,3 +351,28 @@ def test_包装仕様Noを押すとコピーする作り():
     assert "navigator.clipboard.writeText(no)" in handler
     assert "をコピーしました" in handler
     assert "e.preventDefault()" in handler        # 番号が無いときは開かない
+
+
+def test_order_commit_twice_is_refused(ready):
+    """同じ発注票を2度記録しない(統合 1.2.11)。以前は押した後も画面が変わらず、2重に残った。"""
+    _calc(ready)
+    ready.post("/api/checklist/add", json={})
+    ready.post("/api/order/build", json={})
+    first = ready.post("/api/order/commit", json={}).get_json()
+    assert first["ok"] and first["committed"] == first["saved"] > 0
+    n = len(ready.get("/api/order/history").get_json()["rows"])
+    again = ready.post("/api/order/commit", json={})
+    assert again.status_code == 409 and again.get_json()["reason"] == "already_committed"
+    assert len(ready.get("/api/order/history").get_json()["rows"]) == n, "2重に残さない"
+    assert ready.get("/api/order").get_json()["committed"] == first["saved"]
+    # 作り直せば、また記録できる
+    ready.post("/api/order/build", json={"確認済み": True})
+    assert ready.get("/api/order").get_json()["committed"] == 0
+
+
+def test_ribbon_and_auth_state_can_be_read_without_reload(ready):
+    """帯・認証の状態を、ページを読み直さずに取り直せる(統合 1.2.11)。"""
+    rb = ready.get("/api/ribbon").get_json()
+    assert rb["ok"] and {"imported_at", "stale", "line", "workers"} <= set(rb["ribbon"])
+    st = ready.get("/api/master/auth/state").get_json()
+    assert st["ok"] and "open" in st["auth"]

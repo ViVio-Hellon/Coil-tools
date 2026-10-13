@@ -68,7 +68,11 @@ $('#clear').addEventListener('click', async () => {
   if (r.ok) { render(r.view); toast('全部消しました'); }
 });
 
-(async function start() {
+async function start() {
   const r = await call('/api/checklist');
   if (r.ok) render(r.view);
-}());
+}
+start();
+// 別の画面から「この画面で使う」で取り戻したときは、その間に変わった中身を読み直す
+// (ページは読み直さない。統合 1.2.11)
+window.addEventListener('mc:reclaimed', () => start());

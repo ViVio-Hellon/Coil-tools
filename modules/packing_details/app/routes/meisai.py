@@ -114,6 +114,16 @@ def claim_screen():
     return jsonify({"ok": True})
 
 
+@bp.get("/api/screen/state")
+def screen_state():
+    """いま画面を持っているものの様子(読むだけ)。2枚目の覆いが、前の画面の応答を
+    数え直すために使う(読み直さずに出す。統合 1.2.11)。"""
+    held = screen.holder()
+    return jsonify({"ok": True, "busy": held is not None,
+                    "idle_sec": round(held.idle_sec) if held else 0,
+                    "grace_sec": round(screen.GRACE_SEC)})
+
+
 @bp.post("/api/screen/take-over")
 def take_over():
     """前の画面に手放させる。**空けるだけ** ── 次に開いた画面が取る。

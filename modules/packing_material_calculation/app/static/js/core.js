@@ -148,3 +148,49 @@ watchUnsaved(() => Object.keys(PENDING_KEYS)
 window.cptUnsaved = () => unsavedChecks
   .flatMap((check) => { try { return check() || []; } catch (e) { return []; } })
   .map((name) => `資材計算: ${name}`);
+
+// ------------------------------------------------------------------
+// 上の帯(マスタの取り込み日時・古い・ライン・担当者)をその場で新しくする(統合 1.2.11)
+//
+// 帯はページを開いたときにサーバが描く。取り込み・ラインや担当者の変更のあとに
+// **読み直さなくても**帯が新しくなるように、返ってきた値で描き直す。
+// 設定の面(ライン・担当者の欄)にも `mc:ribbon` で知らせ、帯と面が食い違わないようにする
+// (以前は帯でラインを変えたあと、設定の面で自動取り込みを押すと、面に残っていた古い
+// ラインで上書きしていた)。
+// ------------------------------------------------------------------
+function workerOptions(choices, current) {
+  const opt = (w) =>
+    `<option value="${esc(w)}"${w === current ? ' selected' : ''}>${esc(w)}</option>`;
+  return '<option value="">(未選択)</option>'
+    + ((choices && choices.groups) || []).map(g => g.team
+        ? `<optgroup label="${esc(g.team)}">${g.names.map(opt).join('')}</optgroup>`
+        : g.names.map(opt).join('')).join('');
+}
+export { workerOptions };
+
+/** 帯を描き直す。`rb` は /api/ribbon・/api/settings の view のどちらでもよい(同じ名前の値) */
+export function syncRibbon(rb, { announce = true } = {}) {
+  if (!rb) return;
+  const imp = document.getElementById('rb-imported');
+  if (imp && 'imported_at' in rb) imp.textContent = rb.imported_at || '未取り込み';
+  const stale = document.getElementById('rb-stale');
+  if (stale && 'stale' in rb) {
+    stale.hidden = !rb.stale;
+    stale.title = `${rb.stale_why || ''}。取り込み直してください`;
+  }
+  const line = document.getElementById('rb-line');
+  if (line && rb.line) line.value = rb.line;
+  const worker = document.getElementById('rb-worker');
+  if (worker && rb.workers) {
+    worker.innerHTML = workerOptions(rb.workers, rb.worker);
+    worker.value = rb.worker || '';
+  }
+  if (announce) window.dispatchEvent(new CustomEvent('mc:ribbon', { detail: rb }));
+}
+
+/** サーバから帯の値を取り直して描き直す。 */
+export async function refreshRibbon() {
+  const r = await call('/api/ribbon');
+  if (r && r.ok) syncRibbon(r.ribbon);
+  return r;
+}

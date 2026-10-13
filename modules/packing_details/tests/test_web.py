@@ -168,6 +168,15 @@ class ScreenTest(unittest.TestCase):
         self.assertEqual(res.get_json()["error"]["code"], "screen_busy")
         self.assertEqual(screen.holder().screen_id, SCREEN)
 
+    def test_2枚目の覆いは前の画面の様子を取り直せる(self):
+        """読み直さずに「前の画面からの応答」を数え直す(統合 1.2.11)。2枚目(別の名前)からも読める。"""
+        res = self.client.get("/api/screen/state",
+                              headers={"X-Tool-Token": TOKEN, "X-Tool-Screen": "2枚目"})
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertTrue(body["busy"])
+        self.assertIn("grace_sec", body)
+
     def test_同じ名前の名乗り直しは通る(self):
         """**再読込(F5)がこれ。** タブの名前は sessionStorage に残る。"""
         self.assertEqual(self._claim(SCREEN).status_code, 200)

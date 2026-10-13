@@ -65,10 +65,9 @@
       <span class="slot__v" id="rb-imported">
         {{ ribbon.imported_at or '未取り込み' }}
       </span>
-      {% if ribbon.stale %}
-      <a class="chip chip--alert" href="{{ base }}/settings?t={{ token }}"
-         title="{{ ribbon.stale_why }}。取り込み直してください">古い</a>
-      {% endif %}
+      {# 取り込んだら読み直さずに消す(core.js の syncRibbon)ので、いつも置いて hidden で隠す #}
+      <a class="chip chip--alert" id="rb-stale" href="{{ base }}/settings?t={{ token }}"
+         title="{{ ribbon.stale_why }}。取り込み直してください"{% if not ribbon.stale %} hidden{% endif %}>古い</a>
     </div>
 
     <label class="slot">

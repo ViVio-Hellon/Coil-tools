@@ -45,8 +45,9 @@
   </div>
   <div class="banner" id="notice" hidden></div>
 
+  {#- 取り込めたら読み直さずに消す(meisai.js の afterImport。統合 1.2.11) -#}
   {% if not has_data %}
-  <div class="banner">
+  <div class="banner" id="noDataBanner">
     仕掛台帳がまだ取り込まれていません。右上の「取り込み」を押してください。
     取り込み元が見つからない場合は、置き場所を設定で確かめてください。
   </div>

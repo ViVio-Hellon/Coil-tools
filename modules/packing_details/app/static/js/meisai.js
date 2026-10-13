@@ -560,11 +560,32 @@ async function sendHistory() {
     const body = await api.post("/api/history/send", {});
     renderHistory(body);
     showNote("hisSendNote", body.message, Boolean(body.last_error));
+    if (body.sending) watchSending();
   } catch (err) {
     showNote("hisSendNote", err.message, true);
   } finally {
     $("btnHisSend").disabled = false;
   }
+}
+
+/**
+ * 裏で送っているあいだは、送り終わるまで様子(送り残し・最後に送った)を取り直す。
+ * 以前は「裏で続けます」と出たあと、閉じて開き直すまで古い数のままだった(統合 1.2.11)
+ */
+let sendingTimer = null;
+function watchSending(tries = 40) {
+  clearTimeout(sendingTimer);
+  sendingTimer = setTimeout(async () => {
+    if (!$("historyDialog").open) return;
+    try {
+      const body = await api.get("/api/history/status");
+      renderHistory(body);
+      if (body.sending && tries > 1) { watchSending(tries - 1); return; }
+      showNote("hisSendNote", body.last_error
+        ? `送れませんでした(あとで送り直します): ${body.last_error}`
+        : "送り終わりました。", Boolean(body.last_error));
+    } catch { /* 開き直せば分かる */ }
+  }, 3000);
 }
 
 function historyFilter() {
@@ -721,6 +742,13 @@ function renderTopStamps(stamps) {
   $("stamp").textContent = stamps.map((s) => `${s.table} ${s.as_of_short}`).join("　");
 }
 
+/** 取り込んだあと。帯と「まだ取り込まれていません」の案内を、読み直さずに新しくする(統合 1.2.11) */
+function afterImport(body) {
+  renderTopStamps(body.stamps);
+  const banner = document.getElementById("noDataBanner");
+  if (banner && body.ok) banner.hidden = true;
+}
+
 async function runImport() {
   $("btnImport").disabled = true;
   try {
@@ -731,7 +759,7 @@ async function runImport() {
     // 読み直すと、手で直した前工程実績数が消える
     notify([body.summary, body.note, ...body.errors].filter(Boolean).join("\n"),
            body.ok ? "ok" : "danger");
-    renderTopStamps(body.stamps);
+    afterImport(body);
   } catch (err) {
     showError(err);
   } finally {
@@ -823,7 +851,7 @@ function wire() {
   $("btnClearHistory").addEventListener("click", clearHistory);
   $("btnImport").addEventListener("click", runImport);
   wireBusy();
-  settings.wire({ showError, afterImport: (body) => renderTopStamps(body.stamps) });
+  settings.wire({ showError, afterImport });
   $("btnHistory").addEventListener("click", openHistory);
   $("btnHisClose").addEventListener("click", () => $("historyDialog").close());
   $("btnHisSend").addEventListener("click", sendHistory);
@@ -868,6 +896,25 @@ function showSecondScreen(info) {
   box.hidden = false;
   // 下の画面は**消さずに止める**。消すと「何が起きたのか」が分からない
   document.querySelector(".wrap")?.setAttribute("inert", "");
+  watchFirstScreen();
+}
+
+/**
+ * 前の画面の応答を数え直す(統合 1.2.11)。以前は開いたときの秒数のままで、
+ * 前の画面が閉じられても分からなかった。空いたら「もう一度ためす」で続けられると出す
+ */
+let firstScreenTimer = null;
+function watchFirstScreen() {
+  clearInterval(firstScreenTimer);
+  firstScreenTimer = setInterval(async () => {
+    if ($("secondScreen").hidden) { clearInterval(firstScreenTimer); return; }
+    try {
+      const st = await api.get("/api/screen/state");
+      $("secondNote").textContent = st.busy
+        ? `前の画面からの応答: ${st.idle_sec}秒前　（${st.grace_sec}秒とだえると、自動で空きます）`
+        : "前の画面は閉じられました。「もう一度ためす」を押すと、この画面で続けられます。";
+    } catch { /* 次に数え直す */ }
+  }, 3000);
 }
 
 /** 前の画面に手放させて、開き直す。**2枚にするのではなく、移す。** */

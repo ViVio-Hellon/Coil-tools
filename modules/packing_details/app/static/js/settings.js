@@ -249,7 +249,9 @@ function renderLocal(body, { fill = false } = {}) {
   }
   $("setLot2Note").textContent = body.lot_db_dir2
     ? `いま見ている場所: ${body.lot_db_dir2}` : "いまは2つ目を使っていません";
-  if (fill && body.lot_db_dir2) {
+  // 1つ目のフォルダを変えると2つ目が使われ始めることもある(同じフォルダなら使わない)。
+  // 描くたびに2つ目の様子を取り直す(開き直さなくても出る。統合 1.2.11)
+  if (body.lot_db_dir2) {
     api.get("/api/settings/lot2").then(renderSecond).catch(() => { /* 開き直せば分かる */ });
   } else if (!body.lot_db_dir2) {
     renderSecond({ lot_second: [] });
@@ -258,7 +260,8 @@ function renderLocal(body, { fill = false } = {}) {
   $("setLotDir").placeholder = `空なら既定: ${body.lot_db_dir_default}`;
   $("setKonpoDir").placeholder = `空なら既定: ${body.konpo_db_dir_default}`;
   $("setShareDir").placeholder = `空なら既定: ${body.share_default}`;
-  $("setShareNow").textContent = `いま見ている場所: ${body.share_dir}`;
+  // 届くかどうかを確かめたあとは renderQa が「（届く）/（届かない）」付きで出す。消さない
+  if (!shareKnown) $("setShareNow").textContent = `いま見ている場所: ${body.share_dir}`;
   $("setExportNow").textContent = `いまの出力先: ${body.export_dir}`;
   $("setExportDir").placeholder = `空なら既定: ${body.export_dir_default}`;
   renderStore(body.storage);
@@ -317,7 +320,8 @@ async function saveSecondLot() {
       .filter(Boolean).join("\n"), !body.ok);
     hooks.afterImport(body);
     const next = await api.get("/api/settings");
-    renderLocal(next, { fill: true });
+    // 打ちかけのほかの欄は消さない(以前は fill で全部の欄をサーバの値に戻していた)
+    renderLocal(next);
     renderStamps(body.stamps, next.lot_tables, "setLotStamps");
   } catch (err) {
     refused(err, "setLot2Result");
@@ -421,7 +425,11 @@ function refused(err, noteId) {
 }
 
 async function refreshShare() {
-  try { renderShare(await api.get("/api/settings/share")); } catch { /* 出せるところまで */ }
+  try {
+    const body = await api.get("/api/settings/share");
+    renderShare(body);
+    return body;
+  } catch { return null; /* 出せるところまで */ }
 }
 
 // ------------------------------------------------------------------
@@ -517,6 +525,8 @@ async function savePlace(which) {
     $(`set${key}Password`).value = "";
     renderLocal(body);
     renderQa(body);
+    // 控えのJSONを移すと右上の文字が変わることがある。開いている紙面にも知らせる
+    announceQa(body.qa_mark);
     showNote(`set${key}Note`, body.message, /届きません|ありません/.test(body.message));
   } catch (err) {
     if (!refused(err, `set${key}Note`)) return;
@@ -692,11 +702,27 @@ async function sendDist(action) {
   for (const id of ["btnDistExport", "btnDistReapply", "btnDistRemove"]) $(id).disabled = true;
   showNote("distNote", "");
   try {
+    const before = local ? { lot: local.lot_db_dir, konpo: local.konpo_db_dir,
+                             lot2: local.lot_db_dir2 } : null;
     const body = await api.post(`/api/settings/distribution/${action}`, data);
     $("distPassword").value = "";
     // 読み込み直したら置き場所の欄も変わる
     renderLocal(body, { fill: action === "reapply" });
     showNote("distNote", body.message);
+    if (action === "reapply") {
+      // 共有の場所・右上の文字・届くか・ボタンの可否もその場で出し直す(統合 1.2.11)
+      const share = await refreshShare();
+      if (share) announceQa(share.qa_mark);
+      // 仕掛台帳・梱包課のフォルダが変わったら取り込み直す(主画面が古い台帳のままにならない)
+      if (before && (before.lot !== body.lot_db_dir || before.konpo !== body.konpo_db_dir
+                     || before.lot2 !== body.lot_db_dir2)) {
+        const imp = await importWithProgress({ force: true }, "置き場所が変わったので取り込み中");
+        hooks.afterImport(imp);
+        showNote("distNote", [body.message, imp.summary, ...(imp.notes || []), imp.note, ...imp.errors]
+          .filter(Boolean).join("\n"), !imp.ok);
+        renderLocal(await api.get("/api/settings"));
+      }
+    }
   } catch (err) {
     if (!refused(err, "distNote")) return;
     if (err.field === "password") {

@@ -293,7 +293,7 @@ watchUnsaved(() => {
   return out;
 });
 
-(async function start() {
+async function start() {
   const r = await call('/api/calc');
   if (r.ok) {
     // 面を移って戻ってきた: 覚えている「積んだときの中身」と比べる。覚えていなければ
@@ -306,4 +306,8 @@ watchUnsaved(() => {
     render(r.view);
   }
   burrShown = [$('#upper').value, $('#lower').value];
-}());
+}
+start();
+// 別の画面から「この画面で使う」で取り戻したときは、その間に変わった中身を読み直す
+// (ページは読み直さない。統合 1.2.11)
+window.addEventListener('mc:reclaimed', () => start());

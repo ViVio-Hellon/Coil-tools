@@ -143,7 +143,7 @@ class PenaStorageTest(unittest.TestCase):
 
     def _card(self) -> str:
         html = self.client.get("/pena/settings").get_data(as_text=True)
-        start = html.index('<div class="card" id="storage">')
+        start = html.index('<div class="card" id="storage" data-live>')
         return html[start:html.index("この画面の値の決まり方", start)]
 
     def test_local_files_are_listed_with_their_paths(self):

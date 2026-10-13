@@ -86,7 +86,7 @@ TOKEN_EXEMPT_PATHS = frozenset({"/api/health", "/api/alive"})
 #                    くる(`/report/<lot>/edits`)。触るのは出力済みの
 #                    明細の書き足し欄だけで、盤面には触らない
 SCREEN_EXEMPT_PATHS = frozenset({
-    "/api/screen/claim", "/api/screen/take-over", "/api/screen/release",
+    "/api/screen/claim", "/api/screen/take-over", "/api/screen/release", "/api/screen/state",
 })
 SCREEN_EXEMPT_PREFIXES = ("/report/",)
 

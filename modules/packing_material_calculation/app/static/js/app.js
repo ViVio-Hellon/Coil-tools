@@ -5,7 +5,7 @@
   ・終了ボタン
   ・心拍(基盤仕様書 2.9)
 */
-import { call, toast, $, screenId, BASE } from './core.js';
+import { call, toast, $, screenId, BASE, syncRibbon, refreshRibbon } from './core.js';
 
 // ---- 帯 ----------------------------------------------------------
 const line = $('#rb-line');
@@ -14,6 +14,8 @@ if (line) {
     const r = await call('/api/settings', { line: line.value });
     toast(r.ok ? `ラインを ${line.value} にしました` : (r.message || '保存できません'),
           r.ok ? '' : 'warn');
+    // 帯と設定の面をその場でそろえる(読み直さない。統合 1.2.11)
+    if (r.view) syncRibbon(r.view);
   });
 }
 
@@ -23,6 +25,7 @@ if (worker) {
     const r = await call('/api/settings', { worker: worker.value });
     toast(r.ok ? (worker.value ? `担当者を ${worker.value} にしました` : '担当者を未選択にしました')
                : (r.message || '保存できません'), r.ok ? '' : 'warn');
+    if (r.view) syncRibbon(r.view);
   });
 }
 
@@ -84,10 +87,18 @@ function gateShow(title, body, { refused = false, actions = false,
   noteEl.hidden = !note;
 }
 
+let claimedOnce = false;
 function gateOpen() {
   owned = true;
   if (gate) gate.hidden = true;
   hidden.forEach(el => { el.hidden = false; });
+  // 2度目からは(取り上げられた・断られたあとに取り戻した)、そのあいだに別の画面で
+  // 変わった中身を各面が読み直す。帯も新しくする(ページは読み直さない。統合 1.2.11)
+  if (claimedOnce) {
+    window.dispatchEvent(new CustomEvent('mc:reclaimed'));
+    refreshRibbon();
+  }
+  claimedOnce = true;
 }
 
 /** 使えなくする。**出していたものを引っ込める**(覆うだけにしない) */

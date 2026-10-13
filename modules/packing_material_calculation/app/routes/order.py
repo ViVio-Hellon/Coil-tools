@@ -19,7 +19,9 @@ bp = Blueprint("order", __name__)
 
 # 組み立てた発注票を、確認のあいだだけ持っておく。
 # **プロセスに1つ**(このアプリは1台を1人が使う)
-_pending: dict = {"sheets": [], "worker": ""}
+# `committed` … いまの発注票を「発注済みとして記録」したか。**同じ票を2度記録しない**
+# (統合 1.2.11。以前は押した後も画面が変わらず、もう一度押すと同じ発注が2重に残った)
+_pending: dict = {"sheets": [], "worker": "", "committed": 0}
 
 
 def _sheet_view(sheet) -> dict:
@@ -46,7 +48,7 @@ def page():
 @bp.get("/api/order")
 def current():
     return jsonify(ok=True, sheets=[_sheet_view(s) for s in _pending["sheets"]],
-                   worker=_pending["worker"])
+                   worker=_pending["worker"], committed=_pending["committed"])
 
 
 _MESSAGES = {
@@ -78,6 +80,7 @@ def build():
 
     _pending["sheets"] = result.sheets
     _pending["worker"] = worker
+    _pending["committed"] = 0
     return jsonify(
         ok=True,
         sheets=[_sheet_view(s) for s in result.sheets],
@@ -97,9 +100,14 @@ def commit():
     if not _pending["sheets"]:
         return jsonify(ok=False, reason="nothing_pending",
                        message="先に発注票を作ってください"), 422
+    if _pending["committed"]:
+        return jsonify(ok=False, reason="already_committed", committed=_pending["committed"],
+                       message=f"この発注票は記録済みです({_pending['committed']} 件)。"
+                               "もう一度記録するときは、発注票を作り直してください"), 409
     n = order_sheet_service.commit(conn, _pending["sheets"],
                                    worker=_pending["worker"])
-    return jsonify(ok=True, saved=n)
+    _pending["committed"] = n or -1
+    return jsonify(ok=True, saved=n, committed=_pending["committed"])
 
 
 @bp.get("/api/order/history")

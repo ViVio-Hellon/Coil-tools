@@ -689,6 +689,8 @@ def status(conn: sqlite3.Connection, *, timeout: float = 3.0) -> dict[str, Any]:
     path = history_path()
     out: dict[str, Any] = {
         "pending": pending_count(conn),
+        # いま裏で送っているか。画面は送り終わるまで様子を取り直す(読み直さない。統合 1.2.11)
+        "sending": _send_lock.locked(),
         "local_count": int(conn.execute("SELECT COUNT(*) FROM 明細履歴").fetchone()[0]),
         "last_sent_at": _status["last_sent_at"],
         "last_try_at": _status["last_try_at"],
