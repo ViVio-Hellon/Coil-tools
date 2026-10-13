@@ -116,8 +116,9 @@ class TestMatchesTareCalc(unittest.TestCase):
         q = 11
         mat = self._mat(q)
         row = self._row(q)
-        self.assertEqual(row["coilHeight"], fmt(mat.TA * 1000, "0"))
-        self.assertEqual(row["tipHeight"], fmt(mat.TIPT * 1000, "0"))
+        # VBA のセル書式 0.0_ と同じ小数1桁(統合 1.2.12)
+        self.assertEqual(row["coilHeight"], fmt(mat.TA * 1000, "0.0"))
+        self.assertEqual(row["tipHeight"], fmt(mat.TIPT * 1000, "0.0"))
 
 
 class TestListNw(unittest.TestCase):

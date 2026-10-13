@@ -169,7 +169,14 @@ def filter_numeric_text(raw: str) -> str:
 def filter_coil_text(raw: str) -> str:
     """``CoilH1..4_Change``: 数値でなければ空にする（"-" の例外なし）。"""
     s = raw or ""
-    return s if is_numeric(s) else ""
+    if not is_numeric(s):
+        return ""
+    # 本数は整数。11.5 は計算に 11.5 を使い、見出しは「12本」になっていた(統合 1.2.12)。
+    # 違う数で計算するより、空にして入れ直してもらう
+    try:
+        return s if float(to_narrow(s).replace(",", "")).is_integer() else ""
+    except ValueError:
+        return ""
 
 
 #: VBA CommandButton8（全角→半角変換）の置換表。**順序も VBA のまま**

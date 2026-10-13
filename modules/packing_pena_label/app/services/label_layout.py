@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 
 from . import size_master as SM
-from .vba_compat import fmt, is_numeric
+from .vba_compat import cdbl, fmt, is_numeric
 
 
 def weight_text(wt: str) -> str:
@@ -26,7 +26,14 @@ def weight_text(wt: str) -> str:
     見せる。本物の台紙と照らし合わせる試験 ``test_label_layout`` もそう)。書式を付けるのは
     画面・印刷に出すときだけ。バーコードは打ったまま(VBA も打った文字のまま組む)。
     """
-    return fmt(wt, "0.0") if is_numeric(wt) else wt
+    # 全角・桁区切りの付いた値("２０．１５"・"1,234")も読める形にしてから(統合 1.2.12)。
+    # 以前は Val で読んで 20.0・1.0 と刷っていた(T1 は CDbl で 20.15 と正しく読んでいた)
+    if not is_numeric(wt):
+        return wt
+    try:
+        return fmt(cdbl(wt), "0.0")
+    except ValueError:
+        return wt
 
 #: (row, col) -> value
 CellMap = Dict[Tuple[int, int], str]

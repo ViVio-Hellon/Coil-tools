@@ -91,3 +91,21 @@ def test_round_down_keeps_exact_divisions(weight, unit, want):
 def test_round_down_cuts_the_first_decimal():
     """積数は小数点第1位で切り捨て(Re_積数 3.5 → 3 も)。"""
     assert [vba.round_down(x) for x in (3.5, 3.9, 2.5, 0.99, 4.0)] == [3, 3, 2, 0, 4]
+
+
+@pytest.mark.parametrize("weight, unit, want", [
+    (1640, 65.6, 25), (920, 36.8, 25), (1690, 67.6, 25),    # 2進では 25.000000000000004 など
+    (10, 4, 3), (1000, 106.48, 10), (8, 4, 2),
+])
+def test_round_up_keeps_exact_divisions(weight, unit, want):
+    """RoundUp も割り切れる計算は割り切れたまま(統合 1.2.12。バリ揃えの積数・台数で 1 多くなっていた)。"""
+    assert vba.round_up(weight / unit) == want
+
+
+def test_total_height_is_not_truncated():
+    """総高さは VBA が丸めずに出す。3 × 152.3 + 210 = 666.9 を 666 にしない(統合 1.2.12)。"""
+    from modules.packing_material_calculation.coil_tool import stack_service
+    state = stack_service.CalcState()
+    stack, count = stack_service._recalc_by_height(state, limit=500.0, ripla=0.0, haba=152.3, ins=6)
+    assert (stack, count) == (3.0, 2)
+    assert state.総高さ == "666.9"

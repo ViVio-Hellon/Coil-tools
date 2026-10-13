@@ -231,7 +231,15 @@ function renderWeights(state) {
       button.type = "button";
       button.textContent = step > 0 ? `+${step}` : String(step);
       button.addEventListener("click", () => {
-        const next = Math.max(0, (parseInt(input.value, 10) || 0) + step);
+        // 整数でない値(日本語入力で入った 2502.7 など)を parseInt で切り捨てて足さない
+        // (統合 1.2.12。以前は 2502.7 → 2503 として送っていた)
+        const now = input.value.trim();
+        if (now !== "" && !/^[0-9]+$/.test(now)) {
+          input.classList.add("is-bad");
+          notify("重量は整数で入力してください(小数点は使えません)。", "danger");
+          return;
+        }
+        const next = Math.max(0, (parseInt(now, 10) || 0) + step);
         input.value = String(next);
         sendWeights();
       });

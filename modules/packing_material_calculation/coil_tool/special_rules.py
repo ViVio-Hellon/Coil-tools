@@ -127,7 +127,7 @@ def _nishihara(state: CalcState, stack: float, atu: float, haba: float) -> Optio
         new = 3.0
     # VBA はここで必ず総高さを出している(当たらなくても現在の積数で計算)
     used = new if new is not None else stack
-    state.総高さ = f"{vba.round_down((80.0 + haba) * used + 210.0)}mm"
+    state.総高さ = f"{vba.num_text((80.0 + haba) * used + 210.0)}mm"   # 切り捨てない(統合 1.2.12)
     return new
 
 
@@ -214,7 +214,7 @@ def _miyama(state: CalcState, stack: float, haba: float, ripla_size: str) -> Non
     VBA も `Ripu = val(TempHiki(1, C_リプラサイズ))` と書いている。
     """
     ripla = vba.val(ripla_size)
-    state.総高さ = f"{vba.round_down((stack * ripla) + (stack * haba) + 210.0)}mm"
+    state.総高さ = f"{vba.num_text((stack * ripla) + (stack * haba) + 210.0)}mm"   # 切り捨てない(統合 1.2.12)
     state.mark(FLAG_SPEC)
     state.mark(FLAG_HEIGHT)
 

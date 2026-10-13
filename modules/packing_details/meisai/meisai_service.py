@@ -19,11 +19,13 @@ Webでは1往復で決められないので、**まず確認事項を返し、�
 """
 from __future__ import annotations
 
+import re
 import sqlite3
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
-from . import config, db, history_repo, slip_history, strand_service
+from . import config, db, history_repo, lot_repo, slip_history, strand_service
 from .logging_utils import get_logger
 from .strand_service import Board
 
@@ -81,23 +83,27 @@ def read_weights(values: list[object], jou_su: int) -> list[int]:
     out: list[int] = []
     for index in range(jou_su):
         raw = values[index] if index < len(values) else None
-        text = str(raw if raw is not None else "").strip()
+        # 全角の数字は半角にしてから読む(画面でも直している)。数字だけを整数として読み、
+        # float を通さない(統合 1.2.12。以前は "2.5e3"・"1_000"・"2502." も通っていた)
+        text = unicodedata.normalize("NFKC", str(raw if raw is not None else "")).strip()
         if text == "":
             raise strand_service.RefusedError(
                 REFUSE_NO_WEIGHT, f"丈{index + 1}の重量が未入力です。")
-        try:
-            number = float(text)
-        except ValueError:
-            raise strand_service.RefusedError(
-                REFUSE_NO_WEIGHT, f"丈{index + 1}の重量が未入力です。") from None
-        # **小数を黙って切り捨てない**(統合 1.2.6)。VBA の入力欄は数字以外を弾くので
-        # 小数は入らない。ツールでも日本語入力(IME)からは小数点が入りえて、以前は
-        # 2502.7 を 2502 にして紙・履歴(共有)へ書いていた。違う数を書くより断る
-        if number != number or number in (float("inf"), float("-inf")) or not number.is_integer():
+        # 小数点以下が 0 だけ("250.0")なら同じ数なので通す
+        whole = re.fullmatch(r"([0-9]+)(?:\.0*)?", text)
+        if not whole:
+            # **小数を黙って切り捨てない**(統合 1.2.6)。VBA の入力欄は数字以外を弾くので
+            # 小数は入らない。ツールでも日本語入力(IME)からは小数点が入りえて、以前は
+            # 2502.7 を 2502 にして紙・履歴(共有)へ書いていた。違う数を書くより断る
             raise strand_service.RefusedError(
                 REFUSE_NO_WEIGHT,
-                f"丈{index + 1}の重量は整数で入力してください(小数点は使えません): {text}")
-        out.append(int(number))
+                f"丈{index + 1}の重量は整数(数字だけ)で入力してください: {text}")
+        number = int(whole.group(1))
+        if number <= 0:
+            # 0 のまま進めると紙に 0.0Kg と刷られて現場に出る
+            raise strand_service.RefusedError(
+                REFUSE_NO_WEIGHT, f"丈{index + 1}の重量が0です。")
+        out.append(number)
     return out
 
 
@@ -299,7 +305,7 @@ class Output:
                 log.debug("rows: 不正キー key=%s", key)
                 out.append((key, ""))
                 continue
-            out.append((key, f"{self.weight_of(key):.1f}Kg"))
+            out.append((key, f"{lot_repo.fmt(self.weight_of(key), 1)}Kg"))
         return out
 
 

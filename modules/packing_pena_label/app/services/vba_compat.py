@@ -51,7 +51,7 @@ def single(x: float) -> float:
 
 
 # ---------------------------------------------------------------- 変換
-_VAL_RE = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?")
+_VAL_RE = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", re.ASCII)   # 全角数字は読まない(VBA の Val)
 
 
 def val(x) -> float:
@@ -115,7 +115,9 @@ def round_half_up(x: float, digits: int = 0) -> float:
     if x is None:
         return 0.0
     try:
-        d = Decimal(repr(float(x)))
+        # VBA は有効数字 15 桁の10進で見て丸める(Val・Format。統合 1.2.12)。repr(17 桁)で見ると
+        # 8.444999999999999(0.565 × 14 + …)が 8.44 になる(VBA は 8.45)
+        d = Decimal(format(float(x), ".15g"))
     except (InvalidOperation, ValueError, OverflowError):
         return 0.0
     q = Decimal(1).scaleb(-digits)          # digits=-1 -> 10
@@ -137,7 +139,9 @@ def ws_roundup(x: float, digits: int = 0) -> float:
     if x is None:
         return 0.0
     try:
-        d = Decimal(repr(float(x)))
+        # VBA は有効数字 15 桁の10進で見て丸める(Val・Format。統合 1.2.12)。repr(17 桁)で見ると
+        # 8.444999999999999(0.565 × 14 + …)が 8.44 になる(VBA は 8.45)
+        d = Decimal(format(float(x), ".15g"))
     except (InvalidOperation, ValueError, OverflowError):
         return 0.0
     q = Decimal(1).scaleb(-digits)

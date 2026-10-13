@@ -299,7 +299,7 @@ def set_zen_kotei():
         return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
 
     raw = str((request.get_json(silent=True) or {}).get("value", "")).strip()
-    if not raw.isdigit():
+    if not (raw.isascii() and raw.isdigit()):
         return jsonify(error_body(
             "bad_number", "前工程実績数は数値で入力してください。", "value")), 400
     board.zen_kotei = int(raw)
@@ -323,7 +323,7 @@ def set_jou_su():
         return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
 
     raw = str((request.get_json(silent=True) or {}).get("value", "")).strip()
-    if not raw.isdigit():
+    if not (raw.isascii() and raw.isdigit()):
         return jsonify(error_body("bad_number", "丈数を入力してください。",
                                   "value")), 400
     value = int(raw)
@@ -431,7 +431,7 @@ def set_stack_max():
         return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
 
     raw = str((request.get_json(silent=True) or {}).get("value", "")).strip()
-    if not raw.isdigit():
+    if not (raw.isascii() and raw.isdigit()):
         return jsonify(error_body("bad_number", "積み条数を入力してください。",
                                   "value")), 400
     try:

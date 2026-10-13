@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
 from . import db
+from .import_specs import vba_val
 from .logging_utils import get_logger
 
 log = get_logger("lot_repo")
@@ -40,25 +42,20 @@ def val(value: object) -> float:
     返す。Python の `float()` は例外を投げるので、そのまま置き換えると
     **台帳に空欄や単位付きの値があるだけで画面が落ちる**。
 
-    VBA と同じく、全角数字は読めない(`Val("１２")` は 0)。ここで
-    全角を受けると、VBAでは0になる値がPythonでは12になり、表示が
-    食い違う。
+    VBA と同じく、全角数字は読めない(`Val("１２")` は 0)。指数("1E-05")・途中の空白も
+    VBA と同じに読む(統合 1.2.12。取り込みと同じ `import_specs.vba_val`)。
     """
-    text = str(value if value is not None else "").strip()
-    out = ""
-    for ch in text:
-        if ch.isdigit() and ch.isascii():
-            out += ch
-        elif ch == "." and "." not in out:
-            out += ch
-        elif ch in "+-" and not out:
-            out += ch
-        else:
-            break
-    try:
-        return float(out)
-    except ValueError:
-        return 0.0
+    return vba_val(value)
+
+
+def fmt(value: float, digits: int) -> str:
+    """VBA `Format(x, "0.0…")` 相当(統合 1.2.12)。有効数字 15 桁の10進で見て、半分は 0 から遠い側へ。
+
+    Python の書式(2進の値のまま偶数の側へ)では 板幅 104.25 が 104.2 になる(VBA は 104.3)。
+    """
+    q = Decimal(1).scaleb(-digits)
+    d = Decimal(f"{float(value):.15g}").quantize(q, rounding=ROUND_HALF_UP)
+    return f"{d + 0:.{digits}f}" if d != 0 else f"{0:.{digits}f}"
 
 
 @dataclass
@@ -86,22 +83,22 @@ class LotInfo:
         """前工程実績数 = 縦割数 × 横割数 (VBA `ZenKoteiJissekiSu`)。"""
         return self.tate_wari * self.yoko_wari
 
-    # --- 表示書式 (VBA `DisplayLotInfo` の Format) ---
+    # --- 表示書式 (VBA `DisplayLotInfo` の Format。半分は 0 から遠い側へ) ---
     @property
     def odr_thickness_text(self) -> str:
-        return f"{self.odr_thickness:.3f}"
+        return fmt(self.odr_thickness, 3)
 
     @property
     def odr_width_text(self) -> str:
-        return f"{self.odr_width:.1f}"
+        return fmt(self.odr_width, 1)
 
     @property
     def seizou_thickness_text(self) -> str:
-        return f"{self.seizou_thickness:.3f}"
+        return fmt(self.seizou_thickness, 3)
 
     @property
     def seizou_width_text(self) -> str:
-        return f"{self.seizou_width:.1f}"
+        return fmt(self.seizou_width, 1)
 
 
 @dataclass

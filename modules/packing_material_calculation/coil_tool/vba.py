@@ -18,7 +18,7 @@ from __future__ import annotations
 import math
 import re
 import struct
-from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
+from decimal import ROUND_DOWN, ROUND_HALF_UP, ROUND_UP, Decimal
 from typing import Any
 
 # 先頭から数値として読める部分。VBA `Val` は読めるところまでを数値にする
@@ -94,8 +94,12 @@ def round_up(value: float) -> int:
 
     Python の `math.ceil` と違い、負の数は下へ行く(-1.2 → -2)。
     このツールで負が来ることは無いが、規則としては合わせておく。
+    **割り切れる計算は割り切れたまま**(有効数字 15 桁で見る。統合 1.2.12)。
     """
-    return int(math.ceil(value)) if value >= 0 else int(math.floor(value))
+    # 割り切れる計算は割り切れたまま切り上げる(round_down と同じく有効数字 15 桁で見る。
+    # 統合 1.2.12)。1640 ÷ 65.6 は 2進では 25.000000000000004 になり、そのまま切り上げると 26
+    number = Decimal(f"{value:.15g}")
+    return int(number.to_integral_value(rounding=ROUND_UP))
 
 
 def round_down(value: float) -> int:

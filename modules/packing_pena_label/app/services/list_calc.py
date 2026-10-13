@@ -91,11 +91,12 @@ def build_list(table: M.MaterialTable, width_mm: float, tip: str,
             "nw": disp["NW"],
             "hu": disp["HU"],
             "gw": disp["GW"],
-            "coilHeight": fmt(val(mat.TA * 1000), "0"),
+            # 高さは VBA のセル書式 0.0_ と同じ小数1桁(風袋計算の画面とも同じ。統合 1.2.12。以前は "0" で 596.9 → 597)
+            "coilHeight": fmt(val(mat.TA * 1000), "0.0"),
             # 風袋計算画面の高さ表示と同じ（樹脂パレット上下 + ハードボード上下、
             # 10mm 単位で切り上げ）
             "packHeight": fmt(ws_roundup(mat.KTA, -1), "0.0"),
-            "tipHeight": fmt(val(mat.TIPT * 1000), "0"),
+            "tipHeight": fmt(val(mat.TIPT * 1000), "0.0"),
             "raw": {
                 "pin": mat.PIN, "tip": mat.TIP, "sut": mat.SUT, "esa": mat.ESA,
                 "por": mat.POR, "hb": mat.HB, "par": mat.PAR, "pet": mat.PET,

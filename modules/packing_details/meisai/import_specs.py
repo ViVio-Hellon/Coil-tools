@@ -22,7 +22,12 @@ IMEを切り替えることになるため。対応表をここ1か所に置け�
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
+
+from .logging_utils import get_logger
+
+log = get_logger("import_specs")
 
 
 # ------------------------------------------------------------------
@@ -51,15 +56,54 @@ def to_int(value: Any) -> Optional[int]:
         return None
 
 
+# VBA `Val()` が読む形: 符号・数字・小数点・指数(E/D)。空白はどこにあっても飛ばす
+_VAL_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eEdD][+-]?\d+)?", re.ASCII)
+
+
+def vba_val(value: Any) -> float:
+    """VBA `Val()` 相当(統合 1.2.12)。**先頭から数値として読める分だけ**を読む。
+
+    `Val("0.8mm")` は 0.8、`Val("1,234")` は 1、`Val("abc")` は 0、`Val("1E-05")` は 0.00001。
+    全角数字は読めない(`Val("１２")` は 0)。以前は取り込みで `float()` を使っていて、
+    "0.8mm" を 0(読めない)にし、"１２" を 12 にしていた(VBA と違う数)。
+    """
+    text = re.sub(r"[ \t\r\n\u3000]", "", _text(value))
+    m = _VAL_RE.match(text)          # re.ASCII: 全角数字は数字として読まない
+    if not m:
+        return 0.0
+    num = m.group(0).replace("d", "e").replace("D", "e")
+    try:
+        return float(num)
+    except ValueError:
+        return 0.0
+
+
 def to_real(value: Any) -> Optional[float]:
-    """実数にする。読めなければ None。"""
+    """実数にする(VBA `Val()` と同じ読み方)。空なら None。"""
     text = _text(value)
     if text == "":
         return None
-    try:
-        return float(text)
-    except ValueError:
+    # 数として読める所が1文字も無い("abc")は None(既定の 0.0 が入る。VBA の Val も 0)
+    if not _VAL_RE.match(re.sub(r"[ \t\r\n\u3000]", "", text)):
         return None
+    return vba_val(text)
+
+
+def to_whole(value: Any) -> Optional[int]:
+    """割数(縦割数・横割数)。**整数でなければ取り込まない**(None → 0 で入る。統合 1.2.12)。
+
+    以前は `int(float())` で切り捨てていた(2.7 → 2)。VBA の読み方(Long へ入れると 2.7 → 3)が
+    分からないうえ、どちらにしても前工程実績数・丈数が変わるので、違う数を入れるより 0 にして
+    画面で前工程実績数を入れてもらう。ログにも残す。
+    """
+    text = _text(value)
+    if text == "":
+        return None
+    number = vba_val(text)
+    if number != int(number):
+        log.warning("割数が整数ではないため 0 で取り込みます(前工程実績数は画面で入れる): %r", text)
+        return None
+    return int(number)
 
 
 # 取り込み元のテーブル名。4ファイルとも「仕掛」で共通
@@ -104,8 +148,8 @@ IMPORT_SPECS: dict[str, list[tuple[str, str, object]]] = {
         ("ロット番号", "ﾛｯﾄ番号", to_text),
         ("当工程設計_設備名", "当工程設計_設備名", to_text),
         # 元は型宣言なしの text("1".."6")。to_int を通して数値にする
-        ("当工程設計_縦割数", "当工程設計_縦割数", to_int),
-        ("当工程設計_横割数", "当工程設計_横割数", to_int),
+        ("当工程設計_縦割数", "当工程設計_縦割数", to_whole),
+        ("当工程設計_横割数", "当工程設計_横割数", to_whole),
         ("当工程設計_枚本数", "当工程設計_枚本数", to_int),
         ("製造板厚", "製造板厚", to_real),
         ("製造板幅", "製造板幅", to_real),
@@ -133,4 +177,4 @@ BLANK_IS_MISSING: dict[str, tuple[str, ...]] = {
 # 変換結果が None のときに NOT NULL 列へ入れる既定値。
 # SQLite の DEFAULT は「列を省略したとき」にしか効かず、NULL を明示的に
 # INSERT すると NOT NULL 制約で落ちる
-NULL_FALLBACKS: dict[object, object] = {to_int: 0, to_real: 0.0, to_text: ""}
+NULL_FALLBACKS: dict[object, object] = {to_int: 0, to_whole: 0, to_real: 0.0, to_text: ""}

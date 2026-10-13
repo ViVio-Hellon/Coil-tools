@@ -385,7 +385,10 @@ def _from_history(slip: dict) -> Output:
     for coil in coils:
         jou = int(coil["丈"] or 0)
         if 1 <= jou <= jou_count:
-            weights[jou - 1] = int(round(float(coil["重量"] or 0)))
+            # 記録は整数(書くときに整数しか通さない)。整数でない記録が来たら丸めずにそのまま
+            # (以前は round() で 2502.5 → 2502 にしていた。統合 1.2.12)
+            w = float(coil["重量"] or 0)
+            weights[jou - 1] = int(w) if w.is_integer() else w
     return Output(lot_no=str(head["ロット番号"]), seq_no=int(head["No"]),
                   keys=[str(c["副番"]) for c in coils], weights=weights,
                   printed_at=str(head["出力日時"] or ""),

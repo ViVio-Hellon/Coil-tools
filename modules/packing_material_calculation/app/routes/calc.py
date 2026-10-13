@@ -199,6 +199,15 @@ def set_input():
     payload = request.get_json(silent=True) or {}
     state = session.get()
 
+    # 検入数・積数は整数。小数は**黙って切り捨てずに断る**(統合 1.2.12。以前は 6.9 → 6)
+    for key in ("検入数", "積数"):
+        if key in payload:
+            raw = str(payload[key]).strip()
+            if vba.is_numeric(raw) and not vba.val(raw).is_integer():
+                return jsonify(ok=False, reason="not_integer",
+                               message=f"{key}は整数で入力してください: {raw}",
+                               view=view_of(state)), 422
+
     if "検入数" in payload:
         raw = str(payload["検入数"]).strip()
         state.検入数 = vba.int_text(raw) if vba.is_numeric(raw) else ""

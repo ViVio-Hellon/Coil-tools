@@ -68,10 +68,20 @@ def test_unknown_order_is_refused(ready):
 
 
 def test_input_is_formatted_server_side(ready):
-    r = ready.post("/api/calc/input", json={"検入数": "10.7", "外径": "900"})
+    r = ready.post("/api/calc/input", json={"検入数": "10", "外径": "900"})
     v = r.get_json()["view"]["input"]
-    assert v["検入数"] == "10"      # 整数へ
+    assert v["検入数"] == "10"
     assert v["外径"] == "900.00"    # 小数2桁へ
+
+
+def test_decimal_count_is_refused_not_truncated(ready):
+    """検入数・積数の小数は黙って切り捨てずに断る(統合 1.2.12。以前は 10.7 → 10)。"""
+    ready.post("/api/calc/input", json={"検入数": "12"})
+    for key in ("検入数", "積数"):
+        r = ready.post("/api/calc/input", json={key: "10.7"})
+        assert r.status_code == 422 and r.get_json()["reason"] == "not_integer"
+    assert r.get_json()["view"]["input"]["検入数"] == "12", "前の値のまま"
+    assert ready.post("/api/calc/input", json={"検入数": "10.0"}).get_json()["view"]["input"]["検入数"] == "10"
 
 
 def test_non_numeric_input_is_cleared(ready):

@@ -100,8 +100,10 @@ def _decide_stack(state: CalcState, spec: PackagingSpec) -> tuple[float, bool, b
         order_only = True
 
     elif c_flag:
-        # 2. オーダーの枚数指定
-        stack = vba.val(order.梱包単位_枚数)
+        # 2. オーダーの枚数指定。**積数はここで1度だけ切り捨てる**(小数点第1位で切り捨て。
+        # 統合 1.2.12)。以前は 2.5 のまま台数を出し、画面・リプラは 2 にしていて、台数と
+        # 積数が食い違った(2 × 4台 = 8本 で 10本)
+        stack = float(vba.round_down(vba.val(order.梱包単位_枚数)))
         state.mark(FLAG_COUNT)
         if spec.枚数範囲 == COUNT_RANGE_NO_SINGLE:
             # ﾌﾟﾛｽﾁ-ﾙ_LVS。1本だけ積むことが許されない
@@ -123,14 +125,14 @@ def _decide_stack(state: CalcState, spec: PackagingSpec) -> tuple[float, bool, b
     elif _has_value(spec.梱包単位_枚数):
         # 4. 包装仕様の枚数指定
         if spec.枚数範囲 in COUNT_RANGE_OK:
-            stack = vba.val(spec.梱包単位_枚数)
+            stack = float(vba.round_down(vba.val(spec.梱包単位_枚数)))
             state.mark(FLAG_COUNT)
         if spec.枚数範囲 == COUNT_RANGE_NO_SINGLE:
             impossible = True
             state.mark(FLAG_NO_SINGLE)
             # ここへ来る時点でオーダーの枚数指定は無い(`c_flag` は False)
             # ので、包装仕様の枚数を採る ── 吉川工業 1C1252
-            stack = vba.val(spec.梱包単位_枚数)
+            stack = float(vba.round_down(vba.val(spec.梱包単位_枚数)))
 
     else:
         # 5. どれも無い。重いものは1本積みにしておく (2022.10.14)
@@ -226,7 +228,9 @@ def _recalc_by_height(state: CalcState, *, limit: float, ripla: float,
         return 0.0, 0
     stack = float(vba.round_down(limit / per_coil))
     state.mark(FLAG_HEIGHT)
-    state.総高さ = vba.int_text(stack * per_coil + PALLET_TOP_AND_BOTTOM)
+    # 総高さは VBA が丸めずに出している(幅は小数1桁)。切り捨てない(統合 1.2.12。
+    # 以前は 3 × 152.3 + 210 = 666.9 を 666 と出していた)
+    state.総高さ = vba.num_text(stack * per_coil + PALLET_TOP_AND_BOTTOM)
     if stack <= 0:
         return 0.0, 0
     return stack, vba.round_up(ins / stack)
