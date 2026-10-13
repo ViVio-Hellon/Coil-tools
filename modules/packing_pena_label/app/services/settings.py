@@ -286,6 +286,45 @@ def check_path(spec: SettingSpec, value: str) -> CheckResult:
     return CheckResult(True, "ok", "ファイルを確認しました")
 
 
+CSV_KEYS = ("material_csv_file", "kataban_csv_file")
+
+
+def field_check(spec: SettingSpec, value: str) -> CheckResult:
+    """欄の下に出す確かめ(パスの実在など)。"""
+    r = check_path(spec, value)
+    v = (value or "").strip().strip('"')
+    if spec.key in CSV_KEYS and v and not v.lower().endswith(".csv"):
+        # 拡張子の無い名前(「ペナ型番」など)は Excel で開けない。気づけるように出す
+        return CheckResult(r.ok, "warn", r.message + "（名前が .csv で終わっていません）")
+    return r
+
+
+def check_input(cfg: Config, key: str, raw: Any) -> Dict[str, Any]:
+    """入力中の値をその場で確かめる(保存はしない。統合 1.2.11)。
+
+    欄に打った値・「手本を出す」で入った値が、保存してある値と違うときは
+    「入力中の値」「まだ保存していません」と出す(保存してある値の確かめと取り違えない)。
+    """
+    spec = SETTINGS_BY_KEY.get(key)
+    if spec is None or spec.kind not in ("dir", "file"):
+        return {"ok": False, "level": "warn", "message": "確かめられる欄ではありません"}
+    try:
+        value = coerce(spec, raw)
+    except ValueError as exc:
+        return {"ok": True, "level": "error", "message": "入力中の値: %s" % exc, "saved": False}
+    saved = str(value) == str(getattr(cfg, key, "") or "")
+    r = field_check(spec, str(value))
+    if saved:
+        return {"ok": True, "level": r.level, "saved": True,
+                "message": "保存してある値: " + r.message}
+    if r.ok and r.level == "ok":
+        msg = ("入力中の値: %s。まだ保存していません（「この欄を保存」を押すと使います）"
+               % ("ファイルがあります" if spec.kind == "file" else r.message))
+        return {"ok": True, "level": "ok", "saved": False, "message": msg}
+    return {"ok": True, "level": r.level, "saved": False,
+            "message": "入力中の値: %s（まだ保存していません）" % r.message}
+
+
 def coerce(spec: SettingSpec, raw: Any) -> Any:
     """画面から来た値を設定の型へ直す。範囲外・型違いは ValueError。"""
     if spec.kind == "bool":
@@ -367,13 +406,8 @@ def describe(cfg: Config) -> List[dict]:
             "overridden": spec.key in overrides,
         }
         if spec.kind in ("dir", "file"):
-            r = check_path(spec, str(value))
+            r = field_check(spec, str(value))
             item["check"] = {"ok": r.ok, "level": r.level, "message": r.message}
-            if (spec.key in ("material_csv_file", "kataban_csv_file") and str(value).strip()
-                    and not str(value).strip().strip('"').lower().endswith(".csv")):
-                # 拡張子の無い名前(「ペナ型番」など)は Excel で開けない。気づけるように出す
-                item["check"] = {"ok": r.ok, "level": "warn",
-                                 "message": r.message + "（名前が .csv で終わっていません）"}
             item["resolved"] = _resolved_path(cfg, spec.key)
         out.append(item)
     return out

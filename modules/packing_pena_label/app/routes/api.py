@@ -106,6 +106,7 @@ class ApiRoutes:
             "/api/settings/save": self._settings_save,
             "/api/settings/test-master": self._settings_test_master,
             "/api/settings/csv-sample": self._settings_csv_sample,
+            "/api/settings/check-path": self._settings_check_path,
             "/api/settings/reset": self._settings_reset,
             "/api/settings/check-password": self._settings_check_password,
             "/api/label/align": self._label_align,
@@ -631,6 +632,11 @@ class ApiRoutes:
                                "このままパスの変更やマスタの書き換えができます。"}
         return {"ok": False, "valid": False, "level": "warn",
                 "message": "合言葉が違います"}
+
+    def _settings_check_path(self, body):
+        """入力中の値(保存していない)をその場で確かめる。何も書き換えない(統合 1.2.11)。"""
+        from ..services import settings as S
+        return S.check_input(self.cfg, str(body.get("key") or ""), body.get("value"))
 
     def _settings_csv_sample(self, body):
         """資材マスタ CSV・型番マスタ CSV の手本を、欄に入れたパスへ出す(統合 1.2.8)。

@@ -741,7 +741,9 @@ class PageRoutes:
 
         stock = self._stock()
         cal = self._calibration()
-        sheet = LS.render_ruler_page(stock, cal)
+        # 試し刷りの図は補正込みで描くので、直したらその場で差し替える(data-live。統合 1.2.11)
+        sheet = LS.render_ruler_page(stock, cal).replace(
+            '<section class="sheet ruler"', '<section id="calSheet" data-live class="sheet ruler"', 1)
 
         # ---------------- いまの状態を言葉で ----------------
         state = _describe_correction(cal)
@@ -866,7 +868,7 @@ class PageRoutes:
 
         m = stock.measured or {}
         info = (
-            '<details class="card no-print caldetails">'
+            '<details class="card no-print caldetails" id="calInfo" data-live>'
             '<summary>台紙の寸法</summary>'
             f'<p class="hint">台紙: <b>{esc(stock.name)}</b>'
             f'{("　" + esc(stock.note)) if stock.note else ""}<br>'
@@ -903,8 +905,8 @@ class PageRoutes:
     (j.notes || []).forEach(function(n){ text += "\\n" + n; });
     msg(text + "\\nもう一度「試し刷り」で確かめてください。", "okbox");
     pplToast(j.plainMessage || j.message, "info");
-    // 試し刷りは補正込みで描いているので、見た目を合わせるため読み直す
-    setTimeout(function(){ location.reload(); }, 1800);
+    // 試し刷りは補正込みで描いているので、図と補正の数値をその場で差し替える(読み直さない)
+    pplRefresh().catch(function(e){ pplToast(String(e), "warn"); });
   }
   function send(payload){
     msg("直しています…", "hint");
@@ -1046,7 +1048,8 @@ class PageRoutes:
                            '<div class="blocks">' + "".join(cards) + '</div>')
 
         w45_style = "" if three else ' style="opacity:.4"'
-        body = f'''
+        # 決定・サイズ選択・クリアのあとは、この枠をその場で差し替える(data-live。統合 1.2.11)
+        body = f'''<div id="allSize" data-live>
 <div class="card" data-unsaved="全サイズの入力(「決定」を押していない)">
   <h2>テスラ全サイズ</h2>
   <div class="inputs-3">
@@ -1091,39 +1094,44 @@ class PageRoutes:
   </div>
 </div>
 {sheets_html}
+</div>
 '''
         script = """<script>
 (function(){
+  // 枠(#allSize)はその場で差し替えるので、ボタンは document で受ける(読み直さない。統合 1.2.11)
   function v(id){var e=document.getElementById(id);return e?e.value:"";}
   function digit(){var r=document.querySelector("input[name=asDigit]:checked");
     return r? r.value==="3" : null;}
   function payload(){return {comboText:v("asCombo"),kensaNo:v("asKen"),
     threeDigit:digit(),w1:v("asW1"),w2:v("asW2"),w4:v("asW4"),w5:v("asW5")};}
+  function redraw(){ return pplRefresh().catch(function(e){ pplToast(String(e), "warn"); }); }
   document.addEventListener("change",function(e){
     if(e.target.name==="asDigit"){
       document.getElementById("asW45").style.opacity = e.target.value==="3" ? "" : ".4";
     }
     if(e.target.id==="asCombo"){
       pplPost("/api/all-size/prepare",{comboText:v("asCombo")}).then(function(j){
-        pplToast(j.message,j.ok?"info":"warn"); location.reload();});
+        pplToast(j.message,j.ok?"info":"warn"); redraw();});
     }
   });
-  document.getElementById("asSubmit").addEventListener("click",function(){
-    pplPost("/api/all-size/submit",payload()).then(function(j){
-      pplToast(j.message,j.ok?"info":(j.level||"warn"));
-      if(j.ok){location.reload();}});
-  });
-  document.getElementById("asPrint").addEventListener("click",function(){
-    pplPost("/api/all-size/print-targets",{comboText:v("asCombo")}).then(function(j){
-      if(!j.ok){pplToast(j.message,"warn");return;}
-      if(window.confirm(j.message)){
-        window.open(pplUrl("/all-size/print?combo="+encodeURIComponent(v("asCombo"))),
-                    "_blank","noopener");}});
-  });
-  document.getElementById("asClear").addEventListener("click",function(){
-    if(!window.confirm("この台紙の反映内容を消します。よろしいですか？")){return;}
-    pplPost("/api/all-size/prepare",{comboText:v("asCombo")}).then(function(j){
-      pplToast("クリアしました","info"); location.reload();});
+  document.addEventListener("click",function(e){
+    var b = e.target.closest ? e.target.closest("button") : null;
+    if(!b){return;}
+    if(b.id==="asSubmit"){
+      pplPost("/api/all-size/submit",payload()).then(function(j){
+        pplToast(j.message,j.ok?"info":(j.level||"warn"));
+        if(j.ok){redraw();}});
+    } else if(b.id==="asPrint"){
+      pplPost("/api/all-size/print-targets",{comboText:v("asCombo")}).then(function(j){
+        if(!j.ok){pplToast(j.message,"warn");return;}
+        if(window.confirm(j.message)){
+          window.open(pplUrl("/all-size/print?combo="+encodeURIComponent(v("asCombo"))),
+                      "_blank","noopener");}});
+    } else if(b.id==="asClear"){
+      if(!window.confirm("この台紙の反映内容を消します。よろしいですか？")){return;}
+      pplPost("/api/all-size/prepare",{comboText:v("asCombo")}).then(function(j){
+        pplToast("クリアしました","info"); redraw();});
+    }
   });
 })();
 </script>"""
@@ -1351,7 +1359,7 @@ class PageRoutes:
                 f'<th>入っているもの</th></tr></thead><tbody>{rows}</tbody></table>'
                 + (f'<p class="hint">{esc(g["note"])}</p>' if g["note"] else "")
                 + '</div>')
-        return ('<div class="card" id="storage"><h2>設定の保存先（このPC／複数のPCで共有）</h2>'
+        return ('<div class="card" id="storage" data-live><h2>設定の保存先（このPC／複数のPCで共有）</h2>'
                 f'<p class="hint">{esc(places["intro"])}</p>'
                 + "".join(groups)
                 + '<p class="hint">この画面の値の決まり方: <b>この端末の設定</b>（local.json）が'
@@ -1572,7 +1580,8 @@ class PageRoutes:
             c = it["check"]
             cls = {"ok": "okbox", "warn": "warnbox", "error": "errbox"}.get(
                 c["level"], "hint")
-            # 欄の下の確かめ(保存してある値について)。「手本を出す」のあとは画面で書き換える
+            # 欄の下の確かめ。描いたときは保存してある値。打ったり「手本を出す」で値が変わったら
+            # その場で「入力中の値」を確かめて書き換える(統合 1.2.11。読み直さずに反映)
             check = (f'<div class="{cls}" id="check_{esc(key)}" style="margin:6px 0 0;padding:5px 9px;'
                      f'font-size:11.5px">保存してある値: {esc(c["message"])}</div>')
 
@@ -1600,15 +1609,16 @@ class PageRoutes:
         order = ""
         if sample:
             order = (f'<div class="hint" style="margin-top:4px">読む順: {esc(sample.order)}'
-                     f'（DB が無いときだけ CSV）。いま読んでいる先: <b id="readfrom_{esc(key)}">{esc(self._read_from(key))}</b></div>'
-                     f'<div id="sample_{esc(key)}" hidden></div>')
+                     f'（DB が無いときだけ CSV）。いま読んでいる先: <b id="readfrom_{esc(key)}">{esc(self._read_from(key))}</b></div>')
+        sample_out = f'<div id="sample_{esc(key)}" hidden></div>' if sample else ""
 
+        # 札(この端末/既定)と確かめは、保存のあとにその場で差し替える(data-live。app.js の pplRefresh)
         return (f'<div class="setrow" data-field="{esc(key)}">'
                 f'<div class="setlab"><label for="set_{esc(key)}">{esc(it["label"])}</label>'
-                f'{badge}</div>'
+                f'<span id="badge_{esc(key)}" data-live>{badge}</span></div>'
                 f'<div class="setctl">{control}'
                 f'<div class="err" id="err_{esc(key)}" hidden></div>'
-                f'{check}{resolved}{order}'
+                f'<div id="stat_{esc(key)}" data-live>{check}{resolved}{order}</div>{sample_out}'
                 f'<div class="hint">{esc(it["help"])}</div></div></div>')
 
     @staticmethod
@@ -1684,6 +1694,7 @@ class PageRoutes:
     var body = {values: values};
     if (password) { body.password = password; }
     return pplPost("/api/settings/save", body).then(function(j){
+      if (j) { j.onlyKey = only || ""; }
       // パスを変えようとしたのに合言葉が無い／違う → その場で聞く(伏せ字)
       if (j.needPassword) {
         return pplAskPassword(j.message + "\\n\\n合言葉を入力してください").then(function(pw){
@@ -1723,12 +1734,8 @@ class PageRoutes:
           // .csv を付けて出したときは、欄もその名前にする(保存すればそのファイルを読む)
           if (j.ok && j.path && box) {
             box.value = j.path;
-            // 欄の下の確かめは保存してある値のこと。まだ保存していないと分かるように書き換える
-            var chk = document.getElementById("check_" + key);
-            if (chk) {
-              chk.className = "warnbox";
-              chk.textContent = "まだ保存していません。「この欄を保存」を押すと、出した手本のファイルを読みます。";
-            }
+            // 欄の下を「入力中の値: ファイルがあります。まだ保存していません」に(その場で)
+            checkField(key);
           }
           if (out) {
             out.className = (j.ok ? "okbox" : (j.level === "error" ? "errbox" : "warnbox"));
@@ -1772,8 +1779,35 @@ class PageRoutes:
       } else {
         result(html, "okbox");
       }
-      setTimeout(function(){ location.reload(); }, 1200);
+      // 読み直さずに、札・確かめ・保存先・右上の取得元をその場で新しくする(統合 1.2.11)
+      pplRefresh({values: j.onlyKey ? [j.onlyKey] : "all"})
+        .catch(function(e){ pplToast(String(e), "warn"); });
   }
+
+  // --- 入力中の値をその場で確かめる(フォルダー・ファイルの欄) ---
+  // 描いたときの確かめは「保存してある値」。打ったり「手本を出す」で値が変わったら、
+  // 「入力中の値」を確かめて書き換える(保存してある値の結果を出しっぱなしにしない)
+  function showCheck(key, j){
+    var chk = document.getElementById("check_" + key);
+    if (!chk || !j) { return; }
+    chk.className = {ok: "okbox", warn: "warnbox", error: "errbox"}[j.level] || "hint";
+    chk.textContent = j.message;
+  }
+  function checkField(key){
+    var box = document.getElementById("set_" + key);
+    if (!box) { return Promise.resolve(); }
+    return pplPost("/api/settings/check-path", {key: key, value: box.value})
+      .then(function(j){ showCheck(key, j); })
+      .catch(function(){});
+  }
+  var checkTimers = {};
+  document.querySelectorAll('[data-kind="dir"], [data-kind="file"]').forEach(function(box){
+    box.addEventListener("input", function(){
+      var key = box.dataset.key;
+      clearTimeout(checkTimers[key]);
+      checkTimers[key] = setTimeout(function(){ checkField(key); }, 500);
+    });
+  });
   document.getElementById("setTest").addEventListener("click", function(){
     result("確認しています…", "hint");
     pplPost("/api/settings/test-master", {values: collect()}).then(function(j){
@@ -1842,8 +1876,8 @@ class PageRoutes:
       dResult(text, j.ok ? "okbox" : "errbox");
       pplToast(j.message, j.ok ? "info" : "warn");
       if (j.ok && url.indexOf("reapply") >= 0) {
-        // 読み込み直した値をパス設定の面にも出すため、読み直す
-        setTimeout(function(){ location.reload(); }, 1500);
+        // 読み込み直した値を、パス設定の面にもその場で出す(読み直さない)
+        pplRefresh({values: "all"}).catch(function(e){ pplToast(String(e), "warn"); });
       }
     }).catch(function(e){ dResult(String(e), "errbox"); });
   }
@@ -2106,7 +2140,9 @@ class PageRoutes:
     }
     pplPost("/api/settings/reset", {}).then(function(j){
       pplToast(j.message, "info");
-      setTimeout(function(){ location.reload(); }, 900);
+      result(j.message, "okbox");
+      // 同梱の既定に戻った値を、その場で欄に出す(読み直さない)
+      pplRefresh({values: "all"}).catch(function(e){ pplToast(String(e), "warn"); });
     });
   });
 })();

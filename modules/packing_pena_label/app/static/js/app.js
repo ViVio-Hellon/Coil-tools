@@ -76,6 +76,41 @@
   }
   window.pplPost = post;
 
+  // ---------------------------------------------------------- その場で表示を新しくする
+  // 操作のあとは**ページを読み直さずに**状態を出す(統合 1.2.11。現場の指摘: どのツールでも
+  // リロードを挟まずに反映させる)。同じページを裏で取り直し、`data-live` の付いた要素だけを
+  // id で対応させて差し替える。打ちかけの入力・スクロール位置・開いている面はそのまま。
+  // `data-live` の中のボタンは document で受ける(差し替えても効くように)。
+  //   opts.values: 欄(data-key)の値も新しくする key の配列。"all" ならすべて
+  function refresh(opts) {
+    opts = opts || {};
+    return fetch(location.href, { cache: "no-store", headers: headers() }).then(function (r) {
+      if (!r.ok) { throw new Error("画面を取り直せません (HTTP " + r.status + ")"); }
+      return r.text();
+    }).then(function (html) {
+      var doc = new DOMParser().parseFromString(html, "text/html");
+      $$("[data-live]").forEach(function (el) {
+        var fresh = el.id ? doc.getElementById(el.id) : null;
+        if (fresh) { el.replaceWith(document.importNode(fresh, true)); }
+      });
+      var keys = opts.values;
+      if (keys) {
+        $$("[data-key]").forEach(function (el) {
+          var k = el.getAttribute("data-key");
+          if (keys !== "all" && keys.indexOf(k) < 0) { return; }
+          var fresh = doc.querySelector('[data-key="' + k + '"]');
+          if (!fresh) { return; }
+          // 保存した値が「描いたときの値」になる(閉じる前の「保存していない欄」に数えない)
+          if (el.type === "checkbox") { el.checked = el.defaultChecked = fresh.hasAttribute("checked"); }
+          else { el.value = el.defaultValue = fresh.getAttribute("value") || ""; }
+        });
+      }
+      document.dispatchEvent(new CustomEvent("ppl:refreshed"));
+      return doc;
+    });
+  }
+  window.pplRefresh = refresh;
+
   // ---------------------------------------------------------- 合言葉を聞く
   // **打った文字を見せない**(●で出す)。以前はブラウザの `prompt()` で聞いていて、
   // 合言葉がそのまま画面に見えていた(現場の指摘)。`prompt()` は伏せ字にできない。
@@ -459,7 +494,7 @@
   // 統合画面の「終了」・窓の × ・外からの停止(ランチャー・stop.bat)の前に、統合画面が
   // `window.cptUnsaved()` を呼んで訊く(統合 1.2.5)。名前を返せば「閉じると消えます。
   // 閉じますか?」が出る。`data-unsaved` の枠の中の欄は、描いたときの値(defaultValue)と比べる
-  // (保存すると読み直すので、保存したものは描いたときの値になる)。
+  // (保存したあとは pplRefresh が描いたときの値も新しくするので、保存したものは数えない)。
   function changedField(el) {
     if (el.readOnly || el.disabled || el.type === "password" || el.type === "button") { return false; }
     if (el.type === "checkbox" || el.type === "radio") { return el.checked !== el.defaultChecked; }
