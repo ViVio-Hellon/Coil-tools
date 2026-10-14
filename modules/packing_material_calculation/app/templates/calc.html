@@ -2,6 +2,10 @@
 {% block title %}資材計算 — {{ ribbon.display_name }}{% endblock %}
 
 {% block main %}
+{#- 統合 1.2.15(現場の指摘): 欄が大きく、計算結果を見るだけでスクロールが要った。
+    1・2 を全画面ならスクロールなしで見られる大きさに詰め(打つ4欄だけは大きいまま)、
+    3. バリ揃え梱包はボタンで開く窓にした。欄の id はそのまま(calc.js・試験が使う) -#}
+<div class="calc">
 <div class="head">
   <h1>資材計算</h1>
   <p>LotNo → 受注番号 → 検入数・外径 → 計算</p>
@@ -11,7 +15,7 @@
 
 <section class="sec">
   <h2>1. ロットと受注</h2>
-  <div class="grid grid--3">
+  <div class="calc-keys">
     <label class="f f--need">
       <span class="f__k">LotNo（7桁）</span>
       <input class="input input--need input--key" id="lot" maxlength="7" spellcheck="false"
@@ -29,9 +33,14 @@
       <span class="f__k">コイル外径（mm）</span>
       <input class="input input--need input--num input--key" id="outer" inputmode="decimal">
     </label>
+    <div class="calc-keys__btns">
+      <button class="btn btn--run" type="button" id="run">計算Start</button>
+      <button class="btn" type="button" id="weight">単重再計算</button>
+      <button class="btn" type="button" id="clear">はじめから</button>
+    </div>
   </div>
 
-  <div class="grid grid--data" style="margin-top:12px">
+  <div class="grid calc-data">
     <div class="f"><span class="f__k">厚</span><span class="f__v f__v--num" id="o-厚"></span></div>
     <div class="f"><span class="f__k">幅</span><span class="f__v f__v--num" id="o-幅"></span></div>
     <div class="f"><span class="f__k">受注材質</span><span class="f__v" id="o-材質"></span></div>
@@ -46,6 +55,8 @@
          target="_blank" rel="noopener"
          title="押すと包装仕様NOをコピーして閲覧システムを開きます"></a></div>
     <div class="f"><span class="f__k">製品単重</span><span class="f__v f__v--num" id="o-単重"></span></div>
+    <div class="f"><span class="f__k">再計算した単重</span>
+      <span class="f__v f__v--num" id="o-単重再計算"></span></div>
     <div class="f"><span class="f__k">取引先</span><span class="f__v" id="o-取引先"></span></div>
     <div class="f"><span class="f__k">納入先</span><span class="f__v" id="o-納入先"></span></div>
     <div class="f" id="w-梱包重量"><span class="f__k">梱包単位 重量</span>
@@ -58,36 +69,22 @@
     <div class="f"><span class="f__k">内径 目標</span><span class="f__v f__v--num" id="o-内径"></span></div>
     <div class="f"><span class="f__k">営業納期</span><span class="f__v" id="o-納期"></span></div>
     <div class="f"><span class="f__k">比重</span><span class="f__v f__v--num" id="o-比重"></span></div>
-  </div>
-
-  <div class="f" style="margin-top:10px">
-    <span class="f__k">工場用コメント</span>
-    <span class="f__v" id="o-コメント"></span>
-  </div>
-
-  <div class="btnrow">
-    <button class="btn btn--run" type="button" id="run">計算Start</button>
-    <button class="btn" type="button" id="weight">単重再計算</button>
-    <span class="f" style="min-width:130px">
-      <span class="f__k">再計算した単重</span>
-      <span class="f__v f__v--num" id="o-単重再計算"></span>
-    </span>
-    <button class="btn" type="button" id="clear">はじめから</button>
+    <div class="f calc-data__wide">
+      <span class="f__k">工場用コメント</span>
+      <span class="f__v" id="o-コメント"></span>
+    </div>
   </div>
 </section>
 
 <section class="sec">
   <h2>2. 計算結果</h2>
-  <div class="grid grid--data">
+  <div class="grid calc-data">
     <div class="f"><span class="f__k">パレット種類</span>
       <span class="f__v" id="r-種類"></span></div>
     <div class="f"><span class="f__k">パレットサイズ</span>
       <span class="f__v f__v--num" id="r-サイズ"></span></div>
     <div class="f"><span class="f__k">パレット名称</span>
       <span class="f__v" id="r-名称"></span></div>
-  </div>
-
-  <div class="grid grid--data" style="margin-top:12px">
     <label class="f"><span class="f__k">積数（本/台）</span>
       <input class="input input--num input--result" id="stack" inputmode="numeric"></label>
     <div class="f"><span class="f__k">台数</span>
@@ -96,17 +93,18 @@
       <span class="f__v f__v--num" id="r-re"></span></div>
     <div class="f" id="w-高さ"><span class="f__k">総高さ</span>
       <span class="f__v f__v--num" id="r-高さ"></span></div>
-  </div>
-
-  <div class="grid grid--data" style="margin-top:12px">
     <div class="f"><span class="f__k">コイル間</span><span class="f__v" id="r-コイル間"></span></div>
     <div class="f"><span class="f__k">ﾘﾌﾟﾗｻｲｽﾞ</span><span class="f__v" id="r-リサイズ"></span></div>
     <div class="f"><span class="f__k">緩衝材</span><span class="f__v" id="r-緩衝材"></span></div>
     <div class="f"><span class="f__k">HB枚数</span><span class="f__v f__v--num" id="r-HB"></span></div>
+    {# 発注するのはこの数。下の2つの枠を足したもの #}
+    <div class="f"><span class="f__k">ﾘﾌﾟﾗ総本数</span>
+      <span class="f__v f__v--num f__v--big" id="r-total"></span></div>
   </div>
 
   {# リプラは**どこに入るもの**かで2つに分かれる。混ぜて並べると
      「最下部 本数」と「コイル間 本数」を取り違える #}
+  <div class="calc-bottom">
   <div class="frames">
     <fieldset class="frame">
       <legend class="frame__k">最下部（パレットの上）</legend>
@@ -116,6 +114,7 @@
         読み取るのに目で線を引くことになり、取り違える。
         列を「長 / 短」にすれば、**1列を上から下に読めば1組**。
       #}
+      <div class="frame__row">
       <table class="pair">
         <thead>
           <tr><td></td><th>長</th><th>短</th></tr>
@@ -133,6 +132,7 @@
         <div class="f"><span class="f__k">本数（マスタ）</span><span class="f__v f__v--num" id="r-下本数"></span></div>
         <div class="f" id="w-種類差2"><span class="f__k">リプラ種類</span>
           <span class="f__v" id="r-下種"></span></div>
+      </div>
       </div>
     </fieldset>
 
@@ -152,23 +152,24 @@
     </fieldset>
   </div>
 
-  {# 発注するのはこの数。2つの枠を足したもの #}
-  <div class="grid grid--data" style="margin-top:12px">
-    <div class="f"><span class="f__k">ﾘﾌﾟﾗ総本数</span>
-      <span class="f__v f__v--num f__v--big" id="r-total"></span></div>
-  </div>
-
-  <div class="btnrow">
+  <div class="calc-actions">
     <label class="check">
       <input type="checkbox" id="size-fixed">
       <span>ｻｲｽﾞ確定品</span>
     </label>
     <button class="btn btn--commit" type="button" id="add">チェックリストへ積む</button>
+    {# 3. バリ揃え梱包はボタンで開く(現場の指摘。いつも使うものではないので画面を取らない) #}
+    <button class="btn" type="button" id="burr-open">バリ揃え梱包…</button>
+  </div>
   </div>
 </section>
+</div>
 
-<section class="sec">
-  <h2>3. バリ揃え梱包</h2>
+<dialog class="browser burrdlg" id="burr-dialog" aria-labelledby="burr-title">
+  <div class="browser__head">
+    <b id="burr-title">3. バリ揃え梱包</b>
+    <button class="btn" type="button" id="burr-close">閉じる</button>
+  </div>
   <p class="setrow__d">
     上向きと下向きのバリを混ぜて積めない品で使います。
     検入数から振り分けると、それぞれの台数が出ます。
@@ -209,7 +210,7 @@
     <button class="btn" type="button" id="burr">計算Start</button>
     <button class="btn btn--commit" type="button" id="burr-send">結果転送</button>
   </div>
-</section>
+</dialog>
 {% endblock %}
 
 {% block script %}

@@ -10,15 +10,6 @@
 <body class="{{bodyClass}}" data-base="{{base}}" data-token="{{token}}">
 <header class="appbar no-print">
   <div class="appbar-title">{{appName}}<span class="appver" title="版 {{version}}／版を切った日 {{build}}／中身の指紋 {{codeStamp}}">v{{version}}<span class="appstamp">{{build}}</span></span></div>
-  <nav class="appbar-nav">
-    <a href="{{base}}/" class="{{navHome}}" data-pane="home">指定サイズ</a>
-    <a href="{{base}}/tare" class="{{navTare}}" data-pane="tare">風袋計算</a>
-    <a href="{{base}}/breakdown" class="{{navBreak}}" data-pane="breakdown">計算内容</a>
-    <a href="{{base}}/labels" class="{{navLabels}}" data-pane="labels">ラベル台紙</a>
-    <span class="nav-sep"></span>
-    <a href="{{base}}/all-size" class="{{navAll}}">全サイズ</a>
-    <a href="{{base}}/settings" class="{{navSettings}}">設定</a>
-  </nav>
   {{{printbar}}}
   <div class="appbar-right">
     <span id="srcBadge" data-live class="src src-{{materialSource}} {{materialStale}}" title="{{materialSourceHint}}">{{materialSourceLabel}}</span>
@@ -69,9 +60,21 @@
   </div>
 </div>
 
+<!-- 統合 1.2.15(現場の指摘): 画面の切り替え(指定サイズ…設定)は上ではなく左に並べる -->
+<div class="layout">
+  <nav class="appbar-nav siderail no-print" aria-label="画面">
+    <a href="{{base}}/" class="{{navHome}}" data-pane="home">指定サイズ</a>
+    <a href="{{base}}/tare" class="{{navTare}}" data-pane="tare">風袋計算</a>
+    <a href="{{base}}/breakdown" class="{{navBreak}}" data-pane="breakdown">計算内容</a>
+    <a href="{{base}}/labels" class="{{navLabels}}" data-pane="labels">ラベル台紙</a>
+    <span class="nav-sep" aria-hidden="true"></span>
+    <a href="{{base}}/all-size" class="{{navAll}}">全サイズ</a>
+    <a href="{{base}}/settings" class="{{navSettings}}">設定</a>
+  </nav>
 <main class="page">
 {{{content}}}
 </main>
+</div>
 
 <footer class="appfoot no-print">
   <span>{{appName}} v{{version}}（{{build}}）</span><span title="動いているファイルの中身から作った指紋。ファイルを差し替えるとこの値が変わる">中身: {{codeStamp}}</span>

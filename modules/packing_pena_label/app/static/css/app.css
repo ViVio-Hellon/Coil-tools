@@ -35,12 +35,17 @@ a{color:var(--accent)}
   vertical-align:2px}
 /* 版を切った日。版番号だけだと「差し替わったか」が読み取れないため添える */
 .appstamp{margin-left:5px; opacity:.75}
-.appbar-nav{display:flex; gap:4px; flex-wrap:wrap; flex:1}
-.appbar-nav a{padding:4px 10px; border-radius:var(--r); text-decoration:none;
-  color:var(--ink); border:1px solid transparent}
+/* 画面の切り替え(指定サイズ・風袋計算・計算内容・ラベル台紙・全サイズ・設定)。
+   統合 1.2.15(現場の指摘)で上の帯から**左のタブ**へ移した。梱包明細・資材計算と同じ並び */
+.layout{display:grid; grid-template-columns:132px minmax(0,1fr); align-items:start}
+.siderail{display:flex; flex-direction:column; gap:4px; padding:10px 0 60px 10px;
+  position:sticky; top:41px; max-height:calc(100vh - 41px); overflow-y:auto}
+.appbar-nav a{display:block; padding:9px 12px; border-radius:var(--r); text-decoration:none;
+  color:var(--ink); border:1px solid var(--line); background:var(--panel);
+  font-weight:600; font-size:13.5px; line-height:1.3}
 .appbar-nav a:hover{background:var(--head)}
-.appbar-nav a.on{background:var(--accent); color:var(--accent-ink)}
-.appbar-right{display:flex; align-items:center; gap:8px; white-space:nowrap}
+.appbar-nav a.on{background:var(--accent); color:var(--accent-ink); border-color:var(--accent)}
+.appbar-right{display:flex; align-items:center; gap:8px; white-space:nowrap; margin-left:auto}
 .src{font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line)}
 .src-access{background:#e3f2e8; color:var(--ok); border-color:#a9d6bb}
 .src-sqlite{background:#e3f2e8; color:var(--ok); border-color:#a9d6bb}
@@ -61,6 +66,8 @@ a{color:var(--accent)}
 .card>*:not(h2){margin-left:10px; margin-right:10px}
 .card>h2+*{margin-top:8px}
 .card>:last-child{margin-bottom:10px}
+/* カードの直下のボタンは左右の余白の内側に収める(width:100% のままだと右へ 20px はみ出していた) */
+.card>.btn{width:calc(100% - 20px)}
 .hint{font-size:11px; color:var(--muted); line-height:1.5}
 
 /* ---------- メイン配置 ---------- */
@@ -217,6 +224,7 @@ legend{font-size:11px; color:var(--muted); padding:0 4px}
   :root{--bg:#fff}
   body{background:#fff; font-size:10pt}
   .no-print,.appbar,.appfoot,.toast{display:none !important}
+  .layout{display:block}
   .page{padding:8mm; box-decoration-break:clone; -webkit-box-decoration-break:clone}
   .page:has(.sheet){padding:0}
   .card,.block,.scroll{border-color:#000; box-shadow:none; max-height:none}
@@ -481,8 +489,7 @@ legend{font-size:11px; color:var(--muted); padding:0 4px}
 .card.dismissable h2 .x:hover{color:var(--ink)}
 
 /* ---------- 起動ページ内のタブ ---------- */
-.nav-sep{display:inline-block; width:1px; height:18px; background:var(--line);
-  margin:0 6px}
+.nav-sep{display:block; height:1px; background:var(--line); margin:6px 4px}
 .pane-view{min-height:60vh}
 
 /* ---------- 設定の中のページ切替 / マスタ管理 ---------- */
@@ -514,10 +521,11 @@ legend{font-size:11px; color:var(--muted); padding:0 4px}
 .pbar-text{margin-top:8px; font-size:13px; color:#44515c}
 
 /* 印刷用のタブ(ラベル印刷・印刷ビュー・全サイズ印刷・位置合わせ)。
-   上部のメニューと診断へのリンクを出さず、「印刷」「このタブを閉じる」だけの帯にする。
+   画面の切り替え(左のタブ)と診断へのリンクを出さず、「印刷」「このタブを閉じる」だけの帯にする。
    メニューから業務の画面へ進めると、ツールが2つ開いたのと同じになる(現場の指摘) */
 .printbar{display:none}
 .print-only .appbar-nav, .print-only .appfoot a{display:none}
+.print-only .layout{display:block}
 .print-only .printbar{display:flex; gap:8px; align-items:center; flex:1 1 auto; margin-left:16px}
 .print-only .printbar-title{font-weight:700; margin-right:auto}
 .print-only .printbar .btn{width:auto; margin:0}
@@ -704,3 +712,11 @@ body.print-only, .sheet, .label, .labelsheet, .lbl{
 }
 body.print-only{background:#fff; color:var(--ink)}
 .lbl{color:#16202c}
+
+/* 狭い画面では左のタブを上に横並びで出す(幅を取らない) */
+@media screen and (max-width:760px){
+  .layout{display:block}
+  .siderail{flex-direction:row; flex-wrap:wrap; position:static; max-height:none;
+    padding:8px 12px 0; overflow:visible}
+  .nav-sep{display:none}
+}

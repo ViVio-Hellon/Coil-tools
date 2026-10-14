@@ -28,16 +28,20 @@
         <b>{{ s.table }}</b> {{ s.as_of_short }}&#12288;
       {%- endfor -%}
     </span>
-    {#- ボタンは1かたまりにする。ばらのままだと帯が詰まったときに
-        「説明書」だけ2行目へ落ちる -#}
-    <div class="tools">
-      <button type="button" id="btnImport">取り込み</button>
-      <button type="button" id="btnHistory">履歴</button>
-      <button type="button" id="btnMaster">マスタ管理</button>
-      <button type="button" id="btnSettings">設定</button>
-      <a href="{{ base }}/docs" target="_blank" rel="noopener"><button type="button">説明書</button></a>
-    </div>
   </header>
+
+  {#- 統合 1.2.15(現場の指摘): 取り込み・履歴・マスタ管理・設定・説明書は、上の帯ではなく
+      **左のタブ**に並べる(ペナラベル・資材計算と同じ並び)。ボタンの id はそのまま -#}
+  <div class="frame">
+  <nav class="siderail" aria-label="操作">
+    <button type="button" id="btnImport">取り込み</button>
+    <button type="button" id="btnHistory">履歴</button>
+    <button type="button" id="btnMaster">マスタ管理</button>
+    <button type="button" id="btnSettings">設定</button>
+    <span class="siderail__sep" aria-hidden="true"></span>
+    <a href="{{ base }}/docs" target="_blank" rel="noopener"><button type="button">説明書</button></a>
+  </nav>
+  <div class="frame__body">
 
   <!-- 接続が切れたら明示する(基盤仕様書 2.9)。黙って古い表示を出し続けない -->
   <div class="banner danger" id="offline" hidden>
@@ -48,7 +52,7 @@
   {#- 取り込めたら読み直さずに消す(meisai.js の afterImport。統合 1.2.11) -#}
   {% if not has_data %}
   <div class="banner" id="noDataBanner">
-    仕掛台帳がまだ取り込まれていません。右上の「取り込み」を押してください。
+    仕掛台帳がまだ取り込まれていません。左の「取り込み」を押してください。
     取り込み元が見つからない場合は、置き場所を設定で確かめてください。
   </div>
   {% endif %}
@@ -169,6 +173,9 @@
 
   </div>
   </div>
+
+  </div>{#- .frame__body -#}
+  </div>{#- .frame -#}
 
 </div>
 

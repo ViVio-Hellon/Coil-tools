@@ -258,6 +258,15 @@ $$('.spin__b').forEach(btn => {
   });
 });
 
+// 3. バリ揃え梱包はボタンで開く窓(統合 1.2.15・現場の指摘)。
+// いつも使うものではないので、1・2 の画面を取らない
+const burrDialog = $('#burr-dialog');
+$('#burr-open').addEventListener('click', () => {
+  if (!burrDialog.open) burrDialog.showModal();
+  $('#upper').focus();
+});
+$('#burr-close').addEventListener('click', () => burrDialog.close());
+
 $('#burr').addEventListener('click', async () => {
   const r = await call('/api/calc/burr', {
     上本数: $('#upper').value, 下本数: $('#lower').value,
@@ -272,6 +281,8 @@ $('#burr-send').addEventListener('click', async () => {
     上本数: $('#upper').value, 下本数: $('#lower').value,
   });
   apply(r, r.ok ? '結果を送りました' : '');
+  // 送った台数は 2. 計算結果に出る。窓を閉じてそれを見せる
+  if (r.ok) burrDialog.close();
 });
 
 // ------------------------------------------------------------------

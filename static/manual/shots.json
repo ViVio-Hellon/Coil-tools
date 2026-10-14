@@ -1,15 +1,15 @@
 {
- "taken": "2026-10-12",
+ "taken": "2026-10-14",
  "versions": {
-  "app": "1.2.8",
-  "details": "0.13.17",
-  "material": "0.2.16",
-  "pena": "1.5.18"
+  "app": "1.2.15",
+  "details": "0.13.20",
+  "material": "0.2.21",
+  "pena": "1.5.23"
  },
  "images": {
   "details-about": {
    "w": 1280,
-   "h": 696
+   "h": 691
   },
   "details-history": {
    "w": 1280,
@@ -17,7 +17,7 @@
   },
   "details-lot": {
    "w": 1280,
-   "h": 460
+   "h": 422
   },
   "details-output": {
    "w": 1280,
@@ -25,7 +25,7 @@
   },
   "details-ready": {
    "w": 1280,
-   "h": 690
+   "h": 652
   },
   "details-report": {
    "w": 1280,
@@ -45,21 +45,25 @@
   },
   "details-stack": {
    "w": 1280,
-   "h": 690
+   "h": 652
   },
   "details-start": {
    "w": 1280,
-   "h": 213
+   "h": 321
   },
   "details-weights": {
    "w": 1280,
-   "h": 460
+   "h": 422
   },
   "material-about": {
    "w": 1280,
    "h": 818
   },
   "material-add": {
+   "w": 1280,
+   "h": 818
+  },
+  "material-burr": {
    "w": 1280,
    "h": 818
   },
@@ -177,7 +181,7 @@
   },
   "shell-overview": {
    "w": 1280,
-   "h": 295
+   "h": 403
   },
   "shell-tabs": {
    "w": 1280,
@@ -185,7 +189,7 @@
   },
   "shell-theme-dark": {
    "w": 1280,
-   "h": 294
+   "h": 403
   },
   "shell-versions": {
    "w": 1280,

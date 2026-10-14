@@ -474,3 +474,55 @@ select.input--key{ font-weight:600; }
 .store-table td.store-name{ white-space:nowrap; font-weight:700; }
 .store-table td.store-path code{ font-size:11.5px; word-break:break-all; }
 .store-note{ display:block; font-size:11px; opacity:.75; margin-top:2px; }
+
+/* ---- 資材計算の画面(統合 1.2.15・現場の指摘) ----
+   欄が大きく、計算結果を見るだけでスクロールが要った。**1. ロットと受注・2. 計算結果は
+   全画面(1920×1080)ならスクロールなしで見られる**大きさに詰める。
+   - 打つ4欄(LotNo・受注番号・検入数・外径)はほかより大きいまま(打つ場所が分かる)
+   - 読み取り欄は1fr で詰めて並べる(1段に多く入るので段が減る)
+   - 3. バリ揃え梱包はボタンで開く窓(いつも使うものではないので画面を取らない) */
+.calc .head{ margin:0 0 8px; }
+.calc .sec{ padding:10px 14px 12px; margin:0 0 10px; }
+.calc .sec > h2{ font-size:14px; margin:0 0 6px; }
+.calc .btn{ min-height:38px; padding:6px 14px; }
+
+.calc-keys{ display:flex; flex-wrap:wrap; gap:8px 12px; align-items:flex-end; }
+.calc-keys .f{ flex:0 0 auto; }
+.calc .input--key{ min-height:42px; padding:4px 10px; font-size:17px; }
+.calc #lot{ width:8.5em; }
+.calc #order-no{ min-width:10em; }
+.calc-keys__btns{ display:flex; gap:8px; flex-wrap:wrap; margin-left:auto; }
+.calc-keys__btns .btn{ min-height:42px; }
+
+.calc-data{ grid-template-columns:repeat(auto-fill,minmax(112px,1fr));
+            gap:6px 10px; margin-top:8px; }
+.calc .f{ gap:1px; }
+.calc .f__v{ font-size:13.5px; padding:3px 7px; min-height:27px; }
+.calc .f__v--big{ font-size:17px; padding:1px 7px; }
+.calc .input--result{ font-size:17px; min-height:27px; padding:1px 7px; }
+/* 工場用コメントは長い。1段の残りを使う */
+.calc-data__wide{ grid-column:span 5; }
+
+/* 最下部・コイル間の枠と、積む・バリ揃えのボタンを横に並べる */
+.calc-bottom{ display:grid; grid-template-columns:minmax(0,1fr) auto;
+              gap:10px 14px; align-items:end; margin-top:10px; }
+.calc .frames{ grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:10px; }
+.calc .frame{ padding:6px 10px 10px; }
+.frame__row{ display:flex; flex-wrap:wrap; gap:8px 14px; align-items:flex-start; }
+.frame__row .pair{ margin:0; }
+.frame__row .grid{ flex:1 1 200px; }
+.calc .frame .grid--data{ grid-template-columns:repeat(auto-fill,minmax(110px,1fr));
+                          gap:6px 10px; }
+.calc .pair th, .calc .pair td{ padding:3px 8px; }
+.calc-actions{ display:flex; flex-direction:column; gap:8px; align-items:stretch; }
+.calc-actions .check{ align-self:flex-start; }
+
+.burrdlg{ width:min(720px,94vw); }
+.burrdlg .setrow__d{ margin:0 0 10px; }
+.burrdlg .btnrow{ margin:12px 0 0; }
+
+@media (max-width:1100px){
+  .calc-bottom{ grid-template-columns:1fr; }
+  .calc-actions{ flex-direction:row; flex-wrap:wrap; align-items:center; }
+  .calc-keys__btns{ margin-left:0; }
+}

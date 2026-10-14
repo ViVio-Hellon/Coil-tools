@@ -105,8 +105,8 @@ body{
   :root:not([data-theme="dark"]) .topbar .ver:hover{color:#fff}
 }
 .topbar .spacer{margin-left:auto}
-/* ボタンはひとかたまり。帯が詰まっても「説明書」だけ落とさない */
-.topbar .tools, dialog .foot .tools{display:flex; gap:8px; flex:none}
+/* ボタンはひとかたまり。帯が詰まっても1つだけ落とさない */
+dialog .foot .tools{display:flex; gap:8px; flex:none}
 .stamp{font-size:11.5px; color:var(--ink-3); font-family:var(--mono)}
 .stamp b{color:var(--ink-2)}
 
@@ -213,6 +213,20 @@ button.on{background:var(--discard); border-color:var(--discard-line); color:#ff
    左に「引く→決める」の3枚、右に「積む→出す」。
    **積み上げは3枚の横。** 上下に離れていると、条番号を押したあと
    目を下へ振ることになる */
+/* 左のタブ(取り込み・履歴・マスタ管理・設定・説明書)と、その右の作業面。
+   統合 1.2.15(現場の指摘)で上の帯から左へ移した */
+.frame{display:grid; grid-template-columns:118px minmax(0,1fr); gap:12px; align-items:start}
+.frame__body{min-width:0}
+.siderail{display:flex; flex-direction:column; gap:6px; position:sticky; top:10px}
+.siderail button, .siderail a{display:block; width:100%; text-decoration:none}
+.siderail button{text-align:left; font-weight:600; height:auto; min-height:38px; padding:8px 12px}
+.siderail__sep{display:block; height:1px; background:var(--line); margin:4px 2px}
+@media(max-width:760px){
+  .frame{grid-template-columns:minmax(0,1fr)}
+  .siderail{flex-direction:row; flex-wrap:wrap; position:static}
+  .siderail button, .siderail a{width:auto}
+  .siderail__sep{display:none}
+}
 .layout{display:grid; grid-template-columns:minmax(0,1fr) 262px; gap:12px; align-items:start}
 .layout .main{min-width:0}
 /* 右の列は画面に付いてくる。左が長くなっても「出力」が視界から

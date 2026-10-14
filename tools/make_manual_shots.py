@@ -249,8 +249,8 @@ def details_scene(app, ctx, sh, cam):
     clip = frame_box(sh, "details")
     pg = sh.page
     cam.take("details-start", pg, clip=clip, marks=[
-        (1, box_of(fr, "#lotNo")), (2, box_of(fr, "#btnImport"), "b"),
-        (3, box_of(fr, "#btnHistory"), "b"), (4, box_of(fr, "#btnSettings"), "b"),
+        (1, box_of(fr, "#lotNo")), (2, box_of(fr, "#btnImport"), "r"),
+        (3, box_of(fr, "#btnHistory"), "r"), (4, box_of(fr, "#btnSettings"), "r"),
         (5, box_of(fr, "#btnAbout"), "r")])
     E.details_open_lot(fr, "L5160Z0")
     fr.wait_for_timeout(500)
@@ -361,6 +361,13 @@ def material_scene(app, ctx, sh, cam):
         (1, box_of(fr, "#r-total")), (2, box_of(fr, "#size-fixed")), (3, box_of(fr, "#add"))])
     fr.click("#add")
     E.material_toast(fr, "行目に積みました")
+    # 3. バリ揃え梱包はボタンで開く窓(統合 1.2.15)
+    fr.click("#burr-open")
+    fr.wait_for_timeout(300)
+    cam.take("material-burr", pg, clip=clip, marks=[
+        (1, box_of(fr, "#upper")), (2, box_of(fr, "#lower")), (3, box_of(fr, "#burr"), "b"),
+        (4, box_of(fr, "#burr-send"), "b"), (5, box_of(fr, "#burr-close"), "b")])
+    fr.click("#burr-close")
     into_view(fr, "#o-包装")
     cam.take("material-spec", pg, clip=clip, marks=[(1, box_of(fr, "#o-包装"))])
     fr.click('nav.rail a.rail__item[href*="/checklist"]')
@@ -435,7 +442,7 @@ def pena_scene(app, ctx, sh, cam):
     pg = sh.page
     clip = frame_box(sh, "pena")
     cam.take("pena-start", pg, clip=clip, marks=[
-        (1, box_of(fr, ".appbar-nav"), "b"), (2, box_of(fr, ".appbar-title .appver"), "b"),
+        (1, box_of(fr, ".appbar-nav"), "r"), (2, box_of(fr, ".appbar-title .appver"), "b"),
         (3, box_of(fr, "#conn"), "b")])
     if not fr.is_checked("#cbMode"):
         fr.check("#cbMode")

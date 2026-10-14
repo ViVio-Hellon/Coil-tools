@@ -140,6 +140,31 @@ class PrefixTest(unittest.TestCase):
         self.assertIn("コイル梱包明細打ち出しシステム", html)
         self.assertNotIn('href="/docs"', html)
 
+    def test_画面の並び_左のタブと_バリ揃えは窓(self):
+        """統合 1.2.15(現場の指摘): ペナラベル・梱包明細の画面の切り替えは左のタブ。
+        資材計算の 3. バリ揃え梱包はボタンで開く窓(1・2 の画面を取らない)。"""
+        html = self.client.get("/pena/").data.decode()
+        head, body = html.split("</header>", 1)
+        self.assertNotIn("appbar-nav", head, "上の帯に画面の切り替えを置かない")
+        rail = body[body.index('<nav class="appbar-nav siderail'):body.index("</nav>")]
+        for name in ("指定サイズ", "風袋計算", "計算内容", "ラベル台紙", "全サイズ", "設定"):
+            self.assertIn(">%s</a>" % name, rail)
+        self.assertLess(body.index("siderail"), body.index('<main class="page">'))
+
+        html = self.client.get(f"/details/meisai?t={TOKEN}").data.decode()
+        head, body = html.split("</header>", 1)
+        rail = body[body.index('<nav class="siderail"'):body.index("</nav>")]
+        for bid in ("btnImport", "btnHistory", "btnMaster", "btnSettings"):
+            self.assertNotIn(bid, head)
+            self.assertIn('id="%s"' % bid, rail)
+        self.assertIn('href="/details/docs"', rail)
+
+        html = self.client.get(f"/material/calc?t={TOKEN}").data.decode()
+        dialog = html[html.index('<dialog class="browser burrdlg" id="burr-dialog"'):html.index("</dialog>")]
+        for eid in ("upper", "lower", "burr", "burr-send", "b-台数", "burr-close"):
+            self.assertIn('id="%s"' % eid, dialog)
+        self.assertIn('id="burr-open"', html.split("<dialog", 1)[0])
+
     def test_資材計算の画面は入口を知っている(self):
         html = self.client.get(f"/material/calc?t={TOKEN}").data.decode()
         self.assertIn('window.APP_BASE = "/material"', html)
