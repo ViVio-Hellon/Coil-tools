@@ -521,9 +521,12 @@ def apply_live(cfg: Config, ctx) -> List[str]:
         db_path=cfg.material_db_file)
     applied.append("資材マスタの参照先")
 
-    # サイズ構成マスタ
+    # サイズ構成マスタ(足したサイズは資材マスタから読み直す)
     if ctx.master.reload(cfg.size_master_path):
         applied.append("サイズ構成マスタ")
+    if getattr(ctx, "wf", None) is not None:
+        ctx.wf.size_extra.invalidate()
+        ctx.wf.refresh_label_sheets(force=True)
 
     # 型番マスタ
     if ctx.wf.all_size.reload_master(cfg.kataban_csv_path, cfg.material_db_file):

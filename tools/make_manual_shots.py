@@ -534,7 +534,19 @@ def pena_scene(app, ctx, sh, cam):
     fr.wait_for_timeout(600)
     cam.take("pena-settings", pg, clip=clip, marks=[
         (1, box_of(fr, "#setPassword")), (2, box_of(fr, ".subtab[data-sub=paths]"), "b"),
-        (3, box_of(fr, ".subtab[data-sub=master]"), "b"), (4, box_of(fr, ".subtab[data-sub=dist]"), "b")])
+        (3, box_of(fr, ".subtab[data-sub=master]"), "b"), (4, box_of(fr, ".subtab[data-sub=dist]"), "b"),
+        (5, box_of(fr, ".subtab[data-sub=sizes]"), "b")])
+    # 設定の「サイズ」(統合 1.2.16): 出すサイズのチェックと、サイズを足す
+    fr.click('.subtab[data-sub="sizes"]')
+    fr.wait_for_timeout(300)
+    cam.take("pena-settings-sizes", pg, clip=clip, marks=[
+        (1, box_of(fr, ".sizetbl"), "r"), (2, box_of(fr, "#sizeVisSave"), "r")])
+    fr.evaluate("document.querySelector('#szAdd').scrollIntoView({block: 'center'})")
+    fr.wait_for_timeout(300)
+    cam.take("pena-settings-size-add", pg, clip=clip, marks=[
+        (3, box_of(fr, ".sizeform"), "t"), (4, box_of(fr, "#szAdd"), "r")])
+    fr.click('.subtab[data-sub="paths"]')
+    fr.wait_for_timeout(300)
     fr.locator("#storage").scroll_into_view_if_needed()
     fr.wait_for_timeout(300)
     cam.take("pena-settings-storage", pg, clip=clip, marks=[(1, box_of(fr, "#storage"), "l")])

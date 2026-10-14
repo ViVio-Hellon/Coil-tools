@@ -139,7 +139,7 @@ class MasterAdminServiceTest(unittest.TestCase):
     def test_only_tables_this_tool_uses_are_listed(self):
         """個人情報を含む表（班員名簿など）を一覧に出さないこと。"""
         names = [t["table"] for t in MA.tables(self.repo)]
-        self.assertEqual(names, ["資材重量", "ラベル台紙一覧"])
+        self.assertEqual(names, ["資材重量", "ラベル台紙一覧", "ペナラベル追加サイズ"])
         self.assertNotIn("班員名簿", names)
         self.assertNotIn("アクセス権限", names)
 

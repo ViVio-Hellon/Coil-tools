@@ -1,10 +1,10 @@
 {
  "taken": "2026-10-14",
  "versions": {
-  "app": "1.2.15",
+  "app": "1.2.16",
   "details": "0.13.20",
   "material": "0.2.21",
-  "pena": "1.5.23"
+  "pena": "1.5.24"
  },
  "images": {
   "details-about": {
@@ -144,6 +144,14 @@
    "h": 900
   },
   "pena-settings": {
+   "w": 1280,
+   "h": 818
+  },
+  "pena-settings-size-add": {
+   "w": 1280,
+   "h": 818
+  },
+  "pena-settings-sizes": {
    "w": 1280,
    "h": 818
   },

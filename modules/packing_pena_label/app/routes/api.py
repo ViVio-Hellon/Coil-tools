@@ -109,6 +109,8 @@ class ApiRoutes:
             "/api/settings/check-path": self._settings_check_path,
             "/api/settings/reset": self._settings_reset,
             "/api/settings/check-password": self._settings_check_password,
+            "/api/settings/visible-sizes": self._settings_visible_sizes,
+            "/api/settings/size-add": self._settings_size_add,
             "/api/label/align": self._label_align,
             "/api/settings/distribution/state": self._dist_state,
             "/api/settings/distribution/export": self._dist_export,
@@ -472,6 +474,83 @@ class ApiRoutes:
             result["message"] += "（反映でエラー: %s。再起動してください）" % exc
             result["level"] = "warn"
         return result
+
+    # ------------------------------------------------------------ サイズ(統合 1.2.16)
+    def _size_password_gate(self, body, what: str):
+        from ..services import settings as S
+        if S.password_ok(body.get("password")):
+            return None
+        return {"ok": False, "level": "warn", "needPassword": True,
+                "message": "%sには合言葉が要ります。" % what}
+
+    def _settings_visible_sizes(self, body):
+        """指定サイズの画面(と全サイズの一覧)に出すサイズを、この PC で決める。
+
+        合言葉が要る(現場の指定)。少なくとも 1 つは出す。
+        """
+        from ..config import load_local_overrides, save_local_overrides
+        deny = self._size_password_gate(body, "出すサイズを変えるの")
+        if deny is not None:
+            return deny
+        self.wf.refresh_sizes()
+        known = list(dict.fromkeys(c.base_name for c in self.wf.master.all()))  # 丈1/丈2 で 2 つずつある
+        want = body.get("sizes")
+        if not isinstance(want, list):
+            return 400, {"ok": False, "level": "warn", "message": "入力を解釈できません"}
+        want = [str(x).strip() for x in want if str(x).strip()]
+        unknown = [x for x in want if x not in known]
+        if unknown:
+            return {"ok": False, "level": "warn",
+                    "message": "知らないサイズです: %s(読み直してください)" % "、".join(unknown)}
+        if not want:
+            return {"ok": False, "level": "warn",
+                    "message": "1 つ以上のサイズにチェックを入れてください"}
+        ordered = [b for b in known if b in want]
+        current = load_local_overrides(self.cfg)
+        current["visible_sizes"] = ordered
+        save_local_overrides(current, self.cfg)
+        before = list(self.cfg.visible_sizes or [])
+        self.cfg.visible_sizes = ordered
+        shown = "、".join(ordered)
+        log.info("出すサイズを変えました: %s → %s", before, ordered)
+        return {"ok": True, "level": "info", "sizes": ordered,
+                "message": "出すサイズを保存しました(このPC): %s" % shown}
+
+    def _settings_size_add(self, body):
+        """新しいサイズを足す(共有の資材マスタに書く。全ライン共通)。合言葉が要る。"""
+        from ..config import load_local_overrides, save_local_overrides
+        from ..services import master_admin as MA
+        from ..services import size_extra as SX
+        deny = self._size_password_gate(body, "サイズを足すの")
+        if deny is not None:
+            return deny
+        self.wf.refresh_sizes(force=True)
+        try:
+            r = SX.add(self.wf.materials, self.wf.master,
+                       body.get("thickness"), body.get("width"), body.get("kataban"),
+                       body.get("symbol"), body.get("note"))
+        except MA.Refused as exc:
+            return exc.status, {"ok": False, "level": "warn",
+                                "refuse": exc.kind, "message": exc.message}
+        self.wf.size_extra.invalidate()
+        self.wf.refresh_label_sheets(force=True)
+        msg = ("サイズを足しました: %s(型番 %s)。全ラインで選べるようになります。"
+               % (r["baseName"], r["kataban"]))
+        if body.get("show", True):
+            # 足した PC では、そのまま画面に出す(ほかの PC は各自の設定でチェックを入れる)
+            want = list(self.cfg.visible_sizes or [])
+            if want and r["baseName"] not in want:
+                want.append(r["baseName"])
+                current = load_local_overrides(self.cfg)
+                current["visible_sizes"] = want
+                save_local_overrides(current, self.cfg)
+                self.cfg.visible_sizes = want
+            msg += "\nこのPCの指定サイズの画面に出しました。ほかのPCは設定の「サイズ」でチェックを入れてください。"
+        else:
+            msg += "\nまだどのPCの画面にも出ていません。出すPCで、設定の「サイズ」でチェックを入れてください。"
+        if r.get("backup"):
+            msg += "\n書く前の控え: %s" % r["backup"]
+        return {"ok": True, "level": "info", "message": msg, **r}
 
     def _label_align(self, body):
         """試し刷りの実測から、印刷の補正値を決めて保存する。

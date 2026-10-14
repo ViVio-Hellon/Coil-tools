@@ -31,6 +31,7 @@ from . import size_master as SM
 from . import tare_calc as TC
 from . import validation as V
 from . import label_sheet_master as LSM
+from . import size_extra as SX
 from .all_size import AllSizeService
 from .vba_compat import fmt, val, ws_round, ws_roundup
 
@@ -114,16 +115,32 @@ class Workflow:
         self.progress = Progress()
         #: テスラ全サイズ画面の業務処理
         self.all_size = AllSizeService(store, cfg.kataban_csv_path, cfg.material_db_file)
+        #: 共有マスタの ペナラベル追加サイズ（あとから足したサイズ。統合 1.2.16）
+        self.size_extra = SX.SizeExtra()
         #: 共有マスタの ラベル台紙一覧（シート名・型番）
         self.label_sheets = LSM.LabelSheetMaster()
         self.refresh_label_sheets()
+
+    def refresh_sizes(self, force: bool = False) -> None:
+        """足したサイズを読み直す(別の PC で足された場合も、更新日時が変われば追いつく)。"""
+        try:
+            rows = self.size_extra.load(self.materials.db_path, force=force)
+            # 変わったときだけ入れ替える(入れ替えるとラベル台紙一覧の上書きが外れるので、掛け直す)
+            if rows != self.master._extra_rows:
+                self.master.apply_extra(rows)
+                self.label_sheets.invalidate()
+                self.label_sheets.apply_to(self.master, self.materials.db_path, force=True)
+        except Exception as exc:                      # noqa: BLE001
+            log.warning("足したサイズを読み込めません: %s", exc)
 
     def refresh_label_sheets(self, force: bool = False) -> int:
         """共有マスタの ラベル台紙一覧 を読み直して上書きする。
 
         ラベル台紙の画面を開いたとき・マスタを書き換えたときに呼ぶ。
         別の PC で直された場合も、更新日時が変われば追いつく。
+        足したサイズを先に読む(足したサイズの型番もラベル台紙一覧で直せる)。
         """
+        self.refresh_sizes(force=force)
         try:
             return self.label_sheets.apply_to(
                 self.master, self.materials.db_path, force=force)

@@ -64,6 +64,11 @@ _SOURCE_NAMES = {"sqlite": "梱包資材マスタ（SQLite）", "access": "旧 A
 _DIM_RE = re.compile(r"(\d+(?:\.\d+)?)")
 
 
+def fmt_width(mm: float) -> str:
+    """巾の表示(53.5 → 53.5、45 → 45.0)。"""
+    return ("%.2f" % float(mm)).rstrip("0").rstrip(".") if float(mm) % 1 else "%.1f" % float(mm)
+
+
 def _where(kind: str) -> str:
     """保存先の札(このPCに保存／全ラインで共有／アプリのフォルダ)。言葉は `common/storage_places.py`。"""
     from common import storage_places
@@ -192,6 +197,7 @@ class PageRoutes:
 
     # ============================================================ メイン
     def index(self) -> str:
+        self.wf.refresh_sizes()              # 別の PC で足されたサイズに追いつく
         state = self.wf.load_state()
         rows = self._size_rows(state)
         ctx = {
@@ -258,7 +264,7 @@ class PageRoutes:
             c1 = cfgs[0]
             c2 = cfgs[1] if len(cfgs) > 1 else cfgs[0]
             cls = _SIZE_CLASS.get(base, "")
-            note = _SIZE_NOTE.get(base, "")
+            note = _SIZE_NOTE.get(base, "") or self.wf.master.note_of(base)
 
             if c1.cb_key == SM.NAMED_CB_KEY:
                 cb_attr = 'data-kind="cbNamed"'
@@ -992,6 +998,7 @@ class PageRoutes:
     # ============================================================ 全サイズ
     def all_size(self, query=None) -> str:
         """VBA ``テスラ全サイズ`` UserForm。"""
+        self.wf.refresh_sizes()
         svc = self.wf.all_size
         st = svc.load_state()
         combo = st.get("comboText", "")
@@ -1292,15 +1299,95 @@ class PageRoutes:
         tabs = (
             '<div class="subnav" role="tablist">'
             '<button type="button" class="subtab on" data-sub="paths">パス設定</button>'
+            '<button type="button" class="subtab" data-sub="sizes">サイズ</button>'
             '<button type="button" class="subtab" data-sub="master">マスタ管理</button>'
             '<button type="button" class="subtab" data-sub="dist">配布設定</button>'
             '</div>')
         body = (pw + tabs
                 + f'<div class="subpane" data-sub="paths">{paths}</div>'
+                + f'<div class="subpane" data-sub="sizes" hidden>{self._sizes_body()}</div>'
                 + f'<div class="subpane" data-sub="master" hidden>{master}</div>'
                 + f'<div class="subpane" data-sub="dist" hidden>'
                   f'{self._distribution_body()}</div>')
         return self._shell("設定", body, "settings", self._settings_script())
+
+    def _sizes_body(self) -> str:
+        """設定の「サイズ」(統合 1.2.16・現場の指定)。
+
+        1. 指定サイズの画面に出すサイズを、チェックで選ぶ(この PC。合言葉が要る)
+        2. 新しいサイズを足す(共有の資材マスタに書く。全ライン。合言葉が要る)
+        保存のあとは読み直さずに差し替える(`#sizesPane` は data-live)。
+        """
+        from ..services import master_admin as MA
+        from ..services import size_extra as SX
+        self.wf.refresh_sizes()
+        master = self.wf.master
+        want = [str(x).strip() for x in (self.cfg.visible_sizes or []) if str(x).strip()]
+        firsts = {}
+        for c in master.all():
+            firsts.setdefault(c.base_name, c)
+        order = [b for b in _SIZE_ORDER if b in firsts] + [b for b in firsts if b not in _SIZE_ORDER]
+        rows = []
+        for i, base in enumerate(order):
+            c = firsts[base]
+            on = (not want) or base in want
+            origin = "足したサイズ(共有の資材マスタ)" if master.is_extra(c.ob_idx) else "同梱"
+            rows.append(
+                f'<tr><td class="ck"><input type="checkbox" id="vs_{i}" data-vsize="{esc(base)}"'
+                f'{" checked" if on else ""}></td>'
+                f'<td><label for="vs_{i}">{esc(base)}</label></td>'
+                f'<td>{esc(c.kataban)}</td><td class="num">{esc(fmt_width(c.width_mm))}</td>'
+                f'<td>{esc(origin)}</td></tr>')
+        shown = sum(1 for b in order if (not want) or b in want)
+        visible = (
+            f'<div class="card"><h2>指定サイズの画面に出すサイズ {_where("local")}</h2>'
+            f'<p class="hint">チェックを外したサイズは、指定サイズの画面と全サイズの一覧に出ません'
+            f'(いまラインに来ないサイズの選び間違いを防ぐため)。<b>このPCだけ</b>の設定です。'
+            f'保存には合言葉が要ります。いま {shown} / {len(order)} サイズを出しています。</p>'
+            f'<table class="tbl sizetbl"><thead><tr><th>出す</th><th>サイズ</th><th>型番(丈1)</th>'
+            f'<th>巾(mm)</th><th>定義</th></tr></thead><tbody>{"".join(rows)}</tbody></table>'
+            f'<div class="btn-row" style="margin-top:8px">'
+            f'<button type="button" class="btn btn-primary" id="sizeVisSave">出すサイズを保存</button>'
+            f'</div></div>')
+
+        why = MA.editable_why_not(self.wf.materials)
+        extra = [c for c in master.all() if master.is_extra(c.ob_idx) and c.ob_idx % 2 == 1]
+        added = ""
+        if extra:
+            trs = "".join(
+                f'<tr><td>{esc(c.base_name)}</td><td>{esc(c.kataban)}</td>'
+                f'<td class="num">{esc(fmt_width(c.width_mm))}</td>'
+                f'<td class="num">{c.ob_idx} / {c.ob_idx + 1}</td>'
+                f'<td>{esc(master.note_of(c.base_name))}</td></tr>' for c in extra)
+            added = (f'<h3 class="subhead">足したサイズ</h3>'
+                     f'<table class="tbl"><thead><tr><th>サイズ</th><th>型番</th><th>巾(mm)</th>'
+                     f'<th>台紙番号(丈1/丈2)</th><th>備考</th></tr></thead><tbody>{trs}</tbody></table>')
+        disabled = " disabled" if why else ""
+        form = (
+            f'<div class="sizeform">'
+            f'<label>厚み(mm)<input type="text" id="szT" inputmode="decimal" placeholder="1.2"{disabled}></label>'
+            f'<label>巾(mm)<input type="text" id="szW" inputmode="decimal" placeholder="45.5"{disabled}></label>'
+            f'<label>型番<input type="text" id="szK" placeholder="BJB76xxxxxQR" spellcheck="false"{disabled}></label>'
+            f'<label>記号(任意)<input type="text" id="szS" maxlength="10"{disabled}></label>'
+            f'<label class="wide">備考(任意。画面に赤字で出す)<input type="text" id="szN" maxlength="60" '
+            f'placeholder="例: 2026.10.14追加"{disabled}></label>'
+            f'<label class="ckline"><input type="checkbox" id="szShow" checked{disabled}> このPCの指定サイズの画面に出す</label>'
+            f'</div>'
+            f'<div class="btn-row"><button type="button" class="btn btn-primary" id="szAdd"{disabled}>'
+            f'サイズを足す</button></div>')
+        add_card = (
+            f'<div class="card"><h2>新しいサイズを足す {_where("shared")}</h2>'
+            + (f'<div class="warnbox">サイズを足せません: {esc(why)}</div>' if why else "")
+            + form +
+            f'<p class="hint">足したサイズは<b>共有の資材マスタ</b>(表「{esc(SX.TABLE_NAME)}」)に書くので、'
+            f'<b>全ラインで</b>選べるようになります(画面に出すかは各PCのチェックで決めます)。'
+            f'合言葉が要ります。<br>'
+            f'丈1・丈2 の台紙は台紙の上下とも使い、巾は積み高さ・NW/GW の計算に使います。'
+            f'<b>サイズ(厚み・巾)はあとから直せません</b>。間違えたときは、そのサイズのチェックを外して'
+            f'正しいものを足し直してください(型番・記号・備考はマスタ管理で直せます)。<br>'
+            f'全サイズの画面の一覧にも出すときは、型番マスタ(表「型番」か型番マスタ CSV)にも同じサイズを足してください。'
+            f'</p>' + added + '</div>')
+        return f'<div id="sizesPane" data-live>{visible}{add_card}</div>'
 
     def _storage_card(self, local_path: str, app_path: str, has_local: bool,
                       dist_path: str) -> str:
@@ -2156,6 +2243,69 @@ class PageRoutes:
       // 同梱の既定に戻った値を、その場で欄に出す(読み直さない)
       pplRefresh({values: "all"}).catch(function(e){ pplToast(String(e), "warn"); });
     });
+  });
+})();
+
+// ---- サイズ(統合 1.2.16): 出すサイズの保存・サイズを足す。どちらも合言葉が要る ----
+// #sizesPane は保存のあと差し替わる(pplRefresh)ので、押下は document で受ける
+(function(){
+  function pw(){ var b = document.getElementById("setPassword"); return b ? b.value : ""; }
+  // 合言葉が無い・違う → その場で聞いて送り直す(パス設定と同じ)
+  function send(url, body){
+    return pplPost(url, body).then(function(j){
+      if (j && j.needPassword) {
+        return pplAskPassword(j.message + "\\n\\n合言葉を入力してください").then(function(got){
+          if (got === null) { return null; }
+          var box = document.getElementById("setPassword");
+          if (box) { box.value = got; }
+          body.password = got;
+          return send(url, body);
+        });
+      }
+      return j;
+    });
+  }
+  function done(j, btn, after){
+    if (btn) { btn.disabled = false; }
+    if (!j) { pplToast("取り消しました", "info"); return; }
+    pplToast(j.message, j.ok ? "info" : "warn");
+    if (j.ok) {
+      if (after) { after(); }
+      pplRefresh().catch(function(e){ pplToast(String(e), "warn"); });
+    }
+  }
+  document.addEventListener("click", function(e){
+    var t = e.target;
+    if (!t || !t.closest) { return; }
+    if (t.closest("#sizeVisSave")) {
+      var sizes = [];
+      document.querySelectorAll("[data-vsize]").forEach(function(c){
+        if (c.checked) { sizes.push(c.dataset.vsize); }
+      });
+      if (!sizes.length) { pplToast("1 つ以上のサイズにチェックを入れてください", "warn"); return; }
+      var b1 = t.closest("#sizeVisSave"); b1.disabled = true;
+      send("/api/settings/visible-sizes", {sizes: sizes, password: pw()})
+        .then(function(j){ done(j, b1); })
+        .catch(function(err){ b1.disabled = false; pplToast(String(err), "error"); });
+      return;
+    }
+    if (t.closest("#szAdd")) {
+      var v = function(id){ var el = document.getElementById(id); return el ? el.value : ""; };
+      var show = document.getElementById("szShow");
+      var body = {thickness: v("szT"), width: v("szW"), kataban: v("szK"), symbol: v("szS"),
+                  note: v("szN"), show: show ? show.checked : true, password: pw()};
+      if (!body.thickness || !body.width || !body.kataban) {
+        pplToast("厚み・巾・型番を入れてください", "warn"); return;
+      }
+      if (!window.confirm("サイズ " + body.thickness + "mm×" + body.width + "mm(型番 " + body.kataban
+                          + ")を足します。全ラインで選べるようになります。\\nサイズ(厚み・巾)はあとから直せません。よろしいですか？")) {
+        return;
+      }
+      var b2 = t.closest("#szAdd"); b2.disabled = true;
+      send("/api/settings/size-add", body)
+        .then(function(j){ done(j, b2); })
+        .catch(function(err){ b2.disabled = false; pplToast(String(err), "error"); });
+    }
   });
 })();
 </script>"""

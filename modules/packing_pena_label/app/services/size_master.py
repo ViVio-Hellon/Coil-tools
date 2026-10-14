@@ -159,6 +159,10 @@ class SizeMaster:
 
     def __init__(self, json_path: Optional[str] = None):
         self._by_ob: Dict[int, SizeConfig] = {}
+        #: あとから足したサイズ(共有マスタの表。`size_extra`)。読み直しても足し直す
+        self._extra_rows: List[dict] = []
+        self._extra_obs: set = set()
+        self._notes: Dict[str, str] = {}
         loaded = False
         if json_path and os.path.exists(json_path):
             try:
@@ -206,6 +210,48 @@ class SizeMaster:
         if not self._by_ob:
             raise ValueError("size_master.json にサイズ定義がありません")
 
+    def apply_extra(self, rows) -> int:
+        """あとから足したサイズ(``size_extra``)を足す。前に足した分は入れ替える。
+
+        ``rows`` は ``size_extra.read_rows`` の形。同梱(JSON)にある台紙番号・寸法は足さない
+        (同梱が先。共有マスタの表で同梱のサイズを上書きさせない)。
+        """
+        for ob in self._extra_obs:
+            self._by_ob.pop(ob, None)
+        self._extra_obs = set()
+        self._extra_rows = [dict(r) for r in (rows or [])]
+        names = {c.base_name for c in self._by_ob.values()}
+        n = 0
+        for r in self._extra_rows:
+            ob1 = int(r["obIdx"])
+            base = normalize_size_name(r["baseName"])
+            if ob1 in self._by_ob or (ob1 + 1) in self._by_ob or base in names:
+                continue
+            for ob in (ob1, ob1 + 1):
+                take = 1 if ob % 2 == 1 else 2
+                self._by_ob[ob] = SizeConfig(
+                    ob_idx=ob, base_name=base, kataban=r.get("kataban", ""),
+                    symbol=r.get("symbol", ""),
+                    # 台紙の上下とも使う(1.0mm×53.5mm などと同じ)
+                    data_row=3, extra_row=92, width_mm=float(r["widthMm"]),
+                    cb_key="CheckBox%d" % extra_cb_index(ob1),
+                    ob_key="OptionButton%d" % ob,
+                    size_cell_label=f"{base}{SHEET_NAME_JOINER}{take}",
+                )
+                self._extra_obs.add(ob)
+            self._notes[base] = r.get("note", "")
+            names.add(base)
+            n += 1
+        return n
+
+    def is_extra(self, ob_idx: int) -> bool:
+        """あとから足したサイズか。"""
+        return int(ob_idx) in self._extra_obs
+
+    def note_of(self, base_name: str) -> str:
+        """足したサイズの備考(指定サイズの画面に赤字で出す)。"""
+        return self._notes.get(base_name, "")
+
     def apply_label_overlay(self, rows) -> int:
         """共有マスタの ``ラベル台紙一覧`` でシート名・型番を上書きする。
 
@@ -244,15 +290,19 @@ class SizeMaster:
         壊れた JSON を掴んで業務が止まる方が困るため。
         """
         prev = dict(self._by_ob)
+        prev_obs = set(self._extra_obs)
         try:
             self._by_ob = {}
+            self._extra_obs = set()
             if json_path and os.path.exists(json_path):
                 self._load_json(json_path)
             else:
                 self._load_builtin()
+            self.apply_extra(self._extra_rows)
             return True
         except Exception as exc:
             self._by_ob = prev
+            self._extra_obs = prev_obs
             log.warning("サイズ構成マスタを読み直せません（従来の内容を維持）: %s", exc)
             return False
 
@@ -283,8 +333,13 @@ class SizeMaster:
 
     # ------------------------------------------------------------ ペア
     def cb_to_pair(self, cb_idx: int) -> tuple:
-        """VBA GetCBtoPair。該当なしは (0, 0)。"""
-        return CB_TO_PAIR.get(int(cb_idx), (0, 0))
+        """VBA GetCBtoPair。該当なしは (0, 0)。足したサイズは自分の CheckBox 名で探す。"""
+        cb_idx = int(cb_idx)
+        if cb_idx in CB_TO_PAIR:
+            return CB_TO_PAIR[cb_idx]
+        obs = sorted(c.ob_idx for c in self._by_ob.values()
+                     if c.cb_key == "CheckBox%d" % cb_idx)
+        return (obs[0], obs[1]) if len(obs) >= 2 else (0, 0)
 
     def pair_for_named_cb(self) -> tuple:
         return NAMED_CB_PAIR
@@ -311,6 +366,11 @@ class SizeMaster:
         if len(parts) >= 2:
             return val(parts[1].replace("mm", ""))
         return 0.0
+
+
+def extra_cb_index(ob1: int) -> int:
+    """足したサイズの「丈1・丈2 同時」の番号(CheckBox の番号)。同梱の 1..6 と重ねない。"""
+    return 100 + (int(ob1) + 1) // 2
 
 
 _default: Optional[SizeMaster] = None
