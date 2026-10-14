@@ -805,6 +805,16 @@ def diagnose(rig: "Rig", error: Exception) -> None:
                 out.append(f"開けない: {exc}")
         finally:
             drv.kill()
+        # 成果物は外から取りにくいので、ログの要の行はここにも出す
+        try:
+            keys = ("webview2", "launch", "user-data", "remote-debugging", "devtools", "binary",
+                    "error", "args", "environment")
+            lines = [l for l in log.read_text(encoding="utf-8", errors="replace").splitlines()
+                     if any(k in l.lower() for k in keys)]
+            out.append("--- msedgedriver.log(要の行)")
+            out += [l[:400] for l in lines[:80]]
+        except OSError as exc:
+            out.append(f"msedgedriver.log を読めない: {exc}")
         out.append("--- DevToolsActivePort の場所")
         for base in {rig.home, Path(tempfile.gettempdir()), Path(os.environ.get("LOCALAPPDATA", rig.home))}:
             for dirpath, _dirs, files in os.walk(base):

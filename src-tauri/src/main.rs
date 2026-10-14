@@ -282,6 +282,40 @@ fn handle(bridge: &Bridge, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     }
 }
 
+/// 窓の通し試験(msedgedriver)が環境変数で渡す WebView2 の指定を、窓にもそのまま渡す。
+///
+/// msedgedriver は `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`(リモートデバッグの口など)と
+/// `WEBVIEW2_USER_DATA_FOLDER` を付けて exe を起こし、その置き場所に DevToolsActivePort が
+/// できるのを待つ。Tauri は WebView2 の引数とデータの置き場所を自分で決めて渡すので、
+/// GitHub Actions では「DevToolsActivePort file doesn't exist」で窓を開けなかった。
+/// ふだんの起動ではこの環境変数は無いので、何も変わらない。
+/// 帳票の窓も同じ指定にする(同じ置き場所の WebView2 は同じ引数でないと開けない)。
+fn with_webview2_env<'a, R: tauri::Runtime, M: Manager<R>>(
+    builder: WebviewWindowBuilder<'a, R, M>,
+) -> WebviewWindowBuilder<'a, R, M> {
+    #[cfg(windows)]
+    {
+        let mut builder = builder;
+        if let Ok(extra) = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
+            if !extra.trim().is_empty() {
+                // wry の既定(小さなメニュー・SmartScreen を出さない)も残す
+                builder = builder.additional_browser_args(&format!(
+                    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection {}",
+                    extra.trim()
+                ));
+            }
+        }
+        if let Ok(dir) = std::env::var("WEBVIEW2_USER_DATA_FOLDER") {
+            if !dir.trim().is_empty() {
+                builder = builder.data_directory(std::path::PathBuf::from(dir.trim()));
+            }
+        }
+        builder
+    }
+    #[cfg(not(windows))]
+    builder
+}
+
 // ------------------------------------------------------------------
 // 画面から呼ぶもの(`app/static/js/desktop.js`)
 // ------------------------------------------------------------------
@@ -294,7 +328,7 @@ async fn open_window(app: AppHandle, url: String, title: Option<String>) -> Resu
         return Err("アプリの中の経路だけ開けます".into());
     }
     let label = format!("report-{}", WINDOWS.fetch_add(1, Ordering::SeqCst));
-    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(app_url(&url)))
+    with_webview2_env(WebviewWindowBuilder::new(&app, label, WebviewUrl::External(app_url(&url))))
         .title(title.unwrap_or_else(|| TITLE.to_string()))
         .inner_size(1100.0, 900.0)
         .disable_drag_drop_handler()
@@ -429,7 +463,7 @@ fn main() {
             let starter = for_setup.clone();
             thread::spawn(move || starter.start());
 
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(app_url("/")))
+            with_webview2_env(WebviewWindowBuilder::new(app, "main", WebviewUrl::External(app_url("/"))))
                 .title(TITLE)
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(1024.0, 680.0)
