@@ -193,17 +193,36 @@ def test_build_sheet_places_quantities_on_stock_lengths(conn):
     assert by_len["900"].LotNo == "A123456"
 
 
-def test_non_stock_length_is_appended(conn):
-    """定尺に無い長さは空欄へ書き足す"""
-    _fixture.add_ripla_lengths(conn, 1234)
+def test_master_length_becomes_a_row(conn):
+    """定尺はマスタ「リプラサイズ」から(統合 1.2.13)。マスタに足した長さは、決め打ちの8種に
+    無くても定尺の行として小さい順に入り、行の数も増える(書き足しの4行はそのまま残る)。"""
+    _fixture.add_ripla_lengths(conn, 1234, 600)
     s = calc(conn, パレット="全面", 外径="1234", 下本数="3")
     checklist_service.save_rows(conn, 1, checklist_service.build_rows(s, worker="高村"))
     r = order_sheet_service.build(conn, worker="高村")
     assert r.ok
     lengths = [row.長さ for row in r.sheets[0].rows]
-    # 定尺8種のあとに書き足されている
+    assert lengths[:10] == ["600", "700", "800", "900", "950", "1000", "1050", "1100", "1150", "1234"]
+    assert len(lengths) == 10 + 4, "定尺10 + 書き足しの4行"
+    assert "1234" not in r.extra_lengths, "マスタにある長さは書き足しにしない"
+
+
+def test_stock_lengths_fall_back_when_table_is_empty(conn):
+    """表が空なら原紙の8種(設定があればそちら)。"""
+    conn.execute("DELETE FROM リプラサイズ")
+    assert order_sheet_service.stock_lengths(conn) == [700, 800, 900, 950, 1000, 1050, 1100, 1150]
+
+
+def test_non_stock_length_is_appended(conn):
+    """マスタの定尺に無い長さ(チェックリストに残っていた古い長さなど)は空欄へ書き足す"""
+    checklist_service.save_rows(conn, 1, [ChecklistRow(
+        LotNo="B000001", コイル間="リプラ", リプラサイズ="30×40",
+        リプラ長さ="1234", リプラ本数="4")])
+    r = order_sheet_service.build(conn, worker="高村")
+    assert r.ok
+    lengths = [row.長さ for row in r.sheets[0].rows]
     assert lengths[:8] == ["700", "800", "900", "950", "1000", "1050", "1100", "1150"]
-    assert any(x and x not in lengths[:8] for x in lengths[8:])
+    assert lengths[8] == "1234" and r.extra_lengths == ["1234"]
 
 
 def test_too_many_extra_lengths_is_refused(conn):

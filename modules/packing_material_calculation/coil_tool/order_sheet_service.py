@@ -17,6 +17,11 @@
 【倉庫の定尺に無い長さ】
 発注票の原紙は定尺8種+空欄4行でできていて、定尺に無い長さは空欄へ
 書き足す。**5件以上あると入らない**ので、そこで断る。
+
+【定尺は梱包資材マスタの表「リプラサイズ」から】(統合 1.2.13。現場の依頼)
+VBA は原紙に 700〜1150 の8種を直に書いていた。マスタ管理で新しい長さを足しても発注票に
+出るように、表「リプラサイズ」の リプラ長さ を小さい順に並べて行にする(行の数も表に合わせる)。
+表が空のときだけ、設定(`stock_lengths`)か原紙の8種を使う。
 """
 from __future__ import annotations
 
@@ -24,7 +29,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
-from . import checklist_service, config, order_history, vba
+from . import checklist_service, config, db, order_history, vba
 from .logging_utils import get_logger
 
 log = get_logger("order_sheet_service")
@@ -32,13 +37,13 @@ log = get_logger("order_sheet_service")
 LF = "\n"
 
 # 倉庫在庫の定尺(mm)。VBA は発注票の原紙(A5:A12)に直接書いていた。
-# **設定で変えられるようにしてある**(`docs/不明点.md` Q8)
+# **ふだんは梱包資材マスタの表「リプラサイズ」から作る**(`stock_lengths`)。これは表が空のときの予備
 DEFAULT_STOCK_LENGTHS: tuple[int, ...] = (700, 800, 900, 950, 1000, 1050, 1100, 1150)
 
 # 定尺に無い長さを書き足せる行数(原紙の A13:A16)
 EXTRA_ROWS = 4
 
-# 発注票1枚の行数(定尺 + 書き足し)
+# 発注票1枚の行数(原紙: 定尺8 + 書き足し4)。定尺の数が変われば行の数も変わる(`sheet_rows`)
 SHEET_ROWS = len(DEFAULT_STOCK_LENGTHS) + EXTRA_ROWS
 
 # 1回で作れる発注票の枚数。角サイズの種類ぶん
@@ -52,13 +57,35 @@ REASON_DUPLICATE_LOT = "duplicate_lot"
 REASON_EMPTY = "nothing_to_order"
 
 
-def stock_lengths() -> list[int]:
-    """いま使う定尺。設定があればそちら。"""
+def stock_lengths(conn: Optional[sqlite3.Connection] = None) -> list[float]:
+    """いま使う定尺(小さい順・重なりなし)。
+
+    1. 梱包資材マスタの表「リプラサイズ」の リプラ長さ(取り込んだ写し。マスタ管理で直すと
+       すぐ取り込み直される)。リプラの長さの選び方(`ripla_service`)と同じ表
+    2. 表が空なら設定(`stock_lengths`。設定ファイルで入れたとき)
+    3. それも無ければ原紙の8種
+    """
+    if conn is not None:
+        try:
+            rows = db.fetch_all(conn, "SELECT リプラ長さ FROM リプラサイズ",
+                                caller_name="order_stock_lengths") or []
+        except sqlite3.Error as exc:
+            log.warning("リプラサイズを読めません(原紙の定尺で作ります): %s", exc)
+            rows = []
+        found = sorted({vba.val(r["リプラ長さ"]) for r in rows} - {0.0})
+        found = [n for n in found if n > 0]
+        if found:
+            return found
     from . import user_settings
     configured = user_settings.get(config.KEY_STOCK_LENGTHS)
     if isinstance(configured, list) and configured:
-        return [int(vba.val(n)) for n in configured if vba.val(n) > 0]
-    return list(DEFAULT_STOCK_LENGTHS)
+        return sorted({vba.val(n) for n in configured if vba.val(n) > 0})
+    return [float(n) for n in DEFAULT_STOCK_LENGTHS]
+
+
+def sheet_rows(lengths: list[float]) -> int:
+    """発注票1枚の行数。定尺ぶん + 書き足し4行。"""
+    return len(lengths) + EXTRA_ROWS
 
 
 # ==================================================================
@@ -179,29 +206,32 @@ def _sizes_in(entries: list[Aggregated]) -> list[str]:
 
 
 def _build_sheet(entries: list[Aggregated], *, kind: str, size: str,
-                 worker: str, day: str) -> tuple[Optional[OrderSheet], list[str], str]:
+                 worker: str, day: str,
+                 lengths: Optional[list[float]] = None) -> tuple[Optional[OrderSheet], list[str], str]:
     """角サイズ1つぶんの発注票。戻り値は `(票, 書き足した長さ, 断る理由)`。"""
     mine = [e for e in entries if e.角サイズ == size]
     sheet = OrderSheet(種類=kind, 角サイズ=size, 提出日付=day, 依頼者=worker)
 
     # 80×80 は長さを持たない。枠だけ作って長さ行は使わない
+    if lengths is None:
+        lengths = stock_lengths()
+    total = sheet_rows(lengths)
     if size == "80×80":
-        sheet.rows = [SheetRow() for _ in range(SHEET_ROWS)]
+        sheet.rows = [SheetRow() for _ in range(total)]
         return sheet, [], ""
 
-    lengths = stock_lengths()
     wanted = [e.長さ for e in mine if e.長さ]
-    extra = [n for n in dict.fromkeys(wanted)
-             if int(vba.val(n)) not in lengths]
+    known = set(lengths)
+    extra = [n for n in dict.fromkeys(wanted) if vba.val(n) not in known]
 
     if len(extra) > EXTRA_ROWS:
         return None, extra, REASON_TOO_MANY_SIZES
 
-    slots = [str(n) for n in lengths] + extra
-    slots += [""] * (SHEET_ROWS - len(slots))
+    slots = [vba.num_text(n) for n in lengths] + extra
+    slots += [""] * (total - len(slots))
 
     rows: list[SheetRow] = []
-    for slot in slots[:SHEET_ROWS]:
+    for slot in slots[:total]:
         row = SheetRow(長さ=slot)
         if slot:
             for e in mine:
@@ -229,6 +259,7 @@ def build(conn: sqlite3.Connection, *, worker: str,
 
     details = expand(rows)
     day = checklist_service.today_label()
+    lengths = stock_lengths(conn)
 
     result = BuildResult()
     for kind in KINDS:
@@ -237,7 +268,7 @@ def build(conn: sqlite3.Connection, *, worker: str,
             continue
         for size in _sizes_in(entries):
             sheet, extra, reason = _build_sheet(
-                entries, kind=kind, size=size, worker=worker, day=day)
+                entries, kind=kind, size=size, worker=worker, day=day, lengths=lengths)
             if reason:
                 return BuildResult(ok=False, reason=reason, extra_lengths=extra)
             if sheet is not None and (sheet.has_content or size == "80×80"):

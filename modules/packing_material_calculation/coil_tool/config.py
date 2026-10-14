@@ -272,8 +272,8 @@ KEY_AUTO_IMPORT = "auto_import_on_start"
 KEY_LINE = "line"
 KEY_WORKER = "worker"
 KEY_ADMIN_PASSWORD = "admin_password"
-# 発注票の定尺(`order_sheet_service.stock_lengths`)。画面には欄が無く、
-# 設定ファイルを直したときだけ入る
+# 発注票の定尺(`order_sheet_service.stock_lengths`)。**ふだんは梱包資材マスタの表「リプラサイズ」**
+# から作り、この設定は表が空のときだけ使う(統合 1.2.13)。画面には欄が無い
 KEY_STOCK_LENGTHS = "stock_lengths"
 
 # 起動時の自動取り込みを既定で ON にするか。

@@ -211,6 +211,10 @@ def name_style(name: str) -> str:
     return f' style="font-size:{size}pt"'
 
 
+# 原紙の明細の行数(定尺8 + 書き足し4)。これより多いときは縮めて収める
+ORDER_SHEET_BASE_ROWS = 12
+
+
 def build_order_sheet_report(sheets: Sequence[OrderSheet]) -> printing.Report:
     """発注票。**原紙(注文票.xlsx)の姿に合わせてある。**
 
@@ -221,6 +225,7 @@ def build_order_sheet_report(sheets: Sequence[OrderSheet]) -> printing.Report:
                     提出日付と依頼者は**2×2の囲み枠**(C2:D3)
         種類の行    `ﾘﾌﾟﾗ | 角サイズ` (A4 と B4:D4 の結合・30pt)
         明細        12行(定尺8 + 書き足し用4)。**見出し行は無い**
+                    (定尺はマスタ「リプラサイズ」の数。多ければ行を縮める。統合 1.2.13)
         縦の罫線    A の左右と、D の右だけ。
                     **LotNo と数量のあいだに線は無い**(B に右罫線が無く、
                     C に左罫線も右罫線も無い)
@@ -258,12 +263,22 @@ def build_order_sheet_report(sheets: Sequence[OrderSheet]) -> printing.Report:
         # 5〜16行目。単位は**全行に出す**。原紙は空の4行にも「本」が刷って
         # ある ── そこは現場が手で書き足す行なので、単位が無いと書き足した
         # ときだけ体裁が違ってしまう
+        # 定尺はマスタ「リプラサイズ」から来るので行が増えることがある(統合 1.2.13)。
+        # 原紙の12行より多いときは、行の高さと字を縮めて A5 の半分に収める
+        n = len(sheet.rows)
+        tall = big = ""
+        if n > ORDER_SHEET_BASE_ROWS:
+            k = ORDER_SHEET_BASE_ROWS / n
+            # 行の高さは**全部のセル**に当てる(1つでも元の高さだと行が縮まない)
+            tall = f' style="height:{39 * _PT * k:.1f}pt"'
+            big = (f' style="height:{39 * _PT * k:.1f}pt;'
+                   f'font-size:{min(22.0, 39 * k * 0.62) * _PT:.1f}pt"')
         for r in sheet.rows:
             rows.append(
-                f'<tr class="item"><td class="len">{esc(r.長さ)}</td>'
-                f'<td class="lot">{esc(r.LotNo)}</td>'
-                f'<td class="qty">{esc(r.数量)}</td>'
-                '<td class="unit">本</td></tr>')
+                f'<tr class="item"><td class="len"{big}>{esc(r.長さ)}</td>'
+                f'<td class="lot"{tall}>{esc(r.LotNo)}</td>'
+                f'<td class="qty"{big}>{esc(r.数量)}</td>'
+                f'<td class="unit"{tall}>本</td></tr>')
 
         cols = "".join(f'<col style="width:{w}">' for w in SHEET_WIDTHS)
         report.add_sheet(
