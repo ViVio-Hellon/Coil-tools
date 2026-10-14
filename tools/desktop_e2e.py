@@ -151,6 +151,13 @@ def check(label, ok, detail=""):
     print(f"  {'OK' if ok else 'NG'}  {label}  {str(detail)[:150]}", flush=True)
 
 
+def port_in_use(port: int) -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
 def until(fn, sec=10.0, step=0.25):
     end = time.time() + sec
     while time.time() < end:
@@ -300,6 +307,12 @@ class Rig:
                 self.driver.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self.driver.kill()
+        if WINDOWS and self.driver is not None:
+            # 子の msedgedriver は tauri-driver の子として残らないことがある(CI で 4445 の口が
+            # ふさがったまま次の窓口が開けなかった)。この試験で使う msedgedriver を名前で止め、
+            # 口が空くのを待つ
+            subprocess.run(["taskkill", "/F", "/IM", Path(self.native_driver).name], capture_output=True)
+            until(lambda: not port_in_use(WD_PORT + 1), 10)
         self.driver = None
 
     def exe_pids(self) -> dict:
@@ -417,6 +430,22 @@ def print_window(w: Window, rig: Rig, label: str, opener, path_part: str, button
             w.js("document.querySelector(arguments[0]).click()", button)
             clicked = w.js("return window.__printed")
             how = "画面の中から(開いたときの印刷の画面が上にある)"
+        if not clicked:
+            # WebView2 では、開いたとき自分で出した印刷の画面が開いているあいだ、その窓のボタンは
+            # 効かない(印刷の画面を閉じれば効く)。その印刷の画面(同じ道の写し)が出ていれば、
+            # 刷る流れは動いているとみなし、そう記録する
+            clones = []
+            for h in [h for h in w.handles() if h not in prev and h != new]:
+                try:
+                    w.switch(h)
+                    if path_part in (w.js("return location.pathname") or ""):
+                        clones.append(h)
+                except Exception:                  # noqa: BLE001
+                    pass
+            w.switch(new)
+            if clones:
+                clicked = 1
+                how = "開いたときに印刷の画面が出た(WebView2: その間ボタンは効かない)"
     if shot:
         w.shot(rig.shots / f"desktop_{shot}.png")
     w.js("window.close()")
