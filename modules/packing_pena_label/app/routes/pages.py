@@ -518,7 +518,9 @@ class PageRoutes:
                     # cfg.sheet_name は JSON から組み立てた内部の名前で、
                     # マスタを直しても変わらないため食い違って見える。
                     f'<tr><td>{cfg.ob_idx}</td>'
-                    f'<td>{esc(cfg.size_cell_label)}</td>'
+                    f'<td>{esc(cfg.size_cell_label)}'
+                    + (' <span class="tag-extra" title="設定の「サイズ」から足したサイズ">追加</span>'
+                       if master.is_extra(cfg.ob_idx) else '') + '</td>'
                     f'<td>{esc(cfg.kataban)}</td><td class="num">{cfg.data_row}</td>'
                     f'<td class="num">{cfg.extra_row}</td>'
                     f'<td>{esc(h["kensaNo"])}</td><td class="num">{esc(LL.weight_text(h["weight"]))}</td>'
@@ -540,7 +542,8 @@ class PageRoutes:
                     '<table class="tbl"><thead><tr><th>obIdx</th><th>シート名</th>'
                     '<th>型番</th><th>データ行</th><th>追加行</th><th>検査番号</th>'
                     '<th>重量</th><th>更新</th><th></th></tr></thead>'
-                    f'<tbody>{"".join(cards)}</tbody></table></div>')
+                    f'<tbody>{"".join(cards)}</tbody></table></div>'
+                    + self._size_howto())
             return self._shell("ラベル台紙", body, "labels", print_only=print_view)
 
         sections = []
@@ -1329,6 +1332,45 @@ class PageRoutes:
                   f'{self._distribution_body()}</div>')
         return self._shell("設定", body, "settings", self._settings_script())
 
+    def _size_howto(self) -> str:
+        """ラベル台紙の一覧の下に出す「新しいサイズを足すには」(統合 1.2.18・現場の求め)。
+
+        ふだんは閉じておく(押すと開く)。足す操作そのものは設定の「サイズ」で行う
+        (合言葉が要る操作を 1 か所に集める)。ボタンで設定の「サイズ」を直接開く。
+        """
+        from ..services import master_admin as MA
+        from ..services import size_extra as SX
+        why = MA.editable_why_not(self.wf.materials)
+        can = ('<p class="okbox">このPCからサイズを足せます(資材マスタ: SQLite)。</p>' if not why else
+               f'<p class="warnbox">いまこのPCからはサイズを足せません: {esc(why)}</p>')
+        added = [c for c in self.wf.master.all()
+                 if self.wf.master.is_extra(c.ob_idx) and c.ob_idx % 2 == 1]
+        have = ("足したサイズ: " + "、".join(esc(c.base_name) for c in added)
+                if added else "まだ足したサイズはありません。")
+        return (
+            '<details class="card howto" id="sizeHowto"><summary>新しいサイズを足すには</summary>'
+            '<ol class="howto-steps">'
+            '<li>下の <b>「設定の「サイズ」を開く」</b> を押す(左のタブの「設定」→「サイズ」と同じ)。</li>'
+            '<li>画面の上の <b>合言葉</b> を入れる(サイズを足す・出すサイズを変えるときに要ります)。</li>'
+            '<li>「新しいサイズを足す」に <b>厚み(mm)・巾(mm)・型番</b> を入れて <b>「サイズを足す」</b>。'
+            '記号・備考は任意(備考は指定サイズの画面に赤字で出ます)。</li>'
+            '<li>足したサイズは、この一覧に <b>丈1・丈2 の 2 行</b>(台紙番号 15 から)で出て、'
+            '指定サイズの画面で選べます。足した PC ではそのまま画面に出ます。<b>ほかの PC</b> は'
+            '設定の「サイズ」の「出すサイズ」でチェックを入れてください。</li>'
+            '<li>全サイズの画面の一覧にも出すときは、<b>型番マスタ</b>(表「型番」か型番マスタ CSV)にも'
+            '同じサイズを足してください(足せば再起動しなくても出ます)。</li>'
+            '</ol>'
+            '<p class="hint">足したサイズは共有の資材マスタ(表「%s」)に書くので、全ラインで使えます。'
+            '巾は積み高さ・NW/GW・HB の計算に使います(巾 53.5mm なら 11 本 / 10 本で HB590 / HB530)。'
+            '<b>サイズ(厚み・巾)はあとから直せません</b>。間違えたときは「出すサイズ」のチェックを外して'
+            '足し直します。型番・記号・備考は設定の「マスタ管理」で直せます。</p>'
+            % esc(SX.TABLE_NAME)
+            + can +
+            f'<p class="hint">{have}</p>'
+            f'<div class="btn-row"><a class="btn btn-primary" href="{self.base}/settings#sizes">'
+            '設定の「サイズ」を開く</a></div>'
+            '</details>')
+
     def _sizes_body(self) -> str:
         """設定の「サイズ」(統合 1.2.16・現場の指定)。
 
@@ -1777,6 +1819,12 @@ class PageRoutes:
       if (want === "master" && window.pplMasterInit) { window.pplMasterInit(); }
     });
   });
+
+  // ラベル台紙の「新しいサイズを足すには」から #sizes で来たら「サイズ」のタブを開く(統合 1.2.18)
+  if (location.hash === "#sizes") {
+    var st = document.querySelector('.subtab[data-sub="sizes"]');
+    if (st) { st.click(); }
+  }
 
   // --- 合言葉の確認 ---
   // 入れただけでは合っているか分からないので、その場で ○× を出す。

@@ -24,6 +24,7 @@ from modules.packing_pena_label.app.services import settings as S
 from modules.packing_pena_label.app.services import size_extra as SX
 from modules.packing_pena_label.app.services.size_master import SizeMaster
 
+from .test_http import HttpTestCase
 from .test_master_admin import free_port, make_master
 
 
@@ -196,6 +197,41 @@ class SizeSettingsHttpTest(unittest.TestCase):
             with self.subTest(ob=ob):
                 self.assertIn("1.2mm×45.0mm", self.get("/labels/sheet?ob=%d" % ob))
 
+
+    def test_4_ラベル台紙にサイズの足し方と設定へのボタン(self):
+        """ラベル台紙の一覧に「新しいサイズを足すには」(統合 1.2.18・現場の求め)。"""
+        html = self.get("/labels")
+        self.assertIn('<details class="card howto" id="sizeHowto">', html, "ふだんは閉じておく")
+        self.assertIn("新しいサイズを足すには", html)
+        self.assertIn('href="/settings#sizes"', html)
+        self.assertIn("このPCからサイズを足せます", html, "資材マスタが SQLite なら足せると出す")
+        # 足したサイズには「追加」の印(test_3 で 1.2mm×45.0mm を足している)
+        self.assertIn('1.2mm×45.0mm 　丈1 <span class="tag-extra"', html)
+        self.assertNotIn('1.0mm×53.5mm 　丈1 <span class="tag-extra"', html)
+        # 設定を #sizes で開くと「サイズ」のタブを開く
+        self.assertIn('location.hash === "#sizes"', self.get("/settings"))
+        # 中の面として読むとき(pane=1)も出る
+        self.assertIn('id="sizeHowto"', self.get("/labels?pane=1"))
+
+
+class SizeHowtoCsvTest(HttpTestCase):
+    """資材マスタが CSV のときは、ラベル台紙で「いまは足せない」と理由を出す。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._local_dir2 = Config.__dict__["local_dir"]
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        Config.local_dir = cls._local_dir2
+
+    def test_足せない理由(self):
+        _, html = self.get("/labels")
+        self.assertIn("いまこのPCからはサイズを足せません", html)
+        self.assertIn("SQLite", html)
+        self.assertIn("まだ足したサイズはありません", html)
 
 if __name__ == "__main__":
     unittest.main()
