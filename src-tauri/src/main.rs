@@ -327,14 +327,24 @@ async fn open_window(app: AppHandle, url: String, title: Option<String>) -> Resu
     if !url.starts_with('/') || url.starts_with("//") {
         return Err("アプリの中の経路だけ開けます".into());
     }
-    let label = format!("report-{}", WINDOWS.fetch_add(1, Ordering::SeqCst));
-    with_webview2_env(WebviewWindowBuilder::new(&app, label, WebviewUrl::External(app_url(&url))))
-        .title(title.unwrap_or_else(|| TITLE.to_string()))
-        .inner_size(1100.0, 900.0)
-        .disable_drag_drop_handler()
-        .build()
-        .map(|_| ())
-        .map_err(|e| format!("窓を開けませんでした: {e}"))
+    let title = title.unwrap_or_else(|| TITLE.to_string());
+    let build = |app: &AppHandle| {
+        let label = format!("report-{}", WINDOWS.fetch_add(1, Ordering::SeqCst));
+        with_webview2_env(WebviewWindowBuilder::new(app, label, WebviewUrl::External(app_url(&url))))
+            .title(&title)
+            .inner_size(1100.0, 900.0)
+            .disable_drag_drop_handler()
+            .build()
+            .map(|_| ())
+    };
+    // 別の窓を閉じた直後は WebView2 の後片付けと重なって作れないことがある(Windows の CI)。
+    // 少し待って1度だけやり直す
+    build(&app).or_else(|first| {
+        eprintln!("窓を開けませんでした(やり直します): {first}");
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        build(&app)
+    })
+    .map_err(|e| format!("窓を開けませんでした: {e}"))
 }
 
 /// その窓を閉じる(帳票の「閉じる」)。いちばん大きい窓なら、ふだんの閉じ方(確認つき)を通る

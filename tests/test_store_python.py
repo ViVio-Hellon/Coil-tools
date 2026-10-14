@@ -30,8 +30,12 @@ def store_realpath(text: str) -> str:
 
 
 def fake_real_location(path) -> str:
-    text = str(path)
-    return text.replace(os.environ.get("COIL_PACKING_TOOLS_LOCAL_DIR", "\0"), "/LocalCache/CoilPackingTools", 1)
+    # Windows では区切りが \ で、ドライブ(C:)が無いと file:// の道にできない(CI で落ちていた)。
+    # / にそろえ、ドライブは残す
+    text = str(path).replace("\\", "/")
+    local = os.environ.get("COIL_PACKING_TOOLS_LOCAL_DIR", "\0").replace("\\", "/")
+    anchor = Path(local).anchor.replace("\\", "/") or "/"
+    return text.replace(local, anchor.rstrip("/") + "/LocalCache/CoilPackingTools", 1)
 
 
 class RealLocationTest(unittest.TestCase):

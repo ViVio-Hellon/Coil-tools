@@ -288,6 +288,12 @@ class Rig:
             f"http://127.0.0.1:{WD_PORT}/status", timeout=2), 15)
 
     def stop_driver(self):
+        if self.driver and self.driver.poll() is None and WINDOWS:
+            # Windows の terminate は tauri-driver だけを止め、子の msedgedriver が残る。
+            # 残った msedgedriver が次の tauri-driver の口(4445)をふさぎ、2つ目の窓口が
+            # 「Remote end closed connection」で開けなかった(CI)。子ごと止める
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.driver.pid)],
+                           capture_output=True)
         if self.driver and self.driver.poll() is None:
             self.driver.terminate()
             try:
@@ -362,7 +368,12 @@ def print_window(w: Window, rig: Rig, label: str, opener, path_part: str, button
     opener()
     opened = until(lambda: len(w.handles()) == before + 1, 12)
     if not opened:
-        check(f"印刷プレビュー: {label}", False, "窓が開かない")
+        check(f"印刷プレビュー: {label}", False, {"窓が開かない": why_no_window(w, path_part)})
+        if len(w.handles()) > before:              # 手がかり集めで開いた窓は閉じておく
+            for h in [h for h in w.handles() if h != w.main]:
+                w.switch(h)
+                w.close_current()
+            w.switch(w.main)
         return
     new = [h for h in w.handles() if h != w.main][-1]
     w.switch(new)
@@ -385,6 +396,28 @@ def print_window(w: Window, rig: Rig, label: str, opener, path_part: str, button
     if not closed:
         w.close_current()
     w.switch(w.main)
+
+
+def why_no_window(w: Window, path: str) -> dict:
+    """窓が開かなかったときの手がかり(Windows の CI で、閉じた直後の2つ目が開かなかった)。
+
+    - 画面の window.open が外枠の置き換え(desktop.js)になっているか(読み込み直しの途中なら素のまま)
+    - 外枠の open_window を直に頼んだ答え(窓を作れなかったなら、外枠のエラーの文言)
+    """
+    out = {}
+    try:
+        out["置き換え"] = w.js("return !/native code/.test(String(window.open))")
+        out["readyState"] = w.js("return document.readyState")
+        out["外枠に直に頼む"] = wd("POST", f"/session/{w.sid}/execute/async", {"script": (
+            "var done=arguments[arguments.length-1];"
+            "var t=window.__TAURI__||(window.top&&window.top.__TAURI__);"
+            "if(!t){done('__TAURI__ が無い');return;}"
+            "t.core.invoke('open_window',{url:arguments[0],title:null})"
+            ".then(function(){done('ok')},function(e){done('err: '+e)});"), "args": [path]}, timeout=30)
+        out["そのあと開いた"] = until(lambda: len(w.handles()) > 1, 8)
+    except Exception as exc:                       # noqa: BLE001 - 手がかり集めは止めない
+        out["例外"] = str(exc)[:200]
+    return out
 
 
 def w_path(part):
@@ -865,6 +898,14 @@ def main(argv=None) -> int:
             scenario_ports(rig)
         if args.only in (None, "failures"):
             scenario_failures(rig)
+    except Exception:
+        # 落ちたときは tauri-driver・msedgedriver の出力の終わりをジョブのログに出す
+        # (CI の成果物は手元で開けないことがある)
+        log = shots / "tauri-driver.log"
+        if log.exists():
+            print("--- tauri-driver.log(終わり)")
+            print(log.read_bytes()[-4000:].decode("utf-8", "replace"))
+        raise
     finally:
         rig.close()
     print("=" * 80)
