@@ -401,16 +401,25 @@ def print_window(w: Window, rig: Rig, label: str, opener, path_part: str, button
     found = w.js("return document.querySelectorAll(arguments[0]).length", button)
     name = w.text(button)
     clicked = 0
+    how = "マウス"
     if found == 1:
         w.click(button)
         clicked = w.js("return window.__printed")
+        if not clicked:
+            # 印刷ビュー(ペナラベル)は開いたとき自分で刷る。Windows(WebView2)ではその印刷の画面が
+            # 上に重なり、マウスの押下はそちらに届く(人が使うときも同じ: 印刷の画面を閉じてから押す)。
+            # ボタンがつながっているかは、画面の中から押して確かめる
+            w.js("document.querySelector(arguments[0]).click()", button)
+            clicked = w.js("return window.__printed")
+            how = "画面の中から(開いたときの印刷の画面が上にある)"
     if shot:
         w.shot(rig.shots / f"desktop_{shot}.png")
     w.js("window.close()")
     closed = until(lambda: new not in w.handles(), 8)
     check(f"印刷プレビュー: {label}",
           found == 1 and name == "印刷する" and clicked == 1 and closed,
-          {"道": w_path(path_part), "名前": name, "印刷": clicked, "閉じた": closed})
+          {"道": w_path(path_part), "名前": name, "印刷": clicked, "閉じた": closed,
+           **({} if how == "マウス" else {"押し方": how})})
     if not closed:
         close_others(w)
     w.switch(w.main)
@@ -553,12 +562,15 @@ def scenario_main(rig: Rig):
                          path.split("?")[0], ".printbar [data-print-now]")
 
         # ---- 画面の色: 別の窓にも届く・印刷の窓は白地のまま
+        # (開いたとき自分で刷らない印刷の窓で見る。自分で刷る窓は、Windows では印刷の画面が
+        #  開いているあいだ画面の動きが止まり、色の知らせを受け取れない)
         w.tab("pena")
         prev = set(w.handles())
-        w.js("window.open('/pena/tare/print','_blank','noopener')")
-        other = new_window(w, prev, "/pena/tare/print")
+        w.js("window.open('/pena/labels/calibration','_blank','noopener')")
+        other = new_window(w, prev, "/pena/labels/calibration")
         if not other:
-            check("画面の色: 開いている別の窓にも届く", False, {"窓が開かない": why_no_window(w, "/pena/tare/print")})
+            check("画面の色: 開いている別の窓にも届く", False,
+                  {"窓が開かない": why_no_window(w, "/pena/labels/calibration")})
             close_others(w)
         else:
             w.switch(w.main)
