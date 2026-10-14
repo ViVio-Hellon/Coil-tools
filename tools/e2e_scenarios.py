@@ -267,7 +267,8 @@ class App:
     def stop(self):
         if self.alive():
             subprocess.run([sys.executable, str(ROOT / "process_manager.py")], cwd=str(self.home),
-                           env=self.env, capture_output=True, text=True, timeout=60)
+                           env=self.env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=60)
             try:
                 self.proc.wait(timeout=20)
             except subprocess.TimeoutExpired:

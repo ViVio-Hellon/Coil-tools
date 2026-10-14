@@ -362,19 +362,41 @@ class Rig:
 STUB = "window.__printed=0; window.print=function(){window.__printed++}"
 
 
+def new_window(w: Window, prev: set, path_part: str, sec=12):
+    """`prev` に無かった窓のうち、`path_part` を開いているものの handle(無ければ None)。
+
+    窓の数では比べない。Windows(msedgedriver)では、閉じた窓の名残や WebView2 の内部の
+    相手が handle に混ざることがあり、数が1つずれて「窓が開かない」と見誤った
+    (外枠は窓を作っていた: CI の記録では Tauri の窓に report-5 があった)。
+    """
+    found = []
+
+    def look():
+        for h in [h for h in w.handles() if h not in prev]:
+            try:
+                w.switch(h)
+                if path_part in (w.js("return location.pathname") or ""):
+                    found.append(h)
+                    return True
+            except Exception:                      # noqa: BLE001 - 読み込み中・名残の handle は飛ばす
+                pass
+        w.switch(w.main)
+        return False
+    until(look, sec, step=0.5)
+    return found[0] if found else None
+
+
 def print_window(w: Window, rig: Rig, label: str, opener, path_part: str, button: str, shot=""):
     """`opener()` で別の窓が開き、「印刷する」が押せ、閉じられる。"""
-    before = len(w.handles())
+    prev = set(w.handles())
     opener()
-    opened = until(lambda: len(w.handles()) == before + 1, 12)
-    if not opened:
+    new = new_window(w, prev, path_part)
+    if not new:
         check(f"印刷プレビュー: {label}", False, {"窓が開かない": why_no_window(w, path_part)})
         close_others(w)                            # 手がかり集めで開いた窓は閉じておく
         return
-    new = [h for h in w.handles() if h != w.main][-1]
     w.switch(new)
-    until(lambda: path_part in w.js("return location.pathname") and
-          w.js("return document.readyState") == "complete", 12)
+    until(lambda: w.js("return document.readyState") == "complete", 12)
     w.js(STUB)                                     # 開いたとき自分で刷る画面もある。それは数えない
     found = w.js("return document.querySelectorAll(arguments[0]).length", button)
     name = w.text(button)
@@ -385,7 +407,7 @@ def print_window(w: Window, rig: Rig, label: str, opener, path_part: str, button
     if shot:
         w.shot(rig.shots / f"desktop_{shot}.png")
     w.js("window.close()")
-    closed = until(lambda: len(w.handles()) == before, 8)
+    closed = until(lambda: new not in w.handles(), 8)
     check(f"印刷プレビュー: {label}",
           found == 1 and name == "印刷する" and clicked == 1 and closed,
           {"道": w_path(path_part), "名前": name, "印刷": clicked, "閉じた": closed})
@@ -403,7 +425,7 @@ def close_others(w: Window) -> None:
         except Exception as exc:                   # noqa: BLE001
             print(f"  (窓を閉じられませんでした: {str(exc)[:160]})")
     w.switch(w.main)
-    until(lambda: len(w.handles()) == 1, 10)
+    until(lambda: len(w.handles()) == 1, 4)
 
 
 def why_no_window(w: Window, path: str) -> dict:
@@ -532,26 +554,26 @@ def scenario_main(rig: Rig):
 
         # ---- 画面の色: 別の窓にも届く・印刷の窓は白地のまま
         w.tab("pena")
-        before = len(w.handles())
+        prev = set(w.handles())
         w.js("window.open('/pena/tare/print','_blank','noopener')")
-        if not until(lambda: len(w.handles()) == before + 1, 12):
+        other = new_window(w, prev, "/pena/tare/print")
+        if not other:
             check("画面の色: 開いている別の窓にも届く", False, {"窓が開かない": why_no_window(w, "/pena/tare/print")})
             close_others(w)
-            w.js("window.open('/pena/tare/print','_blank','noopener')")
-            until(lambda: len(w.handles()) == before + 1, 12)
-        other = ([h for h in w.handles() if h != w.main] or [w.main])[-1]
-        w.switch(w.main)
-        w.frame(None)
-        w.click('[data-theme-set="dark"]')
-        time.sleep(0.6)
-        dark_main = w.js("return document.documentElement.getAttribute('data-theme')")
-        w.switch(other)
-        got = w.js("return document.documentElement.getAttribute('data-theme')")
-        bg = w.js("return getComputedStyle(document.body).backgroundColor")
-        check("画面の色: 開いている別の窓にも届く", dark_main == "dark" and got == "dark", got)
-        check("画面の色: 印刷の窓は白地のまま", bg == "rgb(255, 255, 255)", bg)
-        w.js("window.close()")
-        until(lambda: len(w.handles()) == before, 8)
+        else:
+            w.switch(w.main)
+            w.frame(None)
+            w.click('[data-theme-set="dark"]')
+            time.sleep(0.6)
+            dark_main = w.js("return document.documentElement.getAttribute('data-theme')")
+            w.switch(other)
+            got = w.js("return document.documentElement.getAttribute('data-theme')")
+            bg = w.js("return getComputedStyle(document.body).backgroundColor")
+            check("画面の色: 開いている別の窓にも届く", dark_main == "dark" and got == "dark", got)
+            check("画面の色: 印刷の窓は白地のまま", bg == "rgb(255, 255, 255)", bg)
+            w.js("window.close()")              # 開いた印刷の窓(メインの窓ではない)
+            if not until(lambda: other not in w.handles(), 8):
+                close_others(w)
         w.switch(w.main)
         w.frame(None)
         w.click('[data-theme-set="auto"]')
@@ -620,19 +642,19 @@ def scenario_main(rig: Rig):
                       "return x.getResponseHeader('X-Served-By')")
         check("説明書: 見ているタブ(ペナラベル)の説明書が開き、写真が出る(外枠が返す)",
               shown and served == "desktop", {"写真": shown, "返した": served})
-        before = len(w.handles())
+        prev = set(w.handles())
         w.click("#manualPop")
-        opened = until(lambda: len(w.handles()) == before + 1, 12)
+        new = new_window(w, prev, "/manual/pena")
+        opened = bool(new)
         ok = False
         if opened:
-            new = [h for h in w.handles() if h != w.main][-1]
             w.switch(new)
-            ok = until(lambda: "/manual/pena" in w.js("return location.pathname")
-                       and w.js("return document.readyState") == "complete", 12)
+            ok = until(lambda: w.js("return document.readyState") == "complete", 12)
             w.js("window.close()")
-            until(lambda: len(w.handles()) == before, 8)
-            w.switch(w.main)
-            w.frame(None)
+            if not until(lambda: new not in w.handles(), 8):
+                close_others(w)
+        w.switch(w.main)
+        w.frame(None)
         check("説明書: 「別の窓で開く」で別の窓に開き、閉じられる", opened and ok)
         w.tab("material")
         sent = w.js("return navigator.sendBeacon('/api/client-log', new Blob([JSON.stringify("
@@ -786,8 +808,10 @@ def scenario_failures(rig: Rig):
         # stop.bat(process_manager.py)はデスクトップ版を止めない(窓の × か「終了」で閉じる)。
         # 戻り値 1 で知らせ、窓を前に出す(all-tools と同じ。統合 1.2.5)
         exe = rig.exe_pids()
-        done = subprocess.run([sys.executable, str(ROOT / "process_manager.py")], env=rig.env(),
-                              cwd=str(ROOT), capture_output=True, text=True, timeout=60)
+        done = subprocess.run([sys.executable, str(ROOT / "process_manager.py")],
+                              env=rig.env(PYTHONIOENCODING="utf-8"),
+                              cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=60)
         time.sleep(1.0)
         check("デスクトップ版が動いているあいだ、stop.bat は止めずに戻り値 1",
               done.returncode == 1 and "デスクトップ版" in done.stdout
