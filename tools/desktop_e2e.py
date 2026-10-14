@@ -369,11 +369,7 @@ def print_window(w: Window, rig: Rig, label: str, opener, path_part: str, button
     opened = until(lambda: len(w.handles()) == before + 1, 12)
     if not opened:
         check(f"印刷プレビュー: {label}", False, {"窓が開かない": why_no_window(w, path_part)})
-        if len(w.handles()) > before:              # 手がかり集めで開いた窓は閉じておく
-            for h in [h for h in w.handles() if h != w.main]:
-                w.switch(h)
-                w.close_current()
-            w.switch(w.main)
+        close_others(w)                            # 手がかり集めで開いた窓は閉じておく
         return
     new = [h for h in w.handles() if h != w.main][-1]
     w.switch(new)
@@ -394,8 +390,20 @@ def print_window(w: Window, rig: Rig, label: str, opener, path_part: str, button
           found == 1 and name == "印刷する" and clicked == 1 and closed,
           {"道": w_path(path_part), "名前": name, "印刷": clicked, "閉じた": closed})
     if not closed:
-        w.close_current()
+        close_others(w)
     w.switch(w.main)
+
+
+def close_others(w: Window) -> None:
+    """メインの窓のほかを閉じる。閉じられなくても試験は先へ進める(1つの NG で残りを止めない)。"""
+    for h in [h for h in w.handles() if h != w.main]:
+        try:
+            w.switch(h)
+            w.close_current()
+        except Exception as exc:                   # noqa: BLE001
+            print(f"  (窓を閉じられませんでした: {str(exc)[:160]})")
+    w.switch(w.main)
+    until(lambda: len(w.handles()) == 1, 10)
 
 
 def why_no_window(w: Window, path: str) -> dict:
@@ -406,6 +414,15 @@ def why_no_window(w: Window, path: str) -> dict:
     """
     out = {}
     try:
+        # 外枠(Tauri)が持っている窓と、WebDriver に見えている窓を比べる。外枠にあって
+        # WebDriver に無いなら、窓はできているが msedgedriver が見つけていない
+        out["WebDriver の窓"] = len(w.handles())
+        out["外枠の窓"] = wd("POST", f"/session/{w.sid}/execute/async", {"script": (
+            "var done=arguments[arguments.length-1];"
+            "var t=window.__TAURI__||(window.top&&window.top.__TAURI__);"
+            "try{Promise.resolve(t.window.getAllWindows()).then("
+            "function(a){done(a.map(function(x){return x.label}))},function(e){done('err: '+e)});}"
+            "catch(e){done('err: '+e)}"), "args": []}, timeout=30)
         out["置き換え"] = w.js("return !/native code/.test(String(window.open))")
         out["readyState"] = w.js("return document.readyState")
         out["外枠に直に頼む"] = wd("POST", f"/session/{w.sid}/execute/async", {"script": (
@@ -517,8 +534,12 @@ def scenario_main(rig: Rig):
         w.tab("pena")
         before = len(w.handles())
         w.js("window.open('/pena/tare/print','_blank','noopener')")
-        until(lambda: len(w.handles()) == before + 1, 10)
-        other = [h for h in w.handles() if h != w.main][-1]
+        if not until(lambda: len(w.handles()) == before + 1, 12):
+            check("画面の色: 開いている別の窓にも届く", False, {"窓が開かない": why_no_window(w, "/pena/tare/print")})
+            close_others(w)
+            w.js("window.open('/pena/tare/print','_blank','noopener')")
+            until(lambda: len(w.handles()) == before + 1, 12)
+        other = ([h for h in w.handles() if h != w.main] or [w.main])[-1]
         w.switch(w.main)
         w.frame(None)
         w.click('[data-theme-set="dark"]')
