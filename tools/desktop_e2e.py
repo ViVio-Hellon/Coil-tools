@@ -279,9 +279,11 @@ class Rig:
 
     def start_driver(self, **extra):
         self.stop_driver()
+        # tauri-driver・msedgedriver の出力は残す(窓を開けなかったときの手がかり。写しと一緒に上げる)
+        self.driver_log = open(self.shots / "tauri-driver.log", "ab")
         self.driver = subprocess.Popen(
             ["tauri-driver", "--port", str(WD_PORT), "--native-driver", self.native_driver],
-            env=self.env(**extra), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            env=self.env(**extra), stdout=self.driver_log, stderr=subprocess.STDOUT)
         until(lambda: urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
             f"http://127.0.0.1:{WD_PORT}/status", timeout=2), 15)
 
@@ -744,6 +746,77 @@ def scenario_failures(rig: Rig):
         rig.app.stop()
 
 
+def diagnose(rig: "Rig", error: Exception) -> None:
+    """窓を開けなかったとき(Windows の「DevToolsActivePort file doesn't exist」など)の手がかりを残す。
+
+    写しのフォルダ(CI では成果物 desktop-e2e-shots)に diag.txt・msedgedriver.log を置く。
+    1. いま動いている exe・WebView2
+    2. exe をそのまま起こして、すぐ終わってしまわないか(2つ目の起動として断っていないか・落ちていないか)
+    3. msedgedriver を直に詳しいログ付きで起こし、WebView2 の窓を開けるか
+    4. DevToolsActivePort がどこにできたか
+    """
+    out = [f"error: {error}", f"exe: {rig.exe}", f"native: {rig.native_driver}"]
+    def run(cmd):
+        try:
+            return subprocess.run(cmd, capture_output=True, timeout=30).stdout.decode("mbcs" if WINDOWS else "utf-8", "replace")
+        except Exception as exc:                   # noqa: BLE001 - 手がかり集めは止めない
+            return f"({exc})"
+    if WINDOWS:
+        out.append("--- tasklist(exe・msedgewebview2・msedgedriver・tauri-driver)")
+        out += [l for l in run(["tasklist"]).splitlines()
+                if any(k in l.lower() for k in ("coilpacking", "msedgewebview2", "msedgedriver", "tauri-driver"))]
+    out.append("--- exe をそのまま起こす(15秒)")
+    try:
+        proc = subprocess.Popen([rig.exe], env=rig.env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        try:
+            proc.wait(timeout=15)
+            out.append(f"15秒以内に終わった: 終了コード {proc.returncode}")
+            out.append((proc.stdout.read() or b"").decode("utf-8", "replace")[-2000:])
+        except subprocess.TimeoutExpired:
+            out.append("15秒たっても動いている(起動はできる)")
+            proc.kill()
+    except Exception as exc:                       # noqa: BLE001
+        out.append(f"起こせない: {exc}")
+    time.sleep(2)
+    if WINDOWS and rig.native_driver:
+        out.append("--- msedgedriver を直に(--verbose)")
+        port = WD_PORT + 7
+        log = rig.shots / "msedgedriver.log"
+        drv = subprocess.Popen([rig.native_driver, f"--port={port}", "--verbose", f"--log-path={log}"],
+                               env=rig.env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            time.sleep(2)
+            caps = {"capabilities": {"alwaysMatch": {"browserName": "webview2", "ms:edgeOptions": {
+                "binary": rig.exe, "webviewOptions": {}}}}}
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/session", data=json.dumps(caps).encode(),
+                                         method="POST", headers={"Content-Type": "application/json"})
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            try:
+                with opener.open(req, timeout=90) as res:
+                    body = json.loads(res.read().decode())
+                out.append("窓を開けた: " + json.dumps(body)[:300])
+                sid = (body.get("value") or {}).get("sessionId")
+                if sid:
+                    opener.open(urllib.request.Request(f"http://127.0.0.1:{port}/session/{sid}", method="DELETE"),
+                                timeout=15).read()
+            except urllib.error.HTTPError as exc:
+                out.append("開けない: " + exc.read().decode()[:600])
+            except Exception as exc:               # noqa: BLE001
+                out.append(f"開けない: {exc}")
+        finally:
+            drv.kill()
+        out.append("--- DevToolsActivePort の場所")
+        for base in {rig.home, Path(tempfile.gettempdir()), Path(os.environ.get("LOCALAPPDATA", rig.home))}:
+            for dirpath, _dirs, files in os.walk(base):
+                if "DevToolsActivePort" in files:
+                    out.append(str(Path(dirpath) / "DevToolsActivePort"))
+        out.append("--- 環境(WEBVIEW2 で始まるもの)")
+        out += [f"{k}={v}" for k, v in os.environ.items() if k.upper().startswith("WEBVIEW2")]
+    text = "\n".join(out)
+    (rig.shots / "diag.txt").write_text(text, encoding="utf-8")
+    print(text[:6000], flush=True)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--exe", required=True, help="CoilPackingTools(cargo build で作ったもの)")
@@ -770,7 +843,12 @@ def main(argv=None) -> int:
     print("置き場所:", rig.home)
     try:
         if args.only in (None, "main"):
-            scenario_main(rig)
+            try:
+                scenario_main(rig)
+            except RuntimeError as exc:
+                if "session" in str(exc):
+                    diagnose(rig, exc)
+                raise
         if args.only in (None, "close"):
             scenario_close_and_second(rig)
         if args.only in (None, "ports"):
