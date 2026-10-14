@@ -207,8 +207,33 @@ def name_style(name: str) -> str:
     n = len(name)
     if n <= 2:
         return ""
-    size = {3: 14.0, 4: 11.0}.get(n, 9.0)
+    # 5文字までは 9pt。それより長い名前も、枠の幅に収まるまで小さくする(統合 1.2.13。
+    # 以前は 9pt のままで、長い名前の後ろが欠けていた)
+    size = {3: 14.0, 4: 11.0}.get(n, max(5.0, round(9.0 * 5 / n, 1)) if n > 5 else 9.0)
     return f' style="font-size:{size}pt"'
+
+
+# LotNo の欄に元の字の大きさ(12pt × 縮小率)で入る字数のめやす(A100000 の形で約3件半)
+LOT_FIT_CHARS = 28
+# これより小さくすると読めないので、ここで折り返して全部見せる
+LOT_MIN_PT = 6.0
+
+
+def lot_style(text: str) -> str:
+    """LotNo の欄。**ロットを欠かさない**(統合 1.2.13)。
+
+    1つの長さに多くのロットがまとまると欄からはみ出し、以前は後ろが切れて刷られていた
+    (欄は折り返さず、はみ出しを隠す作り)。入らないぶんだけ字を小さくし、読める大きさの下限まで
+    来たら折り返して全部見せる。
+    """
+    n = len(text)
+    if n <= LOT_FIT_CHARS:
+        return ""
+    size = 12 * _PT * LOT_FIT_CHARS / n
+    if size >= LOT_MIN_PT:
+        return f"font-size:{size:.1f}pt;"
+    return (f"font-size:{LOT_MIN_PT:.1f}pt;white-space:normal;line-height:1.05;"
+            "word-break:break-all;")
 
 
 # 原紙の明細の行数(定尺8 + 書き足し4)。これより多いときは縮めて収める
@@ -266,19 +291,22 @@ def build_order_sheet_report(sheets: Sequence[OrderSheet]) -> printing.Report:
         # 定尺はマスタ「リプラサイズ」から来るので行が増えることがある(統合 1.2.13)。
         # 原紙の12行より多いときは、行の高さと字を縮めて A5 の半分に収める
         n = len(sheet.rows)
-        tall = big = ""
+        height = font = ""
         if n > ORDER_SHEET_BASE_ROWS:
             k = ORDER_SHEET_BASE_ROWS / n
             # 行の高さは**全部のセル**に当てる(1つでも元の高さだと行が縮まない)
-            tall = f' style="height:{39 * _PT * k:.1f}pt"'
-            big = (f' style="height:{39 * _PT * k:.1f}pt;'
-                   f'font-size:{min(22.0, 39 * k * 0.62) * _PT:.1f}pt"')
+            height = f"height:{39 * _PT * k:.1f}pt;"
+            font = f"font-size:{min(22.0, 39 * k * 0.62) * _PT:.1f}pt;"
+
+        def attr(css: str) -> str:
+            return f' style="{css}"' if css else ""
+
         for r in sheet.rows:
             rows.append(
-                f'<tr class="item"><td class="len"{big}>{esc(r.長さ)}</td>'
-                f'<td class="lot"{tall}>{esc(r.LotNo)}</td>'
-                f'<td class="qty"{big}>{esc(r.数量)}</td>'
-                f'<td class="unit"{tall}>本</td></tr>')
+                f'<tr class="item"><td class="len"{attr(height + font)}>{esc(r.長さ)}</td>'
+                f'<td class="lot"{attr(height + lot_style(r.LotNo))}>{esc(r.LotNo)}</td>'
+                f'<td class="qty"{attr(height + font)}>{esc(r.数量)}</td>'
+                f'<td class="unit"{attr(height)}>本</td></tr>')
 
         cols = "".join(f'<col style="width:{w}">' for w in SHEET_WIDTHS)
         report.add_sheet(

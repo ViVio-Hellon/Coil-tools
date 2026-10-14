@@ -544,3 +544,34 @@ def test_印刷するボタンは紙に出さない():
     outside = re.sub(r"@media screen \{[^{}]*(\{[^{}]*\}[^{}]*)*\}", "", css)
     assert not re.search(r"\.printbar\s*\{[^}]*display:\s*flex", outside)
     assert "@media print { .printbar { display: none !important; } }" in css
+
+
+def test_発注票はロットを欠かさない():
+    """1つの長さに多くのロットがあると欄からはみ出し、以前は後ろが切れて刷られた(統合 1.2.13)。
+    入らないぶん字を小さくし、下限まで来たら折り返して全部見せる。"""
+    from modules.packing_material_calculation.coil_tool import reports
+    from modules.packing_material_calculation.coil_tool.order_sheet_service import SheetRow
+    assert reports.lot_style("A100000 A100001") == ""
+    mid = reports.lot_style(" ".join(f"A{100000 + i}" for i in range(5)))
+    assert "font-size" in mid and "white-space" not in mid
+    many = reports.lot_style(" ".join(f"A{100000 + i}" for i in range(20)))
+    assert "white-space:normal" in many and f"font-size:{reports.LOT_MIN_PT:.1f}pt" in many
+    html = _sheet_html(rows=[SheetRow(長さ="700", LotNo=" ".join(f"A{100000 + i}" for i in range(20)), 数量="4")])
+    assert "A100019" in html
+
+
+def test_発注票は行が多ければ縮めて1枚に収める():
+    """定尺はマスタから来るので12行より多くなることがある(統合 1.2.13)。"""
+    from modules.packing_material_calculation.coil_tool.order_sheet_service import SheetRow
+    rows = [SheetRow(長さ=str(600 + 50 * i), LotNo="A1", 数量="1") for i in range(16)] + [SheetRow() for _ in range(4)]
+    html = _sheet_html(rows=rows)
+    assert html.count('<tr class="item">') == 20
+    k = 12 / 20
+    assert f"height:{39 * 0.8 * k:.1f}pt" in html, "全部のセルに縮めた高さ"
+
+
+def test_依頼者の長い名前も枠に収める():
+    from modules.packing_material_calculation.coil_tool import reports
+    assert reports.name_style("高村") == ""
+    assert "9.0pt" in reports.name_style("高村 敏幸")
+    assert "4.5" not in reports.name_style("長い名前の担当者さん") and "font-size:5" in reports.name_style("長い名前の担当者さんです")
