@@ -238,6 +238,8 @@ class AllSizeService:
 
     def __init__(self, store, kataban_csv: str, kataban_db: str = ""):
         self.store = store
+        self._paths = (kataban_csv, kataban_db)
+        self._stamp = self._stamp_of(kataban_csv, kataban_db)
         try:
             self.master = KatabanMaster.load(kataban_csv, kataban_db)
         except Exception as exc:
@@ -245,11 +247,36 @@ class AllSizeService:
             log.warning("型番マスタを読めません: %s", exc)
             self.master = KatabanMaster([])
 
+    @staticmethod
+    def _stamp_of(csv_path: str, db_path: str):
+        out = []
+        for path in (db_path, csv_path):
+            try:
+                st = os.stat(path) if path else None
+                out.append((path, st.st_mtime, st.st_size) if st else (path, None, None))
+            except OSError:
+                out.append((path, None, None))
+        return tuple(out)
+
+    def refresh(self) -> bool:
+        """型番マスタのファイル(DB・CSV)が変わっていたら読み直す(統合 1.2.16)。
+
+        以前は起動時と設定の変更時にしか読まず、**型番を足しても再起動するまで
+        全サイズの一覧に出なかった**。全サイズの画面を開いたとき・決定・印刷の前に呼ぶ。
+        """
+        stamp = self._stamp_of(*self._paths)
+        if stamp == self._stamp:
+            return False
+        self._stamp = stamp
+        return self.reload_master(*self._paths)
+
     def reload_master(self, csv_path: str, db_path: str = "") -> bool:
         """型番マスタを読み直す（設定でファイルを差し替えたとき）。
 
         読み込めない場合は今の内容を保持して False を返す。
         """
+        self._paths = (csv_path, db_path)
+        self._stamp = self._stamp_of(csv_path, db_path)
         try:
             new = KatabanMaster.load(csv_path, db_path)
         except Exception as exc:
@@ -294,6 +321,7 @@ class AllSizeService:
 
         戻り値は ``{"ok":..., "message":..., "sheets":[...]}``。
         """
+        self.refresh()
         if not combo_text:
             return {"ok": False, "level": "warn",
                     "message": "サイズが選択されていません"}

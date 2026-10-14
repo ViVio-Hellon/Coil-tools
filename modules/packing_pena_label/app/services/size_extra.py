@@ -34,7 +34,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Optional, Tuple
 
 from . import master_admin as MA
-from .size_master import normalize_size_name
+from .size_master import FIRST_EXTRA_OB, normalize_size_name
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ TABLE_NAME = "ペナラベル追加サイズ"
 COLUMNS = ("管理番号", "サイズ名", "巾", "型番", "記号", "備考", "登録日時")
 
 #: 足したサイズの台紙番号はここから(同梱の 1..14 と重ねない)
-FIRST_OB = 15
+FIRST_OB = FIRST_EXTRA_OB
 
 #: 更新の確認を省く時間(秒)。共有フォルダーへの stat を減らす
 DEFAULT_REFRESH_SEC = 5.0

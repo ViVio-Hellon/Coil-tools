@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..models import HbData, MaterialWeights, TIP_DIAMETER
 from ..repositories import material_repo as M
+from . import size_master as SM
 from .vba_compat import (PI, cdbl, cstr, cstr_single, fmt, single, val,
                          ws_round, ws_roundup)
 
@@ -314,6 +315,20 @@ def judge_hb_flag(coil_text: float, cb_key: str, ob_idx: int) -> bool:
     return False
 
 
+#: 足したサイズの HB の本数指定(巾 → Flag=True になる本数)。
+#:
+#: 同梱のサイズの決まり(``judge_hb_flag``)のうち**結果に効くのは「巾 53.5mm で 11 本 / 10 本」だけ**
+#: (``_calc_hb_value`` が見るのは巾と本数。HB590 / HB530 は 53.5mm×11 本 / ×10 本の積み高さ)。
+#: 足したサイズは VBA の決まりに名前が無いので、巾で同じ決まりを当てる。同梱のサイズに当てても
+#: 結果は同じになる(tests/test_new_size_calc.py で全サイズ・1〜20 本を照らしている)
+EXTRA_HB_RULES = {53.5: (11, 10)}
+
+
+def judge_hb_flag_by_width(coil_text: float, width_mm: float) -> bool:
+    """足したサイズの HB フラグ。巾と本数で決める(``EXTRA_HB_RULES``)。"""
+    return coil_text in EXTRA_HB_RULES.get(float(width_mm), ())
+
+
 def calc_hb(table: M.MaterialTable, coil_text: float, width_mm: float,
             tip: str, cb_key: str, ob_idx: int) -> HbData:
     """VBA ``DB_HB`` + ``CalculateHBData``。
@@ -345,7 +360,11 @@ def calc_hb(table: M.MaterialTable, coil_text: float, width_mm: float,
     hb_oct = _unit(table, M.MAT_HB_OCT, missing)
 
     # --- フラグ ---
-    hb.HBFlag = judge_hb_flag(coil_text, cb_key, ob_idx)
+    if SM.is_extra_selection(cb_key, ob_idx):
+        # 足したサイズ(統合 1.2.16)は、VBA の決まりに名前が無い。巾で同じ決まりを当てる
+        hb.HBFlag = judge_hb_flag_by_width(coil_text, hb.col)
+    else:
+        hb.HBFlag = judge_hb_flag(coil_text, cb_key, ob_idx)
 
     # --- 重量 ---
     _calc_hb_value(hb, coil_text, hb590, hb530, hb_calc, hb_oct)

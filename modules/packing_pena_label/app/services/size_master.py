@@ -368,9 +368,23 @@ class SizeMaster:
         return 0.0
 
 
+#: 足したサイズの台紙番号はここから(同梱の 1..14 と重ねない。`size_extra`)
+FIRST_EXTRA_OB = 15
+#: 足したサイズの「丈1・丈2 同時」の番号はここから(同梱の CheckBox1..6 と重ねない)
+EXTRA_CB_BASE = 100
+
+
 def extra_cb_index(ob1: int) -> int:
     """足したサイズの「丈1・丈2 同時」の番号(CheckBox の番号)。同梱の 1..6 と重ねない。"""
-    return 100 + (int(ob1) + 1) // 2
+    return EXTRA_CB_BASE + (int(ob1) + 1) // 2
+
+
+def is_extra_selection(cb_key: str, ob_idx: int) -> bool:
+    """選んでいるのが足したサイズか(丈1/丈2 なら台紙番号、同時なら CheckBox の番号で見る)。"""
+    if int(ob_idx or 0) >= FIRST_EXTRA_OB:
+        return True
+    m = re.fullmatch(r"CheckBox(\d+)", str(cb_key or ""))
+    return bool(m and int(m.group(1)) >= EXTRA_CB_BASE)
 
 
 _default: Optional[SizeMaster] = None

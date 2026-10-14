@@ -195,8 +195,8 @@ legend{font-size:11px; color:var(--muted); padding:0 4px}
 /* ---------- ラベル台紙 ---------- */
 .labelsheet{display:grid; grid-template-columns:1fr 1fr; gap:6px}
 .lbl{border:1px solid #333; padding:4px 6px; background:#fff; font-size:11px}
-.lbl .bc{font-family:"Libre Barcode 39",Consolas,monospace; font-size:13px;
-  letter-spacing:.04em; border-bottom:1px dotted var(--line); margin-bottom:2px}
+.lbl .bc{border-bottom:1px dotted var(--line); margin-bottom:2px; padding:1px 0}
+.lbl .bc svg{display:block}
 .lbl .row{display:flex; gap:6px}
 .lbl .row .k{width:34px; color:var(--muted)}
 .lbl .row .v{flex:1; font-weight:700}

@@ -37,6 +37,10 @@ def _autoprint_script() -> str:
         return ""
     return "<script>window.addEventListener('load',function(){window.print();});</script>"
 
+#: 全サイズ台紙のバーコードの大きさ(mm)。ラベル 1 枚は A4 の半分の幅に 2 列で並ぶ
+ALL_SIZE_BC_W_MM = 60.0
+ALL_SIZE_BC_H_MM = 10.0
+
 #: サイズごとの色クラス（VBA フォームの配色を踏襲）
 _SIZE_CLASS = {
     "0.8mm×53.5mm": "sz-08-53",
@@ -1000,6 +1004,7 @@ class PageRoutes:
         """VBA ``テスラ全サイズ`` UserForm。"""
         self.wf.refresh_sizes()
         svc = self.wf.all_size
+        svc.refresh()                        # 型番マスタに足された型番に追いつく
         st = svc.load_state()
         combo = st.get("comboText", "")
         three = bool(st.get("threeDigit"))
@@ -1166,6 +1171,18 @@ class PageRoutes:
                                '<div class="empty">サイズが指定されていません。</div>', "all",
                                print_only=True)
         n1, n2 = sheet_names(combo)
+        # バーコードは指定サイズのラベルと同じ描き方(既定は SVG。フォントに頼らない)。
+        # 以前は「Libre Barcode 39」の字形に頼った文字で、そのフォントが無い PC では
+        # *型番* の文字がそのまま刷られていた(統合 1.2.16 の検証で見つけた)
+        from ..services import label_sheet as LS
+        mode = self.cfg.barcode_mode or "svg"
+        family = self.cfg.barcode_font_family or ""
+        font_path = self._barcode_font_file()
+
+        def bc(text: str) -> str:
+            return ('<div class="bc">%s</div>'
+                    % LS._barcode_html(text, ALL_SIZE_BC_W_MM, ALL_SIZE_BC_H_MM,
+                                       mode, family, font_path=font_path))
         blocks = []
         for name in (n1, n2):
             data = svc.get_sheet(name)
@@ -1189,7 +1206,7 @@ class PageRoutes:
                         ken = data.get("kensaNo", "")
                         labels.append(
                             f'<div class="lbl">'
-                            f'<div class="bc">*{esc(data.get("kataban",""))}*</div>'
+                            + bc("*%s*" % data.get("kataban", "")) +
                             f'<div class="row"><span class="k">P.N.</span>'
                             f'<span class="v">SEALING PLATE</span></div>'
                             f'<div class="row"><span class="k">L.C.</span>'
@@ -1201,7 +1218,7 @@ class PageRoutes:
                             # 刷る重量は小数1桁(台紙の書式。統合 1.2.6)。バーコードは打ったまま
                             f'<span class="v">{esc(LL.weight_text(wt))}</span>'
                             f'<span class="v" style="flex:0 0 auto">kg</span></div>'
-                            f'<div class="bc">*{esc(ken)}{esc(sub)} {esc(wt)}*</div>'
+                            + bc("*%s%s %s*" % (ken, sub, wt)) +
                             f'<div class="cellref">{esc(size)}</div></div>')
             blocks.append(f'<div class="card"><h2>{esc(name)}（印刷範囲 '
                           f'{esc(data.get("printArea") or "なし")}）</h2>'
@@ -1211,7 +1228,8 @@ class PageRoutes:
                                '<div class="empty">重量インプットがありません。</div>', "all",
                                print_only=True)
         script = _autoprint_script()
-        return self._shell("全サイズ印刷", "".join(blocks), "all", script, print_only=True)
+        return self._shell("全サイズ印刷", self._barcode_font_css() + "".join(blocks), "all",
+                           script, print_only=True)
 
     # ============================================================ 設定
     def settings(self) -> str:
@@ -1382,7 +1400,8 @@ class PageRoutes:
             f'<p class="hint">足したサイズは<b>共有の資材マスタ</b>(表「{esc(SX.TABLE_NAME)}」)に書くので、'
             f'<b>全ラインで</b>選べるようになります(画面に出すかは各PCのチェックで決めます)。'
             f'合言葉が要ります。<br>'
-            f'丈1・丈2 の台紙は台紙の上下とも使い、巾は積み高さ・NW/GW の計算に使います。'
+            f'丈1・丈2 の台紙は台紙の上下とも使い、巾は積み高さ・NW/GW・HB の計算に使います'
+            f'(巾 53.5mm なら 11 本 / 10 本で HB590 / HB530。同梱のサイズと同じ)。'
             f'<b>サイズ(厚み・巾)はあとから直せません</b>。間違えたときは、そのサイズのチェックを外して'
             f'正しいものを足し直してください(型番・記号・備考はマスタ管理で直せます)。<br>'
             f'全サイズの画面の一覧にも出すときは、型番マスタ(表「型番」か型番マスタ CSV)にも同じサイズを足してください。'
