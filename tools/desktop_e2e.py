@@ -365,25 +365,30 @@ STUB = "window.__printed=0; window.print=function(){window.__printed++}"
 def new_window(w: Window, prev: set, path_part: str, sec=12):
     """`prev` に無かった窓のうち、`path_part` を開いているものの handle(無ければ None)。
 
-    窓の数では比べない。Windows(msedgedriver)では、閉じた窓の名残や WebView2 の内部の
-    相手が handle に混ざることがあり、数が1つずれて「窓が開かない」と見誤った
-    (外枠は窓を作っていた: CI の記録では Tauri の窓に report-5 があった)。
+    窓の数では比べない。Windows(msedgedriver)では、開いたとき自分で刷る画面(ペナラベルの
+    印刷ビュー)の**印刷の画面の写し**も同じ道の handle として見える。写しでは画面の script が
+    動いていない(ボタンを押しても何も起きない)ので、script が動いている窓(desktop.js が
+    window.open を置き換えた窓)を選ぶ。見つからなければ道が合うものを返す
     """
-    found = []
+    live, any_match = [], []
 
     def look():
         for h in [h for h in w.handles() if h not in prev]:
             try:
                 w.switch(h)
-                if path_part in (w.js("return location.pathname") or ""):
-                    found.append(h)
+                if path_part not in (w.js("return location.pathname") or ""):
+                    continue
+                if h not in any_match:
+                    any_match.append(h)
+                if w.js("return !/native code/.test(String(window.open))"):
+                    live.append(h)
                     return True
             except Exception:                      # noqa: BLE001 - 読み込み中・名残の handle は飛ばす
                 pass
         w.switch(w.main)
         return False
     until(look, sec, step=0.5)
-    return found[0] if found else None
+    return (live or any_match or [None])[0]
 
 
 def print_window(w: Window, rig: Rig, label: str, opener, path_part: str, button: str, shot=""):
