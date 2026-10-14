@@ -24,6 +24,19 @@ from ..services import label_layout as LL
 from ..services import size_master as SM
 from ..view import Renderer, esc, nl2br
 
+
+#: 窓の通し試験だけが立てる印。立っていれば、印刷ビューを開いたときに自分で刷らない。
+#: Windows(WebView2)では開いたときの window.print() が本物の印刷の画面を出し、閉じるまで
+#: その窓の画面が止まる。WebDriver はその印刷の画面を押せないので、試験ではボタンから刷る
+NO_AUTOPRINT_ENV = "COIL_PACKING_TOOLS_E2E_NO_AUTOPRINT"
+
+
+def _autoprint_script() -> str:
+    """印刷ビューを開いたら、そのまま印刷の画面を出す(VBA の印刷ボタンと同じ流れ)。"""
+    if os.environ.get(NO_AUTOPRINT_ENV) == "1":
+        return ""
+    return "<script>window.addEventListener('load',function(){window.print();});</script>"
+
 #: サイズごとの色クラス（VBA フォームの配色を踏襲）
 _SIZE_CLASS = {
     "0.8mm×53.5mm": "sz-08-53",
@@ -342,7 +355,7 @@ class PageRoutes:
                  '<button class="btn" onclick="window.print()">このまま印刷</button>'
                  '</div>')
         body = head + warn + tools + '<div class="blocks">' + "".join(blocks) + '</div>' + foot
-        script = "<script>window.addEventListener('load',function(){window.print();});</script>" \
+        script = _autoprint_script() \
             if print_view else ""
         return self._shell("風袋計算", body, "tare", script, print_only=print_view)
 
@@ -399,7 +412,7 @@ class PageRoutes:
         body = (head + warn + note + tools +
                 f'<div class="scroll"><table class="tbl"><thead><tr>{heads}</tr></thead>'
                 f'<tbody>{"".join(trs)}</tbody></table></div>' + foot)
-        script = "<script>window.addEventListener('load',function(){window.print();});</script>" \
+        script = _autoprint_script() \
             if print_view else ""
         return self._shell("羅列計算", body, "list", script, print_only=print_view)
 
@@ -566,7 +579,7 @@ class PageRoutes:
                  'target="_blank" rel="noopener">印刷ビューを開く</a>'
                  f'<a class="btn" href="{self.base}/labels">一覧へ戻る</a></div>')
         body = tools + "".join(sections)
-        script = "<script>window.addEventListener('load',function(){window.print();});</script>" \
+        script = _autoprint_script() \
             if print_view else ""
         return self._shell("ラベル台紙", body, "labels", script, print_only=print_view)
 
@@ -1190,8 +1203,7 @@ class PageRoutes:
             return self._shell("全サイズ印刷",
                                '<div class="empty">重量インプットがありません。</div>', "all",
                                print_only=True)
-        script = ("<script>window.addEventListener('load',"
-                  "function(){window.print();});</script>")
+        script = _autoprint_script()
         return self._shell("全サイズ印刷", "".join(blocks), "all", script, print_only=True)
 
     # ============================================================ 設定

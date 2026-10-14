@@ -278,9 +278,14 @@ class Rig:
         self.driver = None
 
     def env(self, **extra):
+        # 印刷ビューを開いたときに自分で刷らせない(ペナラベル `pages.NO_AUTOPRINT_ENV`)。
+        # Windows(WebView2)では開いたときの window.print() が本物の印刷の画面を出し、人が閉じるまで
+        # その窓の画面が止まる(同時に出せる印刷の画面は1つで、出ているあいだは次の窓の
+        # window.print() はすぐ戻る。そのため CI では印刷ビューが1つおきに NG になっていた)。
+        # WebDriver は本物の印刷の画面を押せないので、試験では「印刷する」ボタンから刷る
         env = dict(self.app.env, DISPLAY=self.display, COIL_PACKING_TOOLS_ROOT=str(ROOT),
                    COIL_PACKING_TOOLS_PYTHON=sys.executable, PYTHONDONTWRITEBYTECODE="1",
-                   WEBKIT_DISABLE_COMPOSITING_MODE="1")
+                   WEBKIT_DISABLE_COMPOSITING_MODE="1", COIL_PACKING_TOOLS_E2E_NO_AUTOPRINT="1")
         env.update(extra)
         return env
 
@@ -419,41 +424,16 @@ def print_window(w: Window, rig: Rig, label: str, opener, path_part: str, button
     found = w.js("return document.querySelectorAll(arguments[0]).length", button)
     name = w.text(button)
     clicked = 0
-    how = "マウス"
     if found == 1:
         w.click(button)
         clicked = w.js("return window.__printed")
-        if not clicked:
-            # 印刷ビュー(ペナラベル)は開いたとき自分で刷る。Windows(WebView2)ではその印刷の画面が
-            # 上に重なり、マウスの押下はそちらに届く(人が使うときも同じ: 印刷の画面を閉じてから押す)。
-            # ボタンがつながっているかは、画面の中から押して確かめる
-            w.js("document.querySelector(arguments[0]).click()", button)
-            clicked = w.js("return window.__printed")
-            how = "画面の中から(開いたときの印刷の画面が上にある)"
-        if not clicked:
-            # WebView2 では、開いたとき自分で出した印刷の画面が開いているあいだ、その窓のボタンは
-            # 効かない(印刷の画面を閉じれば効く)。その印刷の画面(同じ道の写し)が出ていれば、
-            # 刷る流れは動いているとみなし、そう記録する
-            clones = []
-            for h in [h for h in w.handles() if h not in prev and h != new]:
-                try:
-                    w.switch(h)
-                    if path_part in (w.js("return location.pathname") or ""):
-                        clones.append(h)
-                except Exception:                  # noqa: BLE001
-                    pass
-            w.switch(new)
-            if clones:
-                clicked = 1
-                how = "開いたときに印刷の画面が出た(WebView2: その間ボタンは効かない)"
     if shot:
         w.shot(rig.shots / f"desktop_{shot}.png")
     w.js("window.close()")
     closed = until(lambda: new not in w.handles(), 8)
     check(f"印刷プレビュー: {label}",
           found == 1 and name == "印刷する" and clicked == 1 and closed,
-          {"道": w_path(path_part), "名前": name, "印刷": clicked, "閉じた": closed,
-           **({} if how == "マウス" else {"押し方": how})})
+          {"道": w_path(path_part), "名前": name, "印刷": clicked, "閉じた": closed})
     if not closed:
         close_others(w)
     w.switch(w.main)
@@ -585,6 +565,13 @@ def scenario_main(rig: Rig):
             w.accept()
         print_window(w, rig, "ペナラベル 小ラベルの印刷(実寸)", labels, "/pena/labels/print",
                      ".printbar [data-print-now]", "pena_labels")
+        # 試験の印(開いたときに刷らない)が exe の中の Python まで届いているか。届いていないと
+        # Windows では印刷ビューが本物の印刷の画面で止まり、下の確かめが1つおきに NG になる
+        w.tab("pena")
+        html = w.js("var x=new XMLHttpRequest();x.open('GET','/pena/tare/print',false);x.send();"
+                    "return x.responseText")
+        check("(準備)印刷ビューを開いたときに刷らない試験の印が届いている",
+              "data-print-now" in html and "window.print();})" not in html)
         for label, path in (("風袋計算の印刷ビュー", "/pena/tare/print"),
                             ("羅列計算の印刷ビュー", "/pena/list/print"),
                             ("ラベル台紙の印刷ビュー", "/pena/labels/sheet?ob=5"),
@@ -596,15 +583,13 @@ def scenario_main(rig: Rig):
                          path.split("?")[0], ".printbar [data-print-now]")
 
         # ---- 画面の色: 別の窓にも届く・印刷の窓は白地のまま
-        # (開いたとき自分で刷らない印刷の窓で見る。自分で刷る窓は、Windows では印刷の画面が
-        #  開いているあいだ画面の動きが止まり、色の知らせを受け取れない)
         w.tab("pena")
         prev = set(w.handles())
-        w.js("window.open('/pena/labels/calibration','_blank','noopener')")
-        other = new_window(w, prev, "/pena/labels/calibration")
+        w.js("window.open('/pena/tare/print','_blank','noopener')")
+        other = new_window(w, prev, "/pena/tare/print")
         if not other:
             check("画面の色: 開いている別の窓にも届く", False,
-                  {"窓が開かない": why_no_window(w, "/pena/labels/calibration")})
+                  {"窓が開かない": why_no_window(w, "/pena/tare/print")})
             close_others(w)
         else:
             w.switch(w.main)
