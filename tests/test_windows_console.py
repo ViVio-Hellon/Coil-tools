@@ -52,7 +52,9 @@ class TasklistTest(unittest.TestCase):
         with mock.patch.object(launch_guard.subprocess, "run", return_value=completed(None)):
             self.assertFalse(launch_guard._is_alive_windows(1))
         with mock.patch.object(launch_guard.subprocess, "run", side_effect=OSError("tasklist なし")):
-            self.assertTrue(launch_guard._is_alive_windows(1), "分からないときは生きている側")
+            self.assertIsNone(launch_guard._is_alive_windows(1), "分からないときは分からないと言う")
+        with mock.patch.object(launch_guard, "process_alive_state", return_value=None):
+            self.assertTrue(launch_guard.is_process_alive(1), "生死の判定は生きている側に倒す")
 
     def test_works_in_utf8_mode_too(self):
         """PC 全体で PYTHONUTF8=1 が入っていても落ちない(-X utf8 で別の Python を起こして確かめる)。"""

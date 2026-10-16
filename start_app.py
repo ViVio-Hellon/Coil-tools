@@ -479,6 +479,10 @@ def start(mode: str, *, open_browser: bool = True) -> int:
         except Exception as exc:                  # noqa: BLE001 - 画面に出して継続
             log().exception("アプリを組み立てられませんでした")
             srv.boot.mark_error(f"アプリを組み立てられませんでした: {exc}")
+            # 理由を出した待機画面のまま残る。stop.bat・画面の「終了する」の合図には待機画面が
+            # 答える(boot_server)。**誰も見ていなければ自分で終わる**(残り続けるとフォルダを
+            # 消せない。業務ツール統合ツール all-tools で起きた不具合と同じ形。統合 1.2.19)
+            _watch_failed_boot(srv)
             _hold_until_stopped(srv, thread)
             return 1
 
@@ -533,6 +537,32 @@ def _close_modules() -> None:
 # ここを過ぎたら**確実に落とす** ── 残ったプロセスは次回の起動で
 # 「すでに起動しています」と判定され、入れ替えた新しい版が動かない
 EXIT_WAIT_SEC = 6.0
+
+
+#: 本体を組み立てられなかったとき、待機画面が誰からも見られなくなってから終わるまで(秒)。
+#: 待機画面は理由を出したあとも 10 秒ごとに様子を聞くので、開いているあいだは終わらない
+FAILED_BOOT_IDLE_SEC = 120.0
+FAILED_BOOT_CHECK_SEC = 5.0
+
+
+def _watch_failed_boot(srv, *, idle_sec: Optional[float] = None,
+                       check_sec: Optional[float] = None) -> threading.Thread:
+    """本体を組み立てられなかった Python を、誰も見ていなければ終わらせる見張り。"""
+    idle = FAILED_BOOT_IDLE_SEC if idle_sec is None else idle_sec
+    step = FAILED_BOOT_CHECK_SEC if check_sec is None else check_sec
+
+    def run() -> None:
+        while not srv.stop_requested:
+            quiet = time.monotonic() - srv.boot.last_seen
+            if quiet >= idle:
+                log().warning("起動できなかった画面が %.0f秒 見られていないので終了します", quiet)
+                srv.stop()
+                return
+            time.sleep(step)
+
+    t = threading.Thread(target=run, name="failed-boot-watch", daemon=True)
+    t.start()
+    return t
 
 
 def _hold_until_stopped(srv, thread) -> None:

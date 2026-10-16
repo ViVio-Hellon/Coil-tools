@@ -321,7 +321,16 @@ def remove_lock(mode: str) -> None:
 # プロセスの生死
 # ------------------------------------------------------------------
 def is_process_alive(pid: int) -> bool:
-    """そのPIDのプロセスが存在するか。中身までは見ない。"""
+    """そのPIDのプロセスが存在するか。中身までは見ない。分からなければ「居る」。"""
+    return process_alive_state(pid) is not False
+
+
+def process_alive_state(pid: int) -> Optional[bool]:
+    """そのPIDのプロセスが居るか。**確かめられなければ None**(tasklist を実行できないなど)。
+
+    止めたあとに「終わりました」と言えるかの判定に使う(統合 1.2.19)。分からないのに
+    「居る」と答えると、止まっていても「まだ動いています」と出してしまう。
+    """
     if pid <= 0:
         return False
     if os.name == "nt":
@@ -367,7 +376,7 @@ def _run_console(args: list, timeout: float = 5) -> bytes:
     return out.stdout or b""
 
 
-def _is_alive_windows(pid: int) -> bool:
+def _is_alive_windows(pid: int) -> Optional[bool]:
     """Windows では `tasklist` で確認する。
 
     `OpenProcess` を ctypes で叩く手もあるが、権限やハンドルの後始末を
@@ -381,7 +390,7 @@ def _is_alive_windows(pid: int) -> bool:
         raw = _run_console(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"])
     except (OSError, subprocess.SubprocessError) as exc:
         log.warning("tasklist を実行できませんでした: %s", exc)
-        return True              # 分からないときは「生きている」に倒す(続く起動確認で見分ける)
+        return None              # 分からない(is_process_alive は「生きている」に倒す)
     return f'"{pid}"'.encode("ascii") in raw
 
 

@@ -5,10 +5,18 @@
 そのあとに待機画面を出していたら、「待たせるために見せるもの」を
 待たせていることになります ── 出す意味がありません。
 
-そこで、待ち受けだけを先に始めます。ここが答えるのは2つだけ:
+そこで、待ち受けだけを先に始めます。ここが答えるのは3つだけ:
 
     GET /             待機画面(1往復で出る。外部への要求は無し)
     GET /api/health   まだ準備できていないことを、本体と同じ形で返す
+    POST /api/shutdown 止める合図(stop.bat・待機画面の「終了する」。トークンが要る)
+
+【止める合図に答える(統合 1.2.19)】
+本体を組み立てられなかったとき(フォルダの一部が欠けた・設定が壊れたなど)、Python は
+この待機画面で理由を出したまま残る。以前はここが止める合図に答えず(503)、stop.bat は
+PID で落とすしかなかった。PID で落とす前の照合(コマンドラインの読み取り)ができない PC では
+止められず、フォルダも消せなくなる(業務ツール統合ツール all-tools で起きた不具合と同じ形)。
+いまは合図に答えて自分で終わる。
 
 `common.boot_screen` と `common.app_config` 以外は読み込みません
 (Flask も、業務のモジュールも読みません)。
@@ -21,8 +29,10 @@
 """
 from __future__ import annotations
 
+import hmac
 import json
 import threading
+import time
 from typing import Any, Callable, Optional
 
 from common import app_config, boot_screen
@@ -52,6 +62,11 @@ class BootApp:
         self.stage_key = "prepare"
         self.startup_error = ""
         self._page: Optional[bytes] = None
+        #: 止める合図を受けたときに呼ぶ(`AppServer.stop`)。無ければ合図に答えない
+        self.on_shutdown: Optional[Callable[[], None]] = None
+        #: 待機画面(か stop.bat・ランチャー)が最後に様子を聞いた時刻。
+        #: 本体を組み立てられなかったとき、誰も見ていなければ自分で終わるのに使う
+        self.last_seen = time.monotonic()
 
     # -- 状態 ---------------------------------------------------------
     def mark_stage(self, stage: str, key: str = "prepare") -> None:
@@ -102,7 +117,10 @@ class BootApp:
     def __call__(self, environ: dict, start_response: Callable) -> list:
         path = environ.get("PATH_INFO", "/")
         if path == "/api/health":
+            self.last_seen = time.monotonic()
             return _json(start_response, self.health())
+        if path == "/api/shutdown":
+            return self._shutdown(environ, start_response)
         if path == "/" or path == "":
             body = self.page()
             start_response("200 OK", [
@@ -114,6 +132,26 @@ class BootApp:
             return [body]
         # 業務の要求。まだ答えられないので、そう言う
         return _json(start_response, _NOT_READY, status="503 Service Unavailable")
+
+
+    def _shutdown(self, environ: dict, start_response: Callable) -> list:
+        """止める合図。**トークンが合うときだけ**終わる(ほかのアプリ・ページから落とされない)。"""
+        if environ.get("REQUEST_METHOD", "GET").upper() != "POST":
+            return _json(start_response, {"error": {"code": "method", "message": "POST で送ってください"}},
+                         status="405 Method Not Allowed")
+        given = str(environ.get("HTTP_X_TOOL_TOKEN") or "")
+        if not (self.token and hmac.compare_digest(given, self.token)):
+            return _json(start_response, {"error": {"code": "token", "message": "トークンが違います"}},
+                         status="403 Forbidden")
+        if self.on_shutdown is None:
+            return _json(start_response, _NOT_READY, status="503 Service Unavailable")
+        log.info("待機画面で止める合図を受けました(本体: %s)",
+                 "組み立てられなかった" if self.startup_error else "組み立て中")
+        # 返事を返してから止める(先に止めると、合図を送った側に返事が届かない)
+        timer = threading.Timer(0.3, self.on_shutdown)
+        timer.daemon = True
+        timer.start()
+        return _json(start_response, {"stopped": True, "message": "終了します"})
 
 
 class Handover:

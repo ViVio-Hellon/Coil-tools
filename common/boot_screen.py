@@ -197,6 +197,11 @@ body::after{
   .bar[data-mode="wait"] i{animation:none; left:0; width:100%}
   .bar i{transition:none}
 }
+.quit{margin-top:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+.quit button{font:inherit; padding:6px 14px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--bar-alert,#ffc4bf); background:transparent; color:inherit}
+.quit button:disabled{opacity:.5; cursor:default}
+.quit span{font-size:12px; opacity:.85}
 @media (max-width:480px){
   .boot{padding:26px 22px 22px; border-radius:14px}
   .steps{grid-template-columns:repeat(2,1fr); gap:10px}
@@ -261,6 +266,10 @@ def render(*, display_name: str, version_label: str, token: str, app_id: str,
     <h2 id="troubleTitle">起動できませんでした</h2>
     <p id="troubleBody"></p>
     <p style="margin-top:8px">ログ: <code>{_esc(_log_location())}</code></p>
+    <p class="quit" id="quitRow" hidden>
+      <button type="button" id="quitBtn">このまま終了する</button>
+      <span id="quitNote">原因を直してから、もう一度起動してください。この画面を閉じても、しばらくすると自動で終わります。</span>
+    </p>
   </div>
 </main>
 <script>{_SCRIPT}</script>
@@ -327,6 +336,34 @@ function bootWatch(opt) {
     fill.style.background = "var(--bar-alert, #ffc4bf)";
   }
 
+  // 起動できなかったとき(本体を組み立てられなかった): 理由を出したまま Python が残る。
+  // 開いているあいだはときどき様子を聞き(閉じれば Python は自分で終わる)、
+  // 「このまま終了する」で止める合図を送る(統合 1.2.19)
+  function watchFailed() {
+    var row = document.getElementById("quitRow");
+    var btn = document.getElementById("quitBtn");
+    var note = document.getElementById("quitNote");
+    if (!row || !btn) return;
+    row.hidden = false;
+    var beat = setInterval(function () {
+      fetch("/api/health", { cache: "no-store" }).catch(function () {});
+    }, 10000);
+    btn.addEventListener("click", function () {
+      btn.disabled = true;
+      fetch("/api/shutdown", { method: "POST", cache: "no-store",
+                              headers: { "X-Tool-Token": opt.token, "Content-Type": "application/json" },
+                              body: "{}" })
+        .then(function (res) {
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          clearInterval(beat);
+          note.textContent = "終了しました。この画面を閉じてください。";
+        }).catch(function (e) {
+          btn.disabled = false;
+          note.textContent = "終了できませんでした(" + e.message + ")。stop.bat で止めてください。";
+        });
+    });
+  }
+
   upto("prepare");
 
   function poll() {
@@ -341,7 +378,7 @@ function bootWatch(opt) {
       }
       misses = 0;
 
-      if (health.startup_error) { fail("起動できませんでした", health.startup_error); return; }
+      if (health.startup_error) { fail("起動できませんでした", health.startup_error); watchFailed(); return; }
       if (health.ready) {
         order.forEach(function (k) { setStep(k, "done"); });
         nowText.textContent = "起動しました";

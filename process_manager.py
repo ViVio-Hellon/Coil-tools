@@ -63,6 +63,8 @@ log = get_logger("coil_packing_tools", "process_manager")
 GRACEFUL_WAIT_SEC = 8.0
 # PIDで落としたあと、消えるのを待つ上限(秒)
 FORCE_WAIT_SEC = 5.0
+#: 止めたあと、プロセスの有無を確かめられなかったときに添える(待ち受けが閉じたのは確かめた)
+UNSURE_NOTE = "(待ち受けは閉じました。プロセスが居なくなったかは確かめられませんでした)"
 # 画面で確かめてもらうのを待つ上限(秒)。ランチャーは stop.bat を 20 秒で見切る
 ASKING_WAIT_SEC = 15.0
 
@@ -166,15 +168,21 @@ def stop(mode: str, *, force: bool = False) -> StopResult:
                           f"    中断して止めるには --force を付けてください")
         return result
 
+    # 待ち受けが閉じただけでは「終わった」と言わない。**プロセスが居なくなったか**まで見る
+    # (統合 1.2.19。業務ツール統合ツール all-tools では、止まったかを確かめずに「終わって
+    # もらいました」と出し、残った Python のせいでフォルダを消せなかった)
     if asked.get("ok") and _wait_gone(info.port, GRACEFUL_WAIT_SEC):
-        launch_guard.remove_lock(mode)
-        result.stopped = True
-        result.method = "graceful"
-        result.message = "正常に終了しました"
-        return result
+        gone = _confirm_gone(info, GRACEFUL_WAIT_SEC)
+        if gone is not False:
+            launch_guard.remove_lock(mode)
+            result.stopped = True
+            result.method = "graceful"
+            result.message = ("終了しました(起動できなかった画面から)" if health.get("startup_error")
+                              else "正常に終了しました") + ("" if gone else UNSURE_NOTE)
+            return result
 
-    # --- 2. 応答しないときだけPIDを使う ---
-    return _stop_by_pid(mode, info, result, force=force)
+    # --- 2. 応答しないとき・終わりきらないときだけPIDを使う ---
+    return _stop_by_pid(mode, info, result, force=force, health=health)
 
 
 def _request_shutdown(port: int, token: str, *, force: bool) -> dict:
@@ -216,8 +224,13 @@ def _request_shutdown(port: int, token: str, *, force: bool) -> dict:
         return {"ok": False}
 
 
-def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool) -> StopResult:
-    """PIDで止める。**落とす前に本当にこのアプリかを確かめる。**"""
+def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool,
+                 health: Optional[dict] = None) -> StopResult:
+    """PIDで止める。**落とす前に本当にこのアプリかを確かめる。**
+
+    ``health`` はそのアプリ自身の答え(`/api/health`)。app_id・mode・pid がロックと合っていれば、
+    それで本人と分かる(コマンドラインを読めない PC でも止められる)。
+    """
     import launch_guard
 
     if not launch_guard.is_process_alive(info.pid):
@@ -227,7 +240,7 @@ def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool) -> StopRes
         result.message = "すでに終了していました"
         return result
 
-    if not _looks_like_our_process(info):
+    if not (_answered_as_us(info, mode, health) or _looks_like_our_process(info)):
         result.message = (
             f"pid {info.pid} はこのアプリではないようなので止めません。\n"
             f"    手動で確認してください(ロック: {launch_guard.lock_path(mode)})")
@@ -241,11 +254,12 @@ def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool) -> StopRes
         result.message = f"停止できませんでした: {exc}"
         return result
 
-    if _wait_pid_gone(info.pid, FORCE_WAIT_SEC):
+    gone = _confirm_gone(info, FORCE_WAIT_SEC)
+    if gone is not False:
         launch_guard.remove_lock(mode)
         result.stopped = True
         result.method = "sigterm"
-        result.message = "終了しました"
+        result.message = "終了しました" + ("" if gone else UNSURE_NOTE)
         return result
 
     if not force:
@@ -258,11 +272,30 @@ def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool) -> StopRes
     except OSError as exc:
         result.message = f"強制終了できませんでした: {exc}"
         return result
+    # 落としたつもりで「強制終了しました」と言わない。居なくなったのを確かめてから言う。
+    # 残っていればロックも残す(次の起動・stop.bat が、まだ居ることを分かるように)
+    gone = _confirm_gone(info, FORCE_WAIT_SEC)
+    if gone is False:
+        result.message = (f"強制終了を頼みましたが、まだ動いています(pid {info.pid})。\n"
+                          "    タスクマネージャーで python を確かめてください")
+        log.warning("pid=%s が強制終了のあとも残っています", info.pid)
+        return result
     launch_guard.remove_lock(mode)
     result.stopped = True
     result.method = "sigkill"
-    result.message = "強制終了しました"
+    result.message = "強制終了しました" + ("" if gone else UNSURE_NOTE)
     return result
+
+
+def _answered_as_us(info, mode: str, health: Optional[dict]) -> bool:
+    """そのアプリ自身が「自分だ」と答えたか(app_id・mode・pid がロックと合う)。"""
+    import launch_guard
+
+    try:
+        return bool(health) and launch_guard.is_our_app(health, mode) \
+            and int(health.get("pid") or 0) == int(info.pid)
+    except (TypeError, ValueError):
+        return False
 
 
 def _looks_like_our_process(info) -> bool:
@@ -300,15 +333,32 @@ def _wait_gone(port: int, timeout: float) -> bool:
     return False
 
 
-def _wait_pid_gone(pid: int, timeout: float) -> bool:
+def _wait_pid_gone(pid: int, timeout: float) -> Optional[bool]:
+    """居なくなるまで待つ。True: 居なくなった / False: まだ居る / None: 確かめられない。"""
     import launch_guard
 
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not launch_guard.is_process_alive(pid):
+    while True:
+        state = launch_guard.process_alive_state(pid)
+        if state is False:
             return True
+        if state is None:
+            return None
+        if time.monotonic() >= deadline:
+            return False
         time.sleep(0.2)
-    return False
+
+
+def _confirm_gone(info, timeout: float) -> Optional[bool]:
+    """止めたあと、本当に居なくなったか。
+
+    True: 居なくなった / False: まだ居る / None: プロセスの有無は確かめられないが、
+    待ち受けは閉じている(tasklist を実行できない PC)。待ち受けも残っていれば False。
+    """
+    gone = _wait_pid_gone(info.pid, timeout)
+    if gone is None:
+        return None if _wait_gone(info.port, timeout) else False
+    return gone
 
 
 # ------------------------------------------------------------------
