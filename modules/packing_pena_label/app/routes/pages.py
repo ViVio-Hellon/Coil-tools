@@ -22,6 +22,7 @@ from typing import Dict, List
 from ..config import code_stamp as _code_stamp
 from ..services import label_layout as LL
 from ..services import size_master as SM
+from ..services import tare_figure as TF
 from ..view import Renderer, esc, nl2br
 
 
@@ -347,7 +348,8 @@ class PageRoutes:
                 f'　<span style="font-weight:400">巾{esc(p["width"])}mm / '
                 f'外径{esc(p["tempDiameter"])} / 外周{esc(p["gai"])}m / '
                 f'梱包高さ{esc(p["taDisplay"])}mm</span></h3>'
-                f'<table><tbody>{"".join(rows)}</tbody></table></div>')
+                f'<table><tbody>{"".join(rows)}</tbody></table>'
+                + ("" if print_view else TF.figure_html(p)) + '</div>')
 
         warn = ""
         missing = sorted({m for p in data.values() for m in p.get("missing", [])})
@@ -364,7 +366,9 @@ class PageRoutes:
                  '印刷ビューを開く</a>'
                  '<button class="btn" onclick="window.print()">このまま印刷</button>'
                  '</div>')
-        body = head + warn + tools + '<div class="blocks">' + "".join(blocks) + '</div>' + foot
+        # 画面では梱包ごとに図(断面図・重さの内訳)を出すので、1 列に並べて図を大きく見せる
+        grid = "blocks" if print_view else "blocks blocks--fig"
+        body = head + warn + tools + f'<div class="{grid}">' + "".join(blocks) + '</div>' + foot
         script = _autoprint_script() \
             if print_view else ""
         return self._shell("風袋計算", body, "tare", script, print_only=print_view)

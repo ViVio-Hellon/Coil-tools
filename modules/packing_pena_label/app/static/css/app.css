@@ -184,6 +184,24 @@ legend{font-size:11px; color:var(--muted); padding:0 4px}
 .block td.v{text-align:right; width:84px; font-variant-numeric:tabular-nums; white-space:nowrap}
 .block td.f{font-size:10px; color:var(--muted); word-break:break-all}
 .block tr.sum td{font-weight:700; background:#f4f6f9}
+/* 風袋計算の図(統合 1.2.21): 断面図と重さの内訳。画面だけ(印刷は表のまま) */
+.blocks--fig{grid-template-columns:1fr}
+.tfig{border-top:1px solid var(--line); padding:6px 8px 8px}
+.tfig summary{cursor:pointer; font-size:12px; font-weight:700; color:var(--ink)}
+.tfig-row{display:grid; grid-template-columns:repeat(auto-fit,minmax(380px,1fr)); gap:14px; margin-top:6px}
+.tfig figure{margin:0; min-width:0}
+.tfig svg{width:100%; height:auto; display:block; color:var(--ink)}
+.tfig figcaption{font-size:11px; color:var(--muted); text-align:center}
+.tfig text{fill:currentColor; font-family:inherit}
+.tfig .tf-sm{font-size:11px; opacity:.85}
+.tfig .tf-lab{font-size:12px}
+.tfig .tf-v{font-weight:700; font-variant-numeric:tabular-nums}
+.tfig .tf-h{font-size:14px; font-weight:700}
+.tfig .tf-f{font-size:10.5px; opacity:.72}
+.tfig .tf-in{font-size:12px; font-weight:700; fill:#1d2733}
+.tfig .tf-note{font-size:10px; opacity:.7}
+.tfig .tf-dim line{stroke:currentColor; stroke-width:1; opacity:.7}
+.tfig .tf-floor{stroke:currentColor; stroke-width:1.5; opacity:.6}
 .empty{padding:20px; text-align:center; color:var(--muted)}
 .warnbox{border:1px solid #e5c790; background:#fdf3e0; color:var(--warn);
   padding:8px 10px; border-radius:var(--r); margin-bottom:10px; line-height:1.6}

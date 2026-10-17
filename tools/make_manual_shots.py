@@ -500,6 +500,12 @@ def pena_scene(app, ctx, sh, cam):
     fr.wait_for_timeout(500)
     cam.take("pena-tare-view", pg, clip=clip, marks=[
         (1, box_of(fr, 'a[data-pane="tare"]'), "b"), (2, box_of(fr, 'a[href$="/tare/print"]'))])
+    # 図で見る(断面図・重さの内訳。統合 1.2.21)。1 梱包目の図を、画面に入る範囲で撮る
+    into_view(fr, ".tfig", "center")
+    fb = box_of(fr, ".tfig")
+    cam.take("pena-tare-figure", pg, clip=(max(fb[0], clip[0]), max(fb[1], clip[1]),
+                                           min(fb[2], clip[2]), min(fb[3], clip[3])))
+    into_view(fr, "h2, h3", "start")
     tare = new_page(ctx, lambda: fr.click('a[href$="/tare/print"]'))
     cam.take("pena-tare-print", tare, marks=[(1, box_of(tare, ".printbar [data-print-now]"), "r")])
     tare.close()

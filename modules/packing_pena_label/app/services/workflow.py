@@ -473,6 +473,9 @@ class Workflow:
             "rows": rows,
             "display": disp,
             "breakdown": mat.formulas,
+            # 丸める前の 風袋・GW(図で「36.948 → 37.0」と丸めの前後を出す。統合 1.2.21)
+            "huRaw": fmt(mat.HU, "0.000"),
+            "gwRaw": fmt(mat.GW, "0.000"),
             "taDisplay": fmt(ws_roundup(mat.KTA, -1), "0.0"),
             "coilHeightMm": fmt(mat.TA * 1000, "0.0"),
             "gai": fmt(mat.GAI, "0.000"),

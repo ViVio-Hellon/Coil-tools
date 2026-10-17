@@ -1,0 +1,135 @@
+# -*- coding: utf-8 -*-
+"""風袋計算の図(断面図・重さの内訳。統合 1.2.21・現場の求め)
+
+図は計算しない。風袋計算の結果(`Workflow._tare_payload`)をそのまま描く。ここで見ること:
+
+- 9 資材・NW・風袋・GW の数が、表と同じ文字で出ている(図と表で食い違わない)
+- 丸める前の 風袋・GW と、表示の値(四捨五入)の両方が出ている
+- 高さの式(積高・梱包高さ・10mm 切り上げ)とエサフォームの周回(積高 820mm 超で 2 周)
+- ハードボードの数え方(固定物 HB590 / HB530 か、標準か)
+- 画面の風袋計算にだけ出て、印刷ビューには出ない
+- SVG として読める(文字の逃がし漏れが無い)
+"""
+import re
+import unittest
+import xml.etree.ElementTree as ET
+
+from modules.packing_pena_label.app.services import tare_calc as TC
+from modules.packing_pena_label.app.services import tare_figure as TF
+from modules.packing_pena_label.app.services.workflow import Workflow
+
+from .test_new_size_calc import _table
+
+
+def _payload(n, width=53.5, tip="TIP1000", ob=9, t=15.0):
+    mat = TC.calculate_materials(_table(), float(n), 1, width, tip, "", ob, t, t, True, False)
+    return Workflow._tare_payload(None, 1, float(n), mat, t, t), mat
+
+
+def _svgs(html):
+    return re.findall(r"<svg.*?</svg>", html, re.S)
+
+
+class TareFigureTest(unittest.TestCase):
+    def test_numbers_are_the_same_text_as_the_table(self):
+        p, _ = _payload(11)
+        html = TF.figure_html(p)
+        for key, *_ in TF.ITEMS:
+            self.assertIn(f'{p["display"][key]}kg', html, key)
+        self.assertIn(f'NW {p["display"]["NW"]}kg', html)
+        self.assertIn(f'GW {p["display"]["GW"]}kg', html)
+        self.assertIn(f'表示 {p["display"]["HU"]}kg', html)
+
+    def test_raw_and_rounded_totals(self):
+        p, mat = _payload(11)
+        self.assertEqual(p["huRaw"], "%.3f" % mat.HU)
+        self.assertEqual(p["gwRaw"], "%.3f" % mat.GW)
+        html = TF.breakdown_svg(p)
+        self.assertIn("165.0 + %.3f = %.3f" % (mat.HU, mat.GW), html)
+        self.assertIn(f'→ GW {p["display"]["GW"]}kg', html)
+
+    def test_old_payload_without_raw_totals_falls_back_to_the_items(self):
+        p, mat = _payload(11)
+        p.pop("huRaw"), p.pop("gwRaw")
+        hu, gw = TF.raw_totals(p)
+        self.assertAlmostEqual(hu, mat.HU, delta=0.01)
+        self.assertAlmostEqual(gw, mat.GW, delta=0.01)
+
+    def test_height_formula(self):
+        p, mat = _payload(11)
+        html = TF.section_svg(p)
+        self.assertIn("コイル積高 = 11本 × 53.5mm + チップボール 12枚 × 0.7mm = 596.9mm", html)
+        self.assertIn("= 901.6 → 910.0mm(10mm 単位で切り上げ)", html)
+        self.assertEqual(p["taDisplay"], "910.0")
+
+    def test_esa_wraps_follow_the_stack_height(self):
+        low, _ = _payload(11)      # 596.9mm
+        high, _ = _payload(20)     # 1084.7mm
+        self.assertIn("エサフォーム 1周", TF.section_svg(low))
+        self.assertIn("≦ 820mm なので 1 周", TF.breakdown_svg(low))
+        self.assertIn("エサフォーム 2周", TF.section_svg(high))
+        self.assertIn("> 820mm なので 2 周", TF.breakdown_svg(high))
+
+    def test_hb_kind(self):
+        p, _ = _payload(11)
+        self.assertEqual(TF.hb_kind(p), "標準(外周+700mm × 積高)")
+        for kind in ("HB590", "HB530"):
+            q = dict(p, breakdown=dict(p["breakdown"], HBsiki=f"【ハードボード】{kind}*2000 上下2枚"))
+            self.assertEqual(TF.hb_kind(q), f"固定物 {kind}")
+
+    def test_svg_is_well_formed_for_every_tip_and_count(self):
+        for tip in ("TIP1000", "TIP950", "TIP820"):
+            for n in (1, 4, 11, 20):
+                p, _ = _payload(n, tip=tip)
+                for svg in _svgs(TF.figure_html(p)):
+                    ET.fromstring(svg)          # 読めなければ例外
+
+    def test_labels_stay_inside_the_drawing(self):
+        for n in (1, 11, 20):
+            p, _ = _payload(n)
+            svg = TF.section_svg(p)
+            height = float(re.search(r'viewBox="0 0 \d+ (\d+)"', svg).group(1))
+            ys = [float(y) for y in re.findall(r'<text x="[\d.]+" y="([-\d.]+)" class="tf-lab"', svg)]
+            self.assertEqual(len(ys), 9, n)
+            self.assertTrue(all(0 < y < height for y in ys), (n, ys))
+            gaps = [b - a for a, b in zip(sorted(ys), sorted(ys)[1:])]
+            self.assertTrue(all(g >= 12 for g in gaps), (n, gaps))
+
+    def test_small_shares_are_not_shown_as_zero(self):
+        self.assertEqual(TF._pct(0.5, 100), "0.5%")
+        self.assertEqual(TF._pct(0.02, 100), "0.1%未満")
+        self.assertEqual(TF._pct(42.4, 100), "42%")
+
+
+class TarePageTest(unittest.TestCase):
+    """画面の風袋計算にだけ出て、印刷ビューには出ない。"""
+
+    def test_screen_has_figures_print_view_does_not(self):
+        from modules.packing_pena_label.app.routes.pages import PageRoutes as Pages
+
+        p, _ = _payload(11)
+
+        class Store:
+            def all_tare(self):
+                return {1: p}
+
+        class WF:
+            store = Store()
+
+            def load_state(self):
+                from modules.packing_pena_label.app.models import FormState as WorkState
+                return WorkState()
+
+        pages = Pages.__new__(Pages)
+        pages.wf = WF()
+        pages.cfg = type("Cfg", (), {"url_prefix": ""})()
+        pages._shell = lambda title, body, active, script="", print_only=False: body
+        screen = pages.tare(print_view=False)
+        printed = pages.tare(print_view=True)
+        self.assertIn('class="tfig no-print"', screen)
+        self.assertIn("blocks--fig", screen)
+        self.assertNotIn("tfig", printed)
+
+
+if __name__ == "__main__":
+    unittest.main()
