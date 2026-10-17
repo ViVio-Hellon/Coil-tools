@@ -394,10 +394,23 @@ function printTargets() {
 // ------------------------------------------------------------------
 // 操作
 // ------------------------------------------------------------------
+/*
+  作業の操作は**押した順に1つずつ**送る(統合 1.2.20)。重量は欄を離れたとき(`change`)に
+  送るので、入れてすぐ「条番号表示」などを押すと2つの要求が同時に出る。サーバは書き込みを
+  1つずつ通すが、**どちらが先かは決まらない**(資材計算では前の値で計算した結果が出た)。
+  前の返事を待ってから次を送れば、押した順に処理されて、押した順に描かれる。
+*/
+let sendChain = Promise.resolve();
+function queued(path, data) {
+  const run = sendChain.then(() => api.post(path, data));
+  sendChain = run.catch(() => {});
+  return run;
+}
+
 /** サーバを呼んで、返ってきた画面を描く。 */
 async function send(path, data, onDone) {
   try {
-    const body = await api.post(path, data);
+    const body = await queued(path, data);
     if (body.confirm) return body;          // 確認が要る。呼び元が扱う
     if (body.state) render(body.state);
     if (body.message) notify(body.message, "ok");

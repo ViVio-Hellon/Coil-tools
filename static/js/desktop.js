@@ -79,6 +79,51 @@
     };
   }
 
+  // 印刷の画面は**同時に1つしか出ない**(WebView2)。ほかの窓で印刷の画面が開いたままだと、
+  // この窓の window.print() は何も出さずにすぐ戻る(CI で確かめた。統合 1.2.20)。続けて
+  // 別のツールで刷ろうとして「押しても何も出ない」にならないよう、出なかったら知らせる。
+  // 出たかは「印刷の前の合図(beforeprint)が来たか」と「すぐ戻ったか」の両方で見る
+  // (印刷の画面が出ているあいだは戻らない)。どちらか片方なら知らせない(誤って出さない側)
+  var nativePrint = window.print;
+  if (typeof nativePrint === "function") {
+    window.print = function () {
+      var shown = false;
+      var mark = function () { shown = true; };
+      window.addEventListener("beforeprint", mark);
+      var started = Date.now();
+      try { nativePrint.call(window); }
+      finally { window.removeEventListener("beforeprint", mark); }
+      if (!shown && Date.now() - started < 400) printBusy();
+    };
+  }
+  function printBusy() {
+    var id = "cptPrintBusy";
+    var box = document.getElementById(id);
+    if (!box) {
+      var style = document.createElement("style");
+      style.textContent = "@media print{#" + id + "{display:none!important}}";
+      document.head.appendChild(style);
+      box = document.createElement("div");
+      box.id = id;
+      box.setAttribute("role", "alert");
+      box.style.cssText = "position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:2147483647;" +
+        "max-width:min(560px,calc(100% - 24px));padding:12px 14px;border-radius:8px;" +
+        "background:#fff4e5;color:#5a3300;border:1px solid #f0b46a;box-shadow:0 4px 16px rgba(0,0,0,.18);" +
+        "font:14px/1.6 'Yu Gothic UI','Meiryo',sans-serif";
+      var text = document.createElement("div");
+      text.textContent = "印刷の画面を出せませんでした。ほかの窓で印刷の画面が開いたままになっていないか" +
+        "見てください。開いていれば、そちらを済ませるか閉じてから、もう一度「印刷する」を押してください。";
+      var close = document.createElement("button");
+      close.type = "button";
+      close.textContent = "閉じる";
+      close.style.cssText = "margin-top:8px;font:inherit;padding:2px 12px;cursor:pointer";
+      close.addEventListener("click", function () { box.remove(); });
+      box.appendChild(text);
+      box.appendChild(close);
+    }
+    (document.body || document.documentElement).appendChild(box);
+  }
+
   // いちばん外の窓(帳票・印刷ビューの窓)の「閉じる」は外枠に閉じてもらう。
   // 統合画面の窓(main)を閉じると、外枠が「終了しますか」の確認を通す
   if (window === top) {

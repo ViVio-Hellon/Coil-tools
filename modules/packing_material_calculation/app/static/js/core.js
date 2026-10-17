@@ -39,8 +39,27 @@ function makeScreenId() {
 
 export const screenId = makeScreenId();
 
+/*
+  作業状態(計算・チェックリスト・発注票)を書く要求は、**押した順に1つずつ**送る(統合 1.2.20)。
+
+  検入数は欄を離れたとき(`change`)に送る。入れてすぐ「計算」を押すと、検入数の送信と
+  計算が同時に出て、サーバが計算を先に済ませると**前の検入数の台数**が出た(通し試験で
+  再現。返事の順が入れ替わると、出た結果を古い画面で上書きすることもある)。前の要求の
+  返事を待ってから次を送れば、押した順に処理されて押した順に描かれる。
+  サーバ側も同じ経路を1つずつ通す(`app/__init__.py` の `WORK_PREFIXES`)。
+*/
+const WORK_PATHS = ['/api/calc', '/api/checklist', '/api/order'];
+let workChain = Promise.resolve();
+
 /** サーバへ投げる。断りは例外にせず、そのまま返す。 */
-export async function call(path, body) {
+export function call(path, body) {
+  if (body === undefined || !WORK_PATHS.some(p => path.startsWith(p))) return send(path, body);
+  const run = workChain.then(() => send(path, body));
+  workChain = run.catch(() => {});
+  return run;
+}
+
+async function send(path, body) {
   const opt = {
     method: body === undefined ? 'GET' : 'POST',
     // 符牒は**書き込みのたびに**添える。画面の覆いは次の心拍まで

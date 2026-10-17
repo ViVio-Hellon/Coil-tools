@@ -1152,9 +1152,9 @@ class PageRoutes:
     } else if(b.id==="asPrint"){
       pplPost("/api/all-size/print-targets",{comboText:v("asCombo")}).then(function(j){
         if(!j.ok){pplToast(j.message,"warn");return;}
-        if(window.confirm(j.message)){
-          window.open(pplUrl("/all-size/print?combo="+encodeURIComponent(v("asCombo"))),
-                      "_blank","noopener");}});
+        // 画面の中で確かめ、OK を押したその操作で開く(window.confirm のあとだとポップアップの
+        // ブロックに止められることがある。統合 1.2.20。app.js の pplConfirmOpen)
+        pplConfirmOpen(j.message, pplUrl("/all-size/print?combo="+encodeURIComponent(v("asCombo"))));});
     } else if(b.id==="asClear"){
       if(!window.confirm("この台紙の反映内容を消します。よろしいですか？")){return;}
       pplPost("/api/all-size/prepare",{comboText:v("asCombo")}).then(function(j){

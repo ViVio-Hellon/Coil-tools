@@ -30,6 +30,7 @@ Blueprint(入れ子。`material` の下に `health` / `calc` / `checklist` /
 from __future__ import annotations
 
 import secrets
+import threading
 import time
 from collections import ChainMap
 from pathlib import Path
@@ -116,6 +117,7 @@ def build_blueprint(url_prefix: str = DEFAULT_PREFIX) -> Blueprint:
 
     _register_security(bp, prefix)
     _register_db(bp)
+    _register_work_lock(bp, prefix)
     _register_routes(bp)
     return bp
 
@@ -182,6 +184,34 @@ def _register_db(bp: Blueprint) -> None:
         conn = g.pop("db", None)
         if conn is not None:
             conn.close()
+
+
+# ------------------------------------------------------------------
+# 作業状態の順番待ち(統合 1.2.20)
+# ------------------------------------------------------------------
+#: 作業状態(計算の入力と結果・チェックリスト・発注票)を読み書きする経路。
+#: 作業状態はプロセスに1組(`session`)で、計算は「いったん結果を消してから出し直す」
+#: (`CalcState.soft_clear`)。**2つの要求が重なると、片方が消した直後の空の結果を返す**
+#: (「計算」の二度押し・同時の計算で台数が空になった。通し試験で見つかった)
+WORK_PREFIXES = ("/api/calc", "/api/checklist", "/api/order")
+
+# 1つずつ通す。重なるのは二度押しか、欄を離れたときの送信と「計算」が同時に出たときで、
+# 待たせても誰も困らない(どれも一瞬で終わる)。取り込み・設定・マスタ管理・心拍は待たせない
+_WORK_LOCK = threading.RLock()
+
+
+def _register_work_lock(bp: Blueprint, prefix: str) -> None:
+    @bp.before_request
+    def _take_work_lock():
+        if security.relative_path(prefix).startswith(WORK_PREFIXES):
+            _WORK_LOCK.acquire()
+            g.holds_work_lock = True
+        return None
+
+    @bp.teardown_request
+    def _release_work_lock(_exc) -> None:
+        if g.pop("holds_work_lock", False):
+            _WORK_LOCK.release()
 
 
 # ------------------------------------------------------------------

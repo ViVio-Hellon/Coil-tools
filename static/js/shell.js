@@ -246,7 +246,16 @@
     var frame = p.querySelector("iframe");
     if (!frame) return;
     function attach() {
-      try { frame.contentWindow.document.addEventListener("keydown", printCurrent, true); }
+      try {
+        frame.contentWindow.document.addEventListener("keydown", printCurrent, true);
+        // 機能の画面で刷る(「このまま印刷」・Ctrl+P)あいだも心拍が止まる。外枠の合図で知らせる
+        frame.contentWindow.addEventListener("beforeprint", function () {
+          if (window.cptPrinting) window.cptPrinting();
+        });
+        frame.contentWindow.addEventListener("afterprint", function () {
+          if (window.cptPrinted) window.cptPrinted();
+        });
+      }
       catch (err) { /* 触れない文書(起きないはず)はブラウザに任せる */ }
     }
     frame.addEventListener("load", attach);
@@ -344,6 +353,19 @@
     if (visibility() === "hidden") beacon({ reason: "hidden" });
     else resume("foreground");
   });
+
+  // 印刷の画面が開いているあいだは、この画面の JavaScript が止まり心拍が途切れる。
+  // 用紙を替えに行くなどで 90 秒を超えると、誰も見ていないとみなされて終わっていた
+  // (統合 1.2.20)。開く前に「裏に回った」と同じ合図を送り、閉じたら戻る。
+  // 3機能の画面(iframe)の中で刷ったときも、その画面の合図を拾う(下の attach)
+  function printing() { beacon({ reason: "print", state: "hidden" }); }
+  // 済んだら**必ず**「前」を送る(resume は1秒以内の重なりをまとめるので、直前にタブを
+  // 押していると送られず、次の心拍まで「裏」のままになる)
+  function printed() { alive({ reason: "afterprint" }).then(function () { health(); }); }
+  window.addEventListener("beforeprint", printing);
+  window.addEventListener("afterprint", printed);
+  window.cptPrinting = printing;
+  window.cptPrinted = printed;
   document.addEventListener("freeze", function () { beacon({ reason: "freeze" }); });
   document.addEventListener("resume", function () { resume("resume"); });
   window.addEventListener("focus", function () { resume("focus"); });

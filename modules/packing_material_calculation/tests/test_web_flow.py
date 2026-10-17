@@ -110,6 +110,34 @@ def test_full_calculation(ready):
     assert "count" in r.get_json()["view"]["flags"]
 
 
+def test_simultaneous_runs_never_return_blank_result(ready):
+    """「計算」の二度押し・同時の計算で台数が空にならない(統合 1.2.20)。
+
+    作業状態は1組で、計算は「いったん結果を消してから出し直す」。順番待ちが無いと、
+    片方が消した直後の空の結果を返していた(通し試験で 10 回中に空が出た)。
+    """
+    import threading
+
+    assert _calc(ready).get_json()["view"]["result"]["台数"] == "2"
+    app = ready.application
+    got = []
+
+    def hit():
+        with app.test_client() as c:
+            c.environ_base["HTTP_X_APP_TOKEN"] = "test-token"
+            for _ in range(6):
+                r = c.post("/api/calc/run", json={})
+                got.append((r.status_code, r.get_json()["view"]["result"]["台数"]))
+
+    threads = [threading.Thread(target=hit) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+    assert len(got) == 48
+    assert set(got) == {(200, "2")}
+
+
 def test_calculation_without_count_is_refused(ready):
     ready.post("/api/calc/lot", json={"LOT": "A123456"})
     ready.post("/api/calc/order", json={"受注番号": "12345678"})

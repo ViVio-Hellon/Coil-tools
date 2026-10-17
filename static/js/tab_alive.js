@@ -80,6 +80,10 @@
   document.addEventListener("visibilitychange", function () {
     if (state() === "visible") { alive("foreground"); } else { signal({ reason: "hidden" }); }
   });
+  // 印刷の画面が開いているあいだは JavaScript が止まり心拍が途切れる。用紙を替えに行くなどで
+  // 長くなっても終わらないよう、開く前に「裏に回った」と同じ合図を送る(統合 1.2.20)
+  window.addEventListener("beforeprint", function () { signal({ reason: "print", state: "hidden" }); });
+  window.addEventListener("afterprint", function () { alive("afterprint"); });
   document.addEventListener("freeze", function () { signal({ reason: "freeze" }); });
   document.addEventListener("resume", function () { alive("resume"); });
   window.addEventListener("pagehide", function (e) {

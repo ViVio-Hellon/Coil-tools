@@ -560,9 +560,12 @@ def scenario_main(rig: Rig):
         check("ペナラベル: 風袋計算", until(lambda: w.text("#nw1") == "110.0", 10), w.text("#nw1"))
 
         def labels():
+            # 押す → 画面の中の確かめで OK。OK を押したその操作で窓が開く(統合 1.2.20。以前は
+            # window.confirm だった。読んでから押すまでが長いと、ブラウザ版ではポップアップの
+            # ブロックに止められた)
             w.click("button[data-act=printLabels]")
-            time.sleep(0.8)
-            w.accept()
+            until(lambda: w.js("return !!document.querySelector('dialog.pplconfirm[open] button[data-ok]')"), 8)
+            w.click("dialog.pplconfirm[open] button[data-ok]")
         print_window(w, rig, "ペナラベル 小ラベルの印刷(実寸)", labels, "/pena/labels/print",
                      ".printbar [data-print-now]", "pena_labels")
         # 試験の印(開いたときに刷らない)が exe の中の Python まで届いているか。届いていないと

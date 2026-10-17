@@ -56,7 +56,18 @@
     if (el) { el.addEventListener("click", hideToast); }
   })();
 
+  // 操作は**押した順に1つずつ**送る(統合 1.2.20)。続けて押すと要求が同時に出て、返事の順が
+  // 入れ替わると、あとの結果を前の返事の画面で上書きする(資材計算で再現した形)。
+  // 画面の持ち主の知らせ(/api/screen/…)は待たせない(心拍が遅れると使用権を失う)
+  var chain = Promise.resolve();
   function post(path, body) {
+    if (String(path).indexOf("/api/screen/") === 0) { return send(path, body); }
+    var run = chain.then(function () { return send(path, body); });
+    chain = run.catch(function () { /* 失敗しても次は送る */ });
+    return run;
+  }
+
+  function send(path, body) {
     var payload = body || {};
     // どの画面からの操作かを必ず名乗る（入力画面は同時に1つだけ）
     if (screenId && !payload.screenId) { payload.screenId = screenId; }
@@ -155,6 +166,50 @@
     });
   }
   window.pplAskPassword = askPassword;
+
+  // ---------------------------------------------------------- 確かめてから印刷用のタブを開く
+  // 以前は `window.confirm` で確かめてから `window.open` していた。**確かめを読んで OK を
+  // 押すまでに 5 秒ほどかかると、ブラウザのポップアップのブロックに止められて何も開かなかった**
+  // (統合 1.2.20。ブロックを入れたままの Chromium で再現。押した操作から時間がたった
+  // `window.open` はポップアップとみなされる)。そこで画面の中で確かめ、**OK を押したその
+  // 操作で**開く(ブロックされない)。返り値は Promise: 開いたら true、やめたら false
+  function confirmOpen(message, href, okLabel) {
+    return new Promise(function (resolve) {
+      var dlg = document.createElement("dialog");
+      dlg.className = "pwdialog pplconfirm";
+      var p = document.createElement("p");
+      p.className = "pwdialog-msg";
+      p.style.whiteSpace = "pre-line";
+      p.textContent = message || "印刷用のタブを開きます。";
+      var row = document.createElement("div");
+      row.className = "btn-row";
+      var ok = document.createElement("button");
+      ok.type = "button"; ok.className = "btn btn-primary"; ok.setAttribute("data-ok", "");
+      ok.textContent = okLabel || "OK";
+      var cancel = document.createElement("button");
+      cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "キャンセル";
+      row.appendChild(ok); row.appendChild(cancel);
+      dlg.appendChild(p); dlg.appendChild(row);
+      document.body.appendChild(dlg);
+      var done = false;
+      function finish(opened) {
+        if (done) { return; }
+        done = true;
+        try { dlg.close(); } catch (e) { /* 閉じていても構わない */ }
+        dlg.remove();
+        resolve(opened);
+      }
+      ok.addEventListener("click", function () {
+        window.open(href, "_blank", "noopener");     // この押した操作の中で開く
+        finish(true);
+      });
+      cancel.addEventListener("click", function () { finish(false); });
+      dlg.addEventListener("cancel", function (ev) { ev.preventDefault(); finish(false); });
+      dlg.showModal();
+      ok.focus();
+    });
+  }
+  window.pplConfirmOpen = confirmOpen;
 
   // ---------------------------------------------------------- 印刷用のタブ
   // 帯の「印刷」「このタブを閉じる」(`pages._printbar`)。閉じられないブラウザ・
@@ -708,8 +763,7 @@
     printLabels: function () {
       return post("/api/print-targets", { current: collect() }).then(function (j) {
         if (!j.ok) { toast(j.message, "warn"); return; }
-        if (!window.confirm(j.message)) { return; }
-        window.open(url("/labels/print?ob=" + j.targets.join(",")), "_blank", "noopener");
+        return confirmOpen(j.message, url("/labels/print?ob=" + j.targets.join(",")));
       });
     },
     quickHeight: function () {

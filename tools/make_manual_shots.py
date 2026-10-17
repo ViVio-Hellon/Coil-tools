@@ -231,6 +231,12 @@ def into_view(fr, sel, block="center"):
     fr.page.wait_for_timeout(300)
 
 
+def confirm_open(fr, sel):
+    """ペナラベルの「印刷」: 押す → 画面の中の確かめで OK(その操作で印刷用のタブが開く)。"""
+    fr.click(sel)
+    fr.click("dialog.pplconfirm[open] button[data-ok]")
+
+
 def new_page(ctx, click):
     """押すと別のタブ(デスクトップ版では別の窓)で開く画面を受け取る。"""
     with ctx.expect_page() as info:
@@ -467,7 +473,7 @@ def pena_scene(app, ctx, sh, cam):
         (1, box_of(fr, 'input[name=tip][value=TIP1000]')), (2, box_of(fr, "#coilH1")),
         (3, box_of(fr, "button[data-act=calcTare]")), (4, box_of(fr, "#nw1")),
         (5, box_of(fr, "button[data-act=printLabels]"))])
-    labels = new_page(ctx, lambda: fr.click("button[data-act=printLabels]"))
+    labels = new_page(ctx, lambda: confirm_open(fr, "button[data-act=printLabels]"))
     cam.take("pena-labels-print", labels, marks=[
         (1, box_of(labels, ".printbar [data-print-now]"), "r")])
     cam.take("pena-labels-print-note", labels, marks=[
@@ -523,7 +529,7 @@ def pena_scene(app, ctx, sh, cam):
     E.wait_until(lambda: "反映値" in sh.frame("pena").evaluate("document.body.innerText"), 10)
     fr = sh.frame("pena")
     E.pena_ready(fr)
-    sheet = new_page(ctx, lambda: fr.click("#asPrint"))
+    sheet = new_page(ctx, lambda: confirm_open(fr, "#asPrint"))
     cam.take("pena-allsize-print", sheet, marks=[(1, box_of(sheet, ".printbar [data-print-now]"), "r")])
     sheet.close()
     # 設定

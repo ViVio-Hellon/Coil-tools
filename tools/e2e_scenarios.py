@@ -4,7 +4,7 @@
 
     python tools/e2e_scenarios.py                 # 一連の流れ → 交互に使う → 放置する
     python tools/e2e_scenarios.py --quick         # 放置を短くする(動きの確認用)
-    python tools/e2e_scenarios.py --only flow     # flow / print / alternate / multitab / storage / master / trail / theme / manual / idle のどれかだけ
+    python tools/e2e_scenarios.py --only flow     # flow / print / alternate / multitab / storage / master / trail / theme / manual / idle / rapid のどれかだけ
 
 【何をするか】
 本物の起動(`start_app.py`)で統合アプリを立て、実ブラウザ(Chromium)で統合画面を開き、
@@ -49,6 +49,12 @@
 8. 印刷する(`--only print`。一連の流れのあと)
    3機能の印刷プレビュー11画面すべてで「印刷する」が1つあり、押すと印刷のダイアログが開き
    (window.print が呼ばれた回数を数える)、印刷のときには隠れる(紙に出ない)
+
+10. 続けて印刷する・すぐ切り替えて計算する(`--only rapid`。統合 1.2.20)
+   3機能の印刷を待たずに続けて押す(3回)→ 3枚とも開き中身が混ざらない・どれも1回ずつ刷れる。
+   ペナラベルの印刷の確かめを6秒読んでから押しても開く(ポップアップのブロックは入れたまま)。
+   計算を押してすぐ別のツールへ・2機能から同時に計算・入れてすぐ計算(欄を離れたときの送信を遅らせる)
+   → どの結果も正しい。印刷の画面のあいだの心拍の合図・デスクトップ版の「印刷の画面を出せませんでした」
 
 【要るもの】Playwright と Chromium(`tools/smoke_shell.py` と同じ)。現場の PC には要らない。
 """
@@ -501,6 +507,7 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
     check("ペナラベル: 風袋計算(正味・総重量・高さ)", not err, err)
     with ctx.expect_page() as info:
         fr.click("button[data-act=printLabels]")
+        _confirm_in_page(fr)
     labels = info.value
     labels.wait_for_load_state()
     check("ペナラベル: 小ラベルの印刷ビューが別タブで開く",
@@ -530,6 +537,7 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
         pena_ready(fr)
         with ctx.expect_page() as info:
             fr.click("#asPrint")
+            _confirm_in_page(fr)
         sheet = info.value
         sheet.wait_for_load_state()
         check("ペナラベル: 全サイズの印刷ビューが別タブで開く",
@@ -897,6 +905,7 @@ def scenario_multitab(app: App, ctx, sh: Shell, note: dict) -> None:
     for _ in range(3):
         with ctx.expect_page() as info:
             p.click("button[data-act=printLabels]")
+            _confirm_in_page(p)
         tabs.append(info.value)
     p.click('a[data-pane="tare"]')
     wait_until(lambda: p.locator('a[href$="/tare/print"]').count() > 0, 8)
@@ -990,6 +999,304 @@ def scenario_multitab(app: App, ctx, sh: Shell, note: dict) -> None:
     logs = app.logs()
     opened = logs.count("別タブ tab-")
     check("複数タブ: 印刷のタブの心拍がサーバに届いていた", opened >= len(tabs), f"{opened} 回")
+
+
+# ======================================================================
+# 10. 続けて別のツールで印刷する・すぐ切り替えて計算する(`--only rapid`。統合 1.2.20)
+# ======================================================================
+#: 確認ダイアログ(window.confirm)を押すまでの秒数。人が読んでから押すのを真似る
+DIALOG_WAIT = {"sec": 0.0}
+
+_COUNT_PRINT = """() => { if (window.__printCounted) return; window.__printCounted = true;
+  if (typeof window.__printed !== 'number') window.__printed = 0;
+  window.print = function () { window.__printed++; }; }"""
+
+
+def _on_dialog(dialog) -> None:
+    if DIALOG_WAIT["sec"]:
+        time.sleep(DIALOG_WAIT["sec"])
+    dialog.accept()
+
+
+def _confirm_in_page(fr, wait: float = 0.0) -> bool:
+    """画面の中の確かめ(ペナラベルの「印刷します」)が出ていれば、wait 秒おいて OK を押す。"""
+    sel = "dialog.pplconfirm[open] button[data-ok]"
+    if not wait_until(lambda: visible(fr, sel), 10, 0.05):
+        return False
+    if wait:
+        fr.wait_for_timeout(int(wait * 1000))
+    fr.click(sel)
+    return True
+
+
+def _pump_until(page, fn, timeout=15.0) -> bool:
+    """Playwright の知らせ(新しいタブなど)を受け取りながら待つ。`time.sleep` の間は届かない。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if fn():
+            return True
+        page.wait_for_timeout(100)
+    return bool(fn())
+
+
+def _kind(url: str) -> str:
+    path = urllib.parse.urlparse(url).path
+    for key, part in (("details", "/details/report/"), ("pena", "/pena/labels/print"),
+                      ("material", "/material/report/checklist")):
+        if part in path:
+            return key
+    return ""
+
+
+def _delay(ctx, pattern: str, seconds: float):
+    """その要求だけ、サーバへ届くのを遅らせる(共有フォルダが遅い・PC が重いときと同じ形)。"""
+    def handler(route):
+        time.sleep(seconds)
+        route.continue_()
+    ctx.route(pattern, handler)
+    return lambda: ctx.unroute(pattern, handler)
+
+
+def scenario_rapid(app: App, ctx, sh: Shell, note: dict) -> None:
+    print("■ 10. 続けて別のツールで印刷する・すぐ切り替えて計算する")
+    opened: list = []
+    ctx.on("page", lambda pg: opened.append(pg))
+    page = sh.page
+
+    # ---- 用意: 3機能とも刷れる状態 ----
+    d = sh.tab("details")
+    lot = text(d, "#lotNo")
+    p = sh.tab("pena")
+    pena_ready(p)
+    ok = pena_weights(p, "r333333", "15", "17")
+    for i, n in enumerate(("11", "11", "10", "10"), 1):
+        p.fill(f"#coilH{i}", n)
+    p.click("button[data-act=calcTare]")
+    # 計算しないと印刷ビューの「印刷する」は止まる(入力が変わったまま刷らない。移植元どおり)
+    check("連続: 用意(ペナラベルの重量反映 R333333 15kg → 計算 165.0)",
+          ok and pena_toast(p, "計算しました") and text(p, "#nw1") == "165.0", text(p, "#nw1"))
+    m = sh.tab("material")
+    material_ready(m)
+    if "/calc" not in m.url:
+        m.click('nav.rail a.rail__item[href*="/calc"]')
+        m.wait_for_load_state()
+        m = sh.frame("material")
+        material_ready(m)
+    err = material_calc(m, "A123456")
+    m.check("#size-fixed")
+    m.click("#add")
+    check("連続: 用意(資材計算の計算 → チェックリストへ)", not err and material_toast(m, "行目に積みました"),
+          err or text(m, "#toast"))
+    m.click('nav.rail a.rail__item[href*="/checklist"]')
+    m.wait_for_load_state()
+    m = sh.frame("material")
+    material_ready(m)
+    d = sh.frame("details")
+    check("連続: 用意(梱包明細の印刷が押せる)", lot and not d.is_disabled("#btnPrint"), lot)
+
+    # ---- A. 3機能の印刷を待たずに続けて押す(3回) ----
+    for rnd in range(1, 4):
+        before = len(opened)
+        t0 = time.monotonic()
+        page.click("#tab-details")
+        d.click("#btnPrint", no_wait_after=True)
+        page.click("#tab-pena")
+        p.click("button[data-act=printLabels]", no_wait_after=True)
+        _confirm_in_page(p)
+        page.click("#tab-material")
+        m.click("a#print", no_wait_after=True)
+        took = time.monotonic() - t0
+        _pump_until(page, lambda: len(opened) - before >= 3, 15)
+        page.wait_for_timeout(500)
+        new = opened[before:]
+        for pg in new:
+            pg.wait_for_load_state()
+        kinds = sorted(_kind(pg.url) for pg in new)
+        check(f"連続 {rnd}回目: 3機能の印刷を {took:.1f}秒 で続けて押して、3枚とも開く",
+              kinds == ["details", "material", "pena"], kinds)
+        got = {}
+        for pg in new:
+            k = _kind(pg.url)
+            body = pg.evaluate("document.body.innerText")
+            if k == "details":
+                got[k] = lot in pg.title()
+            elif k == "pena":
+                got[k] = "R333333" in body and pg.locator("section.sheet").count() >= 1
+                # 小ラベルの印刷は開いただけでは刷らない(移植元どおり。風袋・台紙・全サイズは刷る)
+                got["pena 開いたとき刷った回数"] = pg.evaluate("window.__printed")
+            elif k == "material":
+                got[k] = "A123456" in body
+        check(f"連続 {rnd}回目: どの紙も自分のツールの中身(混ざらない)",
+              got.get("details") and got.get("pena") and got.get("material")
+              and got.get("pena 開いたとき刷った回数") == 0, got)
+        # 開いた3枚で、続けて「印刷する」
+        presses = {}
+        for pg in new:
+            k = _kind(pg.url)
+            if not k:
+                continue
+            pg.evaluate(_COUNT_PRINT)
+            start = pg.evaluate("window.__printed")
+            sel = {"details": "p.editbar button.print", "pena": ".printbar [data-print-now]",
+                   "material": "#printNow"}[k]
+            try:
+                pg.bring_to_front()
+                pg.click(sel, timeout=8000)
+                presses[k] = pg.evaluate("window.__printed") - start
+            except Exception as exc:              # noqa: BLE001 - 押せなかったことを残す
+                presses[k] = "押せない"
+                print("    押せない(%s): %s" % (k, " | ".join(str(exc).splitlines()[:14])[:1500]))
+                print("    その画面:", pg.url, pg.evaluate("document.body.innerHTML.slice(0, 700)"))
+        check(f"連続 {rnd}回目: 3枚で続けて「印刷する」を押すと、それぞれ1回ずつ刷る",
+              presses == {"details": 1, "pena": 1, "material": 1}, presses)
+        for pg in new:
+            pg.close()
+    page.bring_to_front()
+    check("連続: 印刷を続けたあとも3機能とも使える", sh.ready(10), sh.trouble())
+
+    # ---- A2. 確かめを読んでから押す(6秒)。ブラウザのポップアップのブロックに止められない ----
+    p = sh.tab("pena")
+    before = len(opened)
+    DIALOG_WAIT["sec"] = 6.0
+    try:
+        p.click("button[data-act=printLabels]", no_wait_after=True)
+        _confirm_in_page(p, wait=6.0)
+        ok = _pump_until(page, lambda: any(_kind(x.url) == "pena" for x in opened[before:]), 15)
+    finally:
+        DIALOG_WAIT["sec"] = 0.0
+    check("連続: ペナラベルの印刷で、確かめを6秒読んでから押しても印刷ビューが開く", ok,
+          [x.url for x in opened[before:]])
+    for pg in opened[before:]:
+        pg.close()
+
+    # ---- B. 計算を押してすぐ別のツールへ ----
+    m = sh.tab("material")
+    m.click('nav.rail a.rail__item[href*="/calc"]')
+    m.wait_for_load_state()
+    m = sh.frame("material")
+    material_ready(m)
+    m.fill("#lot", "")
+    m.type("#lot", "A123456", delay=20)
+    wait_until(lambda: text(m, "#o-包装") == SPEC_NO, 10)
+    material_ins(m, "10")
+    p = sh.frame("pena")
+    for _ in range(5):
+        page.click("#tab-material")
+        m.click("#run")
+        page.click("#tab-pena")
+        p.click("button[data-act=calcTare]")
+        page.click("#tab-details")
+    page.wait_for_timeout(2500)
+    m, p = sh.frame("material"), sh.frame("pena")
+    check("すぐ切替: 資材計算で計算 → すぐペナラベルで計算 → すぐ梱包明細(5回)。資材計算の結果",
+          (text(m, "#r-種類"), text(m, "#r-台数")) == ("スカシ", "2"), (text(m, "#r-種類"), text(m, "#r-台数")))
+    check("すぐ切替: 同じく、ペナラベルの結果(15kg × 11本 = 165.0・検査番号 R333333)",
+          text(p, "#nw1") == "165.0" and text(p, "#lblKensaNo") == "R333333",
+          (text(p, "#nw1"), text(p, "#lblKensaNo")))
+    bad = [t for t in (text(p, "#toast .toast-body"), text(m, "#toast")) if re.search("失敗|エラー|できません", t)]
+    check("すぐ切替: どちらにも失敗の知らせが出ていない", not bad, bad)
+    check("すぐ切替: 断り・接続なしが出ていない", sh.ready(10), sh.trouble())
+
+    # ---- B2. 2機能から同時に計算を投げる(10回ずつ) ----
+    p.evaluate("""() => { window.__burst = Promise.all(Array.from({length: 10}, () =>
+        pplPost('/api/calc-tare', {current: {}}).then(j => (j && j.ok ? 'ok ' : 'NG ')
+          + JSON.stringify(j && j.state).length + ' ' + (j && j.message)))); }""")
+    m.evaluate("""() => { window.__burst = Promise.all(Array.from({length: 10}, () =>
+        fetch(APP_BASE + '/api/calc/run', {method: 'POST', headers: {'Content-Type': 'application/json',
+          'X-App-Token': APP_TOKEN, 'X-App-Screen': sessionStorage.getItem('coil.screen') || ''},
+          body: '{}'}).then(r => r.json()).then(j => j.ok ? j.view.result.台数 : (j.message || '?')))); }""")
+    pena_got = p.evaluate("window.__burst")
+    mat_got = m.evaluate("window.__burst")
+    check("同時: ペナラベルの計算10回がどれも同じ答え", len(set(pena_got)) == 1, sorted(set(pena_got))[:3])
+    check("同時: 資材計算の計算10回がどれも台数2", set(map(str, mat_got)) == {"2"},
+          sorted(set(map(str, mat_got)))[:3])
+
+    # ---- C. 入れてすぐ計算(欄を離れたときの送信と、計算が行き違わない) ----
+    # 検入数で台数が変わる2つの値を、ゆっくり(1つずつ待って)測っておく
+    m = sh.tab("material")
+    want = {}
+    for ins in ("10", "400"):
+        material_ins(m, ins)
+        m.click("#run")
+        material_toast(m, "台数")
+        page.wait_for_timeout(300)
+        want[ins] = text(m, "#r-台数")
+    check("入れてすぐ計算: 検入数で台数が変わる2つの値(ゆっくり測る)", want["10"] != want["400"], want)
+    # 欄を離れたときの送信が少し遅れても(PC が重いときと同じ形)、計算は入れた値で行う
+    undo = _delay(ctx, "**/api/calc/input", 0.8)
+    try:
+        for ins in ("10", "400", "10"):
+            m.fill("#ins", ins)
+            m.click("#run")              # Tab を押さずに、すぐ「計算」
+            page.wait_for_timeout(2000)
+            check(f"入れてすぐ計算: 検入数 {ins} を入れてすぐ「計算」→ 台数 {want[ins]}",
+                  text(m, "#r-台数") == want[ins], {"台数": text(m, "#r-台数"), "検入数": text(m, "#ins")})
+    finally:
+        undo()
+    # 梱包明細: 重量を入れてすぐ別のツールへ → 戻る(送ったはずの重量が残っている)
+    d = sh.tab("details")
+    undo = _delay(ctx, "**/api/weights", 0.8)
+    try:
+        w1 = text(d, "#weight1")
+        new_w = "251" if w1 != "251" else "252"
+        d.fill("#weight1", new_w)
+        page.click("#tab-pena")          # 欄を離れる(送信) → すぐ切り替える
+        page.wait_for_timeout(200)
+        page.click("#tab-details")
+        page.wait_for_timeout(2000)
+        saved = d.evaluate("(window.APP.state.weights || [])[0]")
+        check("すぐ切替: 梱包明細で重量を入れてすぐ切り替えても、入れた重量が残る(画面とサーバ)",
+              text(d, "#weight1") == new_w and str(saved).rstrip("0").rstrip(".") == new_w,
+              {"画面": text(d, "#weight1"), "サーバ": saved})
+    finally:
+        undo()
+    check("入れてすぐ計算: 断り・接続なしが出ていない", sh.ready(10), sh.trouble())
+
+    # ---- D. 印刷の画面が開いているあいだ(ブラウザ版): 心拍が止まっても終わらない ----
+    # 印刷の画面のあいだは画面の JavaScript が止まる。その前に「裏に回った」と同じ合図が出るか
+    p = sh.tab("pena")
+    said0, back0 = app.logs().count("心拍: print (hidden)"), app.logs().count("心拍: afterprint (visible)")
+    p.evaluate("() => { window.dispatchEvent(new Event('beforeprint')); }")
+    said = _pump_until(page, lambda: app.logs().count("心拍: print (hidden)") > said0, 5)
+    p.evaluate("() => { window.dispatchEvent(new Event('afterprint')); }")
+    back = _pump_until(page, lambda: app.logs().count("心拍: afterprint (visible)") > back0, 5)
+    check("印刷中: 機能の画面で刷る前に「裏」の合図、済んだら「前」の合図(統合画面から)",
+          said and back, {"刷る前": said, "済んだら": back})
+    tab = ctx.new_page()
+    tab.goto(app.base + "/pena/tare/print")
+    tab.wait_for_load_state()
+    said0, back0 = app.logs().count("心拍: print (hidden)"), app.logs().count("心拍: afterprint (visible)")
+    tab.evaluate("() => { window.dispatchEvent(new Event('beforeprint')); }")
+    said = _pump_until(page, lambda: app.logs().count("心拍: print (hidden)") > said0, 5)
+    tab.evaluate("() => { window.dispatchEvent(new Event('afterprint')); }")
+    back = _pump_until(page, lambda: app.logs().count("心拍: afterprint (visible)") > back0, 5)
+    check("印刷中: 印刷用のタブでも、刷る前に「裏」・済んだら「前」の合図", said and back,
+          {"刷る前": said, "済んだら": back})
+    tab.close()
+
+    # ---- E. デスクトップ版: 印刷の画面が出なかったら知らせる(出たときは知らせない) ----
+    pg = ctx.new_page()
+    pg.goto(app.base + "/api/health")
+    pg.set_content("<!doctype html><html><head></head><body><p>印刷ビュー</p></body></html>")
+    pg.evaluate("""() => { window.__TAURI__ = {core: {invoke: () => Promise.resolve()}};
+        window.__mode = 'busy';
+        window.print = function () {
+          if (window.__mode === 'shown') { window.dispatchEvent(new Event('beforeprint')); }
+          if (window.__mode === 'slow') { const t = Date.now(); while (Date.now() - t < 700) {} }
+        }; }""")
+    pg.add_script_tag(url=app.base + "/static/js/desktop.js")
+    seen = {}
+    for mode in ("busy", "shown", "slow"):
+        pg.evaluate("""m => { const b = document.getElementById('cptPrintBusy'); if (b) b.remove();
+            window.__mode = m; window.print(); }""", mode)
+        seen[mode] = pg.evaluate("!!document.getElementById('cptPrintBusy')")
+    pg.emulate_media(media="print")
+    on_paper = pg.evaluate("""() => { window.__mode = 'busy'; window.print();
+        const b = document.getElementById('cptPrintBusy'); return !!b && getComputedStyle(b).display !== 'none'; }""")
+    pg.emulate_media(media="screen")
+    check("デスクトップ版: 印刷の画面が出ずにすぐ戻ったら知らせる(出たとき・待ったときは出さない・紙に出ない)",
+          seen == {"busy": True, "shown": False, "slow": False} and not on_paper, {**seen, "紙に出る": on_paper})
+    pg.close()
 
 
 # ======================================================================
@@ -1563,7 +1870,7 @@ def scenario_idle(app: App, ctx, sh: Shell, note: dict, minutes: dict) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--only", choices=("flow", "print", "alternate", "multitab", "storage", "master",
-                                       "trail", "theme", "manual", "idle"))
+                                       "trail", "theme", "manual", "idle", "rapid"))
     ap.add_argument("--shots", default="", help="保存先の画面の写しを置くフォルダ")
     ap.add_argument("--quick", action="store_true", help="放置を短くする")
     ap.add_argument("--keep", action="store_true", help="試験用の置き場所を残す")
@@ -1587,15 +1894,22 @@ def main(argv=None) -> int:
     errors: list = []
     with sync_playwright() as pw:
         exe = os.environ.get("PLAYWRIGHT_CHROMIUM", "/opt/pw-browsers/chromium")
-        br = pw.chromium.launch(executable_path=exe if os.path.exists(exe) else None)
+        # ポップアップのブロックは**現場のブラウザと同じく入れたまま**(Playwright は既定で切る)。
+        # 押してから時間がたって開く窓は、現場では止められる(統合 1.2.20 で見つかった)
+        br = pw.chromium.launch(executable_path=exe if os.path.exists(exe) else None,
+                                ignore_default_args=["--disable-popup-blocking"])
         ctx = br.new_context(viewport={"width": 1400, "height": 900})
         ctx.on("page", lambda p: p.on("pageerror", lambda e: errors.append(f"{p.url.split('?')[0]}: {e}")))
-        ctx.on("page", lambda p: p.on("dialog", lambda d: d.accept()))
+        ctx.on("page", lambda p: p.on("dialog", _on_dialog))
+        # 開いたときに自分で刷る画面(ペナラベルの印刷ビュー)が何回刷ったかを数える
+        ctx.add_init_script("window.__printed = 0; window.print = function () { window.__printed++; };")
         sh = Shell(ctx, app)
-        if args.only in (None, "flow", "print", "alternate", "multitab", "idle"):
+        if args.only in (None, "flow", "print", "alternate", "multitab", "idle", "rapid"):
             scenario_flow(app, ctx, sh, note)
         if args.only in (None, "print"):
             scenario_print(app, ctx, sh, note, args.shots)
+        if args.only in (None, "rapid"):
+            scenario_rapid(app, ctx, sh, note)
         if args.only in (None, "alternate", "multitab", "idle"):
             scenario_alternate(app, ctx, sh, note)
         if args.only in (None, "multitab"):
