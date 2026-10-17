@@ -1082,15 +1082,14 @@ def scenario_rapid(app: App, ctx, sh: Shell, note: dict) -> None:
         m.wait_for_load_state()
         m = sh.frame("material")
         material_ready(m)
-    err = material_calc(m, "A123456")
-    m.check("#size-fixed")
-    m.click("#add")
-    check("連続: 用意(資材計算の計算 → チェックリストへ)", not err and material_toast(m, "行目に積みました"),
-          err or text(m, "#toast"))
+    # チェックリストは一連の流れで積んだ行(A123456)を使う。ここで積み足すと、あとの試験
+    # (交互に使う・放置)が数える行数が変わる
     m.click('nav.rail a.rail__item[href*="/checklist"]')
     m.wait_for_load_state()
     m = sh.frame("material")
     material_ready(m)
+    rows = m.evaluate("document.querySelectorAll('#rows tr.on').length")
+    check("連続: 用意(資材計算のチェックリストに行がある)", rows >= 1 and "A123456" in text(m, "#rows"), rows)
     d = sh.frame("details")
     check("連続: 用意(梱包明細の印刷が押せる)", lot and not d.is_disabled("#btnPrint"), lot)
 
