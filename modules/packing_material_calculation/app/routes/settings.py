@@ -75,16 +75,9 @@ FIELDS: tuple[dict[str, Any], ...] = (
         "kind": "file",
         "table": table,
     } for table, key in config.KEY_LOT_DB2_FILES.items()),
-    {
-        "key": config.KEY_EXPORT_DIR,
-        "label": "書き出し先",
-        "detail": "CSV を出す場所。**書ける場所**にすること",
-        "vba": "",
-        "expect": "",
-        "default": str(config.DEFAULT_EXPORT_DIR),
-        "writable": True,
-    },
 )
+# 「書き出し先」(CSV を出す場所)の欄は外した(統合 1.2.22)。移植元から欄だけがあって、
+# そこへ書き出す処理がどこにも無かった(文書を作るときに見つかった)。前の設定に値が残っていても使わない
 
 # **置き場所はパスワードが要る。** ライン・担当者・自動取り込みは
 # 使う人ごとの持ち物なので要らない。
@@ -94,7 +87,7 @@ FIELDS: tuple[dict[str, Any], ...] = (
 # 出てくる票の名前が違うだけで、気づいたら選び直せばよい。
 PATH_KEYS = frozenset({
     config.KEY_MASTER_DB_DIR, config.KEY_LOT_DB_DIR,
-    config.KEY_LOT_DB_DIR_2, config.KEY_EXPORT_DIR,
+    config.KEY_LOT_DB_DIR_2,
     *config.KEY_LOT_DB2_FILES.values(),
 })
 
@@ -115,7 +108,6 @@ _RESOLVERS = {
     config.KEY_MASTER_DB_DIR: config.master_db_dir,
     config.KEY_LOT_DB_DIR: config.lot_db_dir,
     config.KEY_LOT_DB_DIR_2: lambda: config.lot_db_dir_fallback() or "",
-    config.KEY_EXPORT_DIR: config.export_dir,
 }
 
 
@@ -256,7 +248,7 @@ def _storage() -> dict[str, Any]:
     return storage_places.Places(
         local=[
             P("設定ファイル", str(config_path),
-              "取り込み元の置き場所（梱包資材マスタ・仕掛台帳・予備・書き出し先をどこにするか）・"
+              "取り込み元の置き場所（梱包資材マスタ・仕掛台帳・予備をどこにするか）・"
               "ライン・担当者・起動時の自動取り込み・パスワード（撹拌した値。このPCだけのもの）",
               "" if config_path.exists() else "まだありません（設定を保存すると作ります）"),
             P("作業用DB", str(config.DB_PATH),

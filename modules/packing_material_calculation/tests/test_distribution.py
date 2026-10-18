@@ -98,13 +98,13 @@ def test_設定していない項目は入れない(terminals):
     """配った先の既定値を「空」で上書きしない。"""
     configure(terminals[0])
     result = export()
-    assert config.KEY_EXPORT_DIR not in written()["settings"]
+    assert config.KEY_LOT_DB_DIR_2 not in written()["settings"]
     assert "既定のまま" in result.message
 
 
 def test_書き出せるものが1つも無ければ作らない(terminals):
     terminals[0].use()
-    result = export([config.KEY_EXPORT_DIR])
+    result = export([config.KEY_LOT_DB_DIR_2])
     assert result.reason == distribution.REFUSE_BAD_INPUT
     assert not distribution.DIR.exists()
 
@@ -268,12 +268,12 @@ def test_書き出すと状態に出る(client):
     unlock(client)
     user_settings.save(config.KEY_LOT_DB_DIR, r"\\srv\台帳")
     r = client.post("/api/settings/distribution/export",
-                    json={"items": [config.KEY_LOT_DB_DIR, config.KEY_EXPORT_DIR]})
+                    json={"items": [config.KEY_LOT_DB_DIR, config.KEY_LOT_DB_DIR_2]})
     assert r.status_code == 200, r.get_json()
     dist = r.get_json()["view"]["distribution"]
     assert dist["exists"]
     assert dist["contents"] == [{"label": "仕掛台帳のフォルダ", "value": r"\\srv\台帳"}]
-    assert "書き出し先" in r.get_json()["message"]      # 既定のままで入れなかった
+    assert "仕掛台帳(2つ目)のフォルダ" in r.get_json()["message"]   # 既定のままで入れなかった
 
 
 def test_形が違えば400(client):

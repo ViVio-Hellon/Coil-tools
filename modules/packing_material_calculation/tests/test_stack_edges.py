@@ -78,6 +78,27 @@ def test_no_split_without_the_flag(conn):
     assert models.FLAG_SINGLE_SPLIT not in s.flags
 
 
+@pytest.mark.parametrize("ins, stack, count", [(5, 4, "2"), (20, 20, "1"), (6, 5, "2"), (3, 2, "2")])
+def test_stack_is_kept_when_rounded_ratio_is_one(conn, ins, stack, count):
+    """検入数 ÷ 積数 の偶数丸めが 1 になるふつうの品でも、積数を出す(統合 1.2.22)。
+
+    VBA は `If Not x = 1 Then 積数 = StackC` で、2台へ均等に分けていなくても x = 1 なら
+    積数を入れず、積数の欄が空・ﾘﾌﾟﾗ総本数 0 になっていた(VBA のバグ。現場の確認)。
+    """
+    s, r = run(conn, 検入数=ins, 枚数=stack, 枚数範囲="以下", spec_no="1C%04d" % (ins * 100 + stack))
+    assert r.ok
+    assert (s.台数, s.積数) == (count, str(stack))
+    assert models.FLAG_SINGLE_SPLIT not in s.flags
+    assert r.total_ripla > 0, "積数が入っていればﾘﾌﾟﾗの本数も出る"
+
+
+def test_equal_split_still_keeps_half(conn):
+    """1本不可で2台へ均等に分けたときは、今までどおり半分の積数を残す。"""
+    s, r = run(conn, 検入数=5, 枚数=4, spec_no="1C0505")
+    assert (s.台数, s.積数) == ("2", "2")
+    assert models.FLAG_SINGLE_SPLIT in s.flags
+
+
 # ==================================================================
 # 高さ制限
 # ==================================================================

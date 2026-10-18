@@ -133,3 +133,37 @@ class TarePageTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BreakdownCoilTest(unittest.TestCase):
+    """計算内容の梱包ごとのボタン(?coil=N)で、その梱包が出る(統合 1.2.22)。"""
+
+    def _pages(self, data):
+        from modules.packing_pena_label.app.routes.pages import PageRoutes
+
+        class Store:
+            def all_tare(self):
+                return data
+
+        class WF:
+            store = Store()
+
+        pages = PageRoutes.__new__(PageRoutes)
+        pages.wf = WF()
+        pages.cfg = type("Cfg", (), {"url_prefix": ""})()
+        pages._shell = lambda title, body, active, script="", print_only=False: body
+        return pages
+
+    def test_selected_coil_is_shown(self):
+        p1, _ = _payload(11)
+        p3, _ = _payload(4, width=82.5, tip="TIP820", ob=7)
+        p3 = dict(p3, coilNo=3, title="丈2_1梱包目:4本")
+        pages = self._pages({1: p1, 3: p3})
+        first = pages.breakdown()
+        third = pages.breakdown(3)
+        self.assertIn(p1["display"]["GW"], first)
+        self.assertIn(p3["breakdown"]["NWsiki"], third)
+        self.assertNotIn(p1["breakdown"]["NWsiki"], third)
+        self.assertIn('aria-current="page" href="/breakdown?coil=3"', third)
+        # 計算していない番号なら、今までどおり最小番号
+        self.assertEqual(pages.breakdown(4), first)

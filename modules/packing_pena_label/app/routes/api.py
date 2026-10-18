@@ -785,6 +785,11 @@ class ApiRoutes:
     def _settings_reset(self, body):
         from ..services import settings as S
         from ..config import load_config
+        # 既定へ戻すと参照先(パス)も戻る。パスの変更と同じく合言葉が要る(統合 1.2.22。
+        # 以前は確かめずに戻していた。文書を作るときに見つかった)
+        if not S.password_ok(body.get("password")):
+            return {"ok": False, "level": "warn", "needPassword": True,
+                    "message": "既定へ戻すには合言葉が要ります(参照先のパスも戻るため)。"}
         result = S.reset(self.cfg)
         new_cfg = load_config()
         self._adopt(new_cfg)

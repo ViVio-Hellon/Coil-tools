@@ -146,13 +146,9 @@ SETTINGS: List[SettingSpec] = [
               "自分で割り算をしなくても、ラベル台紙 → 位置合わせ の画面で"
               "測った mm を入れれば、ここへ自動で入る。")),
 
-    # ---------------- 出力 ----------------
-    SettingSpec(
-        key="export_dir_path", label="帳票の保存先フォルダー", kind="dir",
-        group=GROUP_OUTPUT, need_write=True,
-        placeholder=r"C:\...\export",
-        help="サーバー側へ保存する場合の出力先。ブラウザーのダウンロードは使わない。",
-        default_hint="ローカル領域の work/export"),
+    # 「帳票の保存先フォルダー」(export_dir_path)の欄は外した(統合 1.2.22)。移植元から欄だけが
+    # あって、そこへ帳票を書き出す処理がどこにも無かった(文書を作るときに見つかった)。
+    # 印刷は印刷用のタブから刷る。前の設定に値が残っていても使わない
 
     # ---------------- 動作 ----------------
     SettingSpec(
@@ -244,7 +240,7 @@ def changed_path_keys(values: Dict[str, Any], cfg) -> List[str]:
 
 def password_ok(given: str) -> bool:
     return str(given or "") == PATH_PASSWORD
-GROUP_ORDER = [GROUP_REF, GROUP_MASTER, GROUP_LABEL, GROUP_OUTPUT,
+GROUP_ORDER = [GROUP_REF, GROUP_MASTER, GROUP_LABEL,
                GROUP_BEHAVIOR, GROUP_STARTUP]
 
 

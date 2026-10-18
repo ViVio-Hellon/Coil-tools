@@ -114,10 +114,9 @@ def load(*, force: bool = False) -> dict[str, Any]:
 def _canonicalize_modes(conf: dict[str, Any]) -> None:
     """設定ファイルの旧いモード名をいまの名前に寄せる。
 
-    現場に配ってある `config/app.json` は `warehouse` で書かれている。
-    そのままだと既定値の `material` と**別のキーとして並んでしまい**、
-    ポートを変えてあっても黙って無視される(変えたつもりで変わらない、
-    という一番たちの悪い壊れ方になる)。読み込んだ時点で1つに寄せる。
+    移植元(資材計算)の `config/app.json` は旧名 `warehouse` で書かれていて、既定値の
+    `material` と別のキーとして並び、ポートを変えても黙って無視された。読み込んだ時点で
+    1つに寄せる仕組み。統合版のモードは `main` だけで、旧名の表(`modes.LEGACY_NAMES`)は空。
     """
     table = conf.get("server", {}).get("roles")
     if not isinstance(table, dict):
@@ -227,7 +226,7 @@ def host() -> str:
 
 
 def _mode_conf(mode: str) -> dict[str, Any]:
-    """設定ファイルのモード別の節。旧名(`warehouse`)でも引ける。
+    """設定ファイルのモード別の節(統合版は `main` だけ)。旧名の表があれば旧名でも引ける。
 
     ファイル側のキーは `load()` が寄せてあるので、ここで見るのは
     引数の旧名だけでよい。
@@ -259,9 +258,9 @@ def port_candidates(mode: str = modes.DEFAULT) -> list[int]:
 def port_range_conflicts() -> list[str]:
     """モードごとの候補ポートが重なっていないかを調べる。
 
-    重なっていると事故になる。現場が 8713 を取れずに繰り上がって
-    資材の 8723 を使ってしまうと、資材モードを起動できません。
-    利用者からは「資材モードが開けない」としか見えず原因が分かりません。
+    重なっていると事故になる(移植元では、現場が 8713 を取れずに繰り上がって資材の 8723 を
+    使うと、資材モードを起動できなかった)。統合版のモードは `main` だけなので、いまは
+    モードを足したときの見張り。
 
     `port` と `port_retry` は設定ファイルで変えられるので、
     変更のたびに機械が検査できるようにここに置く(テストが呼ぶ)。

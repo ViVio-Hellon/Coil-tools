@@ -16,6 +16,19 @@
 
 <div id="note"></div>
 <div id="sheets"></div>
+
+{# 発注の履歴(統合 1.2.22)。記録した発注を見る画面が無かった(履歴を返す口だけがあった) #}
+<details class="sec" id="history">
+  <summary><b>発注の履歴</b>(「発注済みとして記録」したもの。新しい順に 200 件まで)</summary>
+  <p class="setrow__d">LotNo で絞る:
+    <input type="text" id="historyLot" maxlength="7" size="9" autocomplete="off" placeholder="例: A123456">
+    <span class="muted" id="historyCount"></span></p>
+  <div class="wrap"><table class="grid-table">
+    <thead><tr><th>処理日</th><th>担当者</th><th>品名</th><th>サイズ</th><th>長さ</th>
+      <th>LotNo</th><th>数量</th><th>単位</th><th>登録日時</th></tr></thead>
+    <tbody id="historyRows"></tbody>
+  </table></div>
+</details>
 {% endblock %}
 
 {% block script %}

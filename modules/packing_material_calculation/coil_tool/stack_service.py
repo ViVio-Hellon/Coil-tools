@@ -145,10 +145,10 @@ def _decide_stack(state: CalcState, spec: PackagingSpec) -> tuple[float, bool, b
 # ==================================================================
 # 1本積み不可の端数処理
 # ==================================================================
-def _split_for_no_single(state: CalcState, stack: float, ins: float) -> tuple[int, float, int]:
+def _split_for_no_single(state: CalcState, stack: float, ins: float) -> tuple[int, float, bool]:
     """最後の1台が1本積みになるときの振り分け。
 
-    戻り値は `(台数, 積数, 偶数丸めの仮台数 x)`。
+    戻り値は `(台数, 積数, 2台へ均等に分けたか)`。
 
     VBA の `x` は**銀行丸め**(`Round(Ins / StackC, 0)`)。四捨五入に
     変えると端数の出方が変わって台数が動くので、そのまま使う。
@@ -157,7 +157,7 @@ def _split_for_no_single(state: CalcState, stack: float, ins: float) -> tuple[in
 
     if not (ins - (x * stack) == 1 and FLAG_NO_SINGLE in state.flags):
         # ふつうの場合。切り上げて台数を出す
-        return vba.round_up(ins / stack), stack, x
+        return vba.round_up(ins / stack), stack, False
 
     if x == 1:
         # もともと2台ぶんしかない状況で1本積みが出るとき (2026.1.16)
@@ -166,7 +166,7 @@ def _split_for_no_single(state: CalcState, stack: float, ins: float) -> tuple[in
         state.積数 = vba.int_text(ins / 2)
         state.mark(FLAG_SINGLE_SPLIT)
         state.mark(FLAG_SPEC)
-        return 2, ins / 2, x
+        return 2, ins / 2, True
 
     # 仮の台数から1台戻して、その1台ぶんを2台に割る
     re_x = x - 1
@@ -178,7 +178,7 @@ def _split_for_no_single(state: CalcState, stack: float, ins: float) -> tuple[in
     state.積数 = vba.int_text(stack)
     state.mark(FLAG_SINGLE_SPLIT)
     state.mark(FLAG_SPEC)
-    return re_x, stack, x
+    return re_x, stack, False
 
 
 # ==================================================================
@@ -356,7 +356,7 @@ def calculate(conn: sqlite3.Connection, state: CalcState) -> StackResult:
         return StackResult(ok=False, reason="zero_stack")
 
     # ---- 1本積み不可の端数処理 ----
-    count, stack_for_split, x = _split_for_no_single(state, stack, ins)
+    count, stack_for_split, split_equal = _split_for_no_single(state, stack, ins)
 
     # ---- 高さ制限 ----
     c_flag = vba.is_numeric(order.梱包単位_枚数)
@@ -382,9 +382,14 @@ def calculate(conn: sqlite3.Connection, state: CalcState) -> StackResult:
             state.台数 = ""
             return StackResult(ok=False, reason="zero_stack_by_height")
 
-    # VBA `PacSkip:` ── `x = 1` のときは、上で入れた均等分配の積数を残す。
-    # `settled` の枝は VBA が `Exit Function` で抜けていて、ここを通らない
-    if not settled and x != 1:
+    # VBA `PacSkip:` ── 2台へ均等に分けたときは、上で入れた均等分配の積数を残す。
+    # `settled` の枝は VBA が `Exit Function` で抜けていて、ここを通らない。
+    #
+    # 【VBA のバグを直した(統合 1.2.22・現場の確認)】VBA は `If Not x = 1 Then 積数 = StackC`
+    # で、x(検入数 ÷ 積数 の偶数丸め)が 1 なら**均等に分けていなくても**積数を入れなかった。
+    # 検入数 5・積数 4 のように x が 1 になるふつうの品で、台数 2 なのに積数の欄が空になり、
+    # ﾘﾌﾟﾗ総本数が 0 になっていた。飛ばすのは均等に分けたときだけにする
+    if not settled and not split_equal:
         state.積数 = vba.int_text(stack)
     state.台数 = vba.int_text(count)
     return StackResult(台数=count, ok=True)

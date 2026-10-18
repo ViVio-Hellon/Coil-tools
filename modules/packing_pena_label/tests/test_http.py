@@ -179,7 +179,8 @@ class TestSettingsScreen(HttpTestCase):
 
     def tearDown(self):
         # 端末設定を消して次のテストへ持ち越さない
-        self.post("/api/settings/reset", {})
+        from modules.packing_pena_label.app.services import settings as S
+        self.post("/api/settings/reset", {"password": S.PATH_PASSWORD})
 
     def test_generated_script_has_no_broken_string(self):
         """画面へ埋め込む JS が途中で切れていないこと。
@@ -305,7 +306,14 @@ class TestSettingsScreen(HttpTestCase):
         import os
         self.post("/api/settings/save", {"values": {"material_refresh_sec": 42}})
         self.assertTrue(os.path.exists(self._local_path()))
-        _, j = self.post("/api/settings/reset", {})
+        from modules.packing_pena_label.app.services import settings as S
+        # 合言葉が無ければ戻さない(参照先のパスも戻るため。統合 1.2.22)
+        for bad in ({}, {"password": "x"}):
+            _, j = self.post("/api/settings/reset", bad)
+            self.assertFalse(j["ok"])
+            self.assertTrue(j.get("needPassword"))
+            self.assertTrue(os.path.exists(self._local_path()))
+        _, j = self.post("/api/settings/reset", {"password": S.PATH_PASSWORD})
         self.assertTrue(j["ok"])
         self.assertFalse(os.path.exists(self._local_path()))
 

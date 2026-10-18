@@ -97,13 +97,11 @@ def test_probe_finds_sqlite_files(client, sandbox):
     assert "梱包資材マスタ.sqlite3" in res["found"]
 
 
-def test_probe_checks_writability_for_export(client, sandbox):
-    folder = sandbox / "out"
-    folder.mkdir()
-    r = client.post("/api/settings/probe", json={config.KEY_EXPORT_DIR: str(folder)})
-    res = r.get_json()["results"][0]
-    assert res["ok"] is True
-    assert "書けます" in res["message"]
+def test_unused_export_dir_is_not_offered(client):
+    """「書き出し先」は欄に出さない(書き出す処理が無い。統合 1.2.22)。"""
+    keys = [f["key"] for f in client.get("/api/settings").get_json()["view"]["fields"]]
+    assert config.KEY_EXPORT_DIR not in keys
+    assert config.KEY_MASTER_DB_DIR in keys
 
 
 def test_optional_spare_folder_may_stay_empty(client):

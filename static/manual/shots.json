@@ -1,10 +1,10 @@
 {
- "taken": "2026-10-17",
+ "taken": "2026-10-18",
  "versions": {
-  "app": "1.2.20",
-  "details": "0.13.21",
-  "material": "0.2.22",
-  "pena": "1.5.27"
+  "app": "1.2.22",
+  "details": "0.13.22",
+  "material": "0.2.23",
+  "pena": "1.5.29"
  },
  "images": {
   "details-about": {

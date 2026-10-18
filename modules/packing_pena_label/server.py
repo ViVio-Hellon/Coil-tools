@@ -384,7 +384,9 @@ def _page(ctx: AppContext, rel: str, prefix: str) -> Response:
         if rel == "/list/print":
             return _html(p.list_page(print_view=True))
         if rel == "/breakdown":
-            return _html(p.breakdown())
+            # ?coil=N … 計算内容のどの梱包を出すか(統合 1.2.22。以前は読まずに最小番号を出していた)
+            coil = (query.get("coil") or [""])[0]
+            return _html(p.breakdown(int(coil) if coil.isdigit() else None))
         if rel == "/labels":
             return _html(p.labels(_ob_list(ctx, query)))
         if rel == "/labels/print":

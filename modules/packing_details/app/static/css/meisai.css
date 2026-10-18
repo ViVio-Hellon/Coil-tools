@@ -557,3 +557,4 @@ dl.about dd.mono{font-family:var(--mono); font-size:11.5px}
 
 /* 設定：そのフォルダに何を探しているか */
 .set-row .files{color:var(--accent); font-weight:600}
+.set-check{display:flex; gap:8px; align-items:center; margin:6px 0; font-size:inherit}  /* 起動時の自動取り込み(統合 1.2.22) */

@@ -257,6 +257,14 @@
         <p class="set-note" id="setExportResult" role="status" hidden></p>
       </section>
 
+      {#- 起動時の自動取り込み(統合 1.2.22)。以前は配布設定でしか切り替えられず、この PC の欄が無かった -#}
+      <section class="set-box" aria-labelledby="setAutoHead">
+        <div class="set-box-head"><span id="setAutoHead">起動時の自動取り込み</span><span class="where where-local">このPCに保存</span></div>
+        <label class="set-check"><input type="checkbox" id="setAutoImport">
+          起動したとき、仕掛台帳・梱包課共有が新しくなっていれば取り込み直す(既定: する)</label>
+        <p class="set-note" id="setAutoResult" role="status" hidden></p>
+      </section>
+
       {#- 共有(全ライン)。右上の文字・マスタ管理・履歴がここを見る。刷る文字の
           出どころが変わるので**管理者パスワードで守る** -#}
       <section class="set-box set-box-shared" id="setShareBox" aria-labelledby="setShareHead">

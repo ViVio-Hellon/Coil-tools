@@ -65,6 +65,7 @@ export function wire(given) {
   $("btnHistorySave").addEventListener("click", () => savePlace("history"));
   $("btnJsonSave").addEventListener("click", () => savePlace("json"));
   $("btnExportSave").addEventListener("click", saveExportDir);
+  $("setAutoImport").addEventListener("change", saveAutoImport);
   $("btnQaSave").addEventListener("click", () => saveQa(false));
   $("btnQaReset").addEventListener("click", () => saveQa(true));
   $("setQaValue").addEventListener("input", countQa);
@@ -227,6 +228,7 @@ function renderLocal(body, { fill = false } = {}) {
     $("setJsonDir").value = body.json_setting || "";
     $("setExportDir").value = body.export_dir_setting || "";
   }
+  $("setAutoImport").checked = !!body.auto_import;
   // **このフォルダに何を探しているか。** 道だけ出しても、そこへ
   // 何を置けばよいかが分からない
   $("setLotFiles").textContent = `探すファイル: ${body.lot_files.join(" / ")}`;
@@ -457,6 +459,24 @@ async function saveFolder(kind) {
     if (refused(err, f.note) && err.field === "value") $(f.input).focus();
   } finally {
     button.disabled = false;
+  }
+}
+
+/** 起動時の自動取り込み。押したらすぐ保存する(この PC の設定。統合 1.2.22) */
+async function saveAutoImport() {
+  const box = $("setAutoImport");
+  box.disabled = true;
+  showNote("setAutoResult", "");
+  try {
+    const saved = await api.post("/api/settings/auto-import", { enabled: box.checked });
+    box.checked = !!saved.auto_import;
+    showNote("setAutoResult", saved.auto_import
+      ? "保存しました。次に起動したとき、新しくなっていれば取り込み直します。"
+      : "保存しました。次に起動したときは取り込みません(左の「取り込み」で取り込めます)。");
+  } catch (err) {
+    refused(err, "setAutoResult");
+  } finally {
+    box.disabled = false;
   }
 }
 

@@ -269,7 +269,7 @@ def startup_gate(mode: str, *, wait_sec: float = GATE_WAIT_SEC):
 
 
 def lock_path(mode: str) -> Path:
-    """mode ごとに別のロック。現場と資材は同時に起動してよい。"""
+    """mode ごとのロック。統合版のモードは `main` の1つだけ(移植元は現場/資材の2つだった)。"""
     if mode not in modes.KEYS:
         raise ValueError(f"未知のmode: {mode!r}")
     return app_config.local_dir("runtime") / f"{mode}.lock"
@@ -500,8 +500,8 @@ def is_our_app(health: Optional[dict], mode: str) -> bool:
     """その応答が**自分と同じアプリの同じmode**か。
 
     `app_id` を見ないと、たまたま同じポートを使っている別のアプリを
-    自分だと誤認する(基盤仕様書 2.3)。mode まで見るのは、現場と資材が
-    別ポートで動く設計なので、取り違えると権限の分離が崩れるため。
+    自分だと誤認する(基盤仕様書 2.3)。mode まで見るのは移植元の名残(移植元は現場と資材が
+    別ポートで動いた)。統合版のモードは `main` だけなので、実際は app_id で見分けている。
     """
     if not health:
         return False
@@ -775,8 +775,8 @@ def is_port_free(port: int, host: str = "") -> bool:
 def pick_port(mode: str) -> Optional[int]:
     """使えるポートを1つ選ぶ。全部塞がっていれば `None`。
 
-    候補が mode どうしで重ならないことは `app_config.port_range_conflicts()`
-    が保証する(現場が繰り上がって資材のポートを奪わないようにするため)。
+    候補が mode どうしで重ならないことは `app_config.port_range_conflicts()` が確かめる
+    (移植元の2モードの名残。統合版のモードは `main` だけ)。
     """
     for port in app_config.port_candidates(mode):
         if is_port_free(port):

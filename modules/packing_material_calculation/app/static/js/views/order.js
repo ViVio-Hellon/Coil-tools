@@ -98,6 +98,7 @@ $('#commit').addEventListener('click', async () => {
     committed = true;
     markPending('order', '');
     showCommitted(r.committed || r.saved || -1);
+    loadHistory();                    // 記録したものを下の履歴にすぐ出す
   }
   toast(r.ok ? `${r.saved} 件を履歴に残しました`
              : (r.message || '記録できません'), r.ok ? '' : 'warn');
@@ -117,7 +118,32 @@ new MutationObserver(() => markPending('order', orderPending()))
   .observe($('#commit'), { attributes: true, attributeFilter: ['hidden'] });
 watchUnsaved(() => (orderPending() ? [orderPending()] : []));
 
+// ------------------------------------------------------------------
+// 発注の履歴(統合 1.2.22)。記録した発注を画面で見る(以前は見る画面が無かった)
+// ------------------------------------------------------------------
+let historyRows = [];
+function drawHistory() {
+  const want = ($('#historyLot').value || '').trim().toUpperCase();
+  const rows = want ? historyRows.filter(r => String(r['LotNo'] || '').toUpperCase().includes(want))
+                    : historyRows;
+  $('#historyRows').innerHTML = rows.length ? rows.map(r => `<tr>
+      <td>${esc(r['処理日'])}</td><td>${esc(r['担当者'])}</td><td>${esc(r['品名'])}</td>
+      <td>${esc(r['サイズ'])}</td><td class="num">${esc(r['長さ'])}</td><td>${esc(r['LotNo'])}</td>
+      <td class="num">${esc(r['数量'])}</td><td>${esc(r['単位'])}</td><td>${esc(r['登録日時'])}</td>
+    </tr>`).join('')
+    : `<tr><td colspan="9" class="muted">${historyRows.length ? '当てはまる発注はありません' : 'まだ記録した発注はありません'}</td></tr>`;
+  $('#historyCount').textContent = want ? `${rows.length} / ${historyRows.length} 件` : `${historyRows.length} 件`;
+}
+async function loadHistory() {
+  const r = await call('/api/order/history');
+  if (!r.ok) return;
+  historyRows = r.rows || [];
+  drawHistory();
+}
+$('#historyLot').addEventListener('input', drawHistory);
+
 async function start() {
+  loadHistory();
   const r = await call('/api/order');
   if (r.ok && r.sheets.length) {
     // 開き直したとき: このタブで「記録していない」と覚えていれば訊く。覚えていなければ、

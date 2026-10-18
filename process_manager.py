@@ -29,11 +29,13 @@
 
 使い方:
 
-    python process_manager.py                  統合アプリを止める
-    python process_manager.py --mode material  資材モードを止める
-    python process_manager.py --all            両方止める
+    python process_manager.py                  統合アプリを止める(3機能とも終わる)
     python process_manager.py --force          実行中の処理を中断してでも止める
     python process_manager.py --status         状態を見るだけ
+
+モードは `main` の1つだけ(`common/modes.py`)。移植元にあった「現場/資材」の2モードと
+`--mode material`・`--all`(両方止める)は統合版には無い(`--all` は古い呼び出しを断らない
+ために受けるだけで、`main` を止める)。
 """
 from __future__ import annotations
 

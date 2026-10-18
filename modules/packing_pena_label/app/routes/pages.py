@@ -17,7 +17,7 @@ import os
 import re
 import threading
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from ..config import code_stamp as _code_stamp
 from ..services import label_layout as LL
@@ -407,9 +407,11 @@ class PageRoutes:
                     % esc("、".join(data["missing"])))
 
         note = ('<div class="hint" style="margin-bottom:8px">'
-                '※ この表の「風袋」は VBA と同じく <b>EX-DRY を含まない 8 項目合計</b>、'
-                '「梱包高さ」は <b>ハードボード 2.35mm×2 を加算しない</b> 値です'
-                '（風袋計算画面の値とは定義が異なります）。</div>')
+                '※ この表は本数ごとに<b>風袋計算と同じ計算</b>をしています。「風袋」は EX-DRY を含む'
+                ' <b>9 項目の合計</b>、「梱包高さ」は樹脂パレットと<b>ハードボード 2.35mm×2 を加えて</b>'
+                ' 10mm 単位で切り上げた値です(風袋計算の画面と同じ値になります)。'
+                '<br>(VBA の羅列計算は 8 項目・ハードボード無しの別の計算でしたが、2026.09 に'
+                '風袋計算へそろえました。以前この注記は古い説明のままでした)</div>')
 
         tools = ('' if print_view else
                  '<div class="btn-row no-print" style="margin-bottom:10px">'
@@ -431,8 +433,13 @@ class PageRoutes:
         return self._shell("羅列計算", body, "list", script, print_only=print_view)
 
     # ============================================================ 計算内訳
-    def breakdown(self) -> str:
-        """VBA ``表記用`` UserForm。値と計算式の内訳。"""
+    def breakdown(self, coil: Optional[int] = None) -> str:
+        """VBA ``表記用`` UserForm。値と計算式の内訳。
+
+        ``coil`` は出す梱包の番号(上の梱包ごとのボタン ``?coil=N``)。無い・計算していない番号なら
+        VBA と同じく最後に処理した梱包(最小番号)。以前はボタンの指定を読まず、どれを押しても
+        最小番号の梱包が出ていた(統合 1.2.22。文書を作るときに見つかった)。
+        """
         data = self.wf.store.all_tare()
         if not data:
             body = ('<div class="card"><h2>計算内容（表記用）</h2>'
@@ -442,7 +449,7 @@ class PageRoutes:
 
         # VBA の表記用は「最後に処理した梱包」の内容を保持する。
         # VBA は 4→3→2→1 の順に処理するため、最後は最小番号の梱包になる。
-        coil_no = min(data)
+        coil_no = coil if coil in data else min(data)
         p = data[coil_no]
         b = p["breakdown"]
         disp = p["display"]
@@ -465,8 +472,11 @@ class PageRoutes:
             f'<tr><th>{esc(n)}</th><td class="v">{esc(v)}</td>'
             f'<td class="f">{nl2br(f_)}</td></tr>' for n, v, f_ in items)
 
+        CURRENT = 'aria-current="page" '
         tabs = " ".join(
-            f'<a class="btn btn-link" style="width:auto;display:inline-block" '
+            f'<a class="btn {"btn-primary" if k == coil_no else "btn-link"}" '
+            f'style="width:auto;display:inline-block" '
+            f'{CURRENT if k == coil_no else ""}'
             f'href="{self.base}/breakdown?coil={k}">{esc(data[k]["title"])}</a>'
             for k in sorted(data))
 
@@ -2308,7 +2318,17 @@ class PageRoutes:
     if(!window.confirm("この端末の設定を消して、同梱の既定へ戻します。よろしいですか？")){
       return;
     }
-    pplPost("/api/settings/reset", {}).then(function(j){
+    // 参照先のパスも戻るので合言葉が要る(統合 1.2.22)。欄に入っていなければ聞く
+    var box = document.getElementById("setPassword");
+    var typed = box ? box.value : "";
+    (typed ? Promise.resolve(typed)
+           : pplAskPassword("既定へ戻すには合言葉が要ります。\\n\\n合言葉を入力してください")
+    ).then(function(pw){
+      if (pw === null) { result("既定へ戻すのは取り消しました。", "warnbox"); return null; }
+      return pplPost("/api/settings/reset", {password: pw});
+    }).then(function(j){
+      if (!j) { return; }
+      if (!j.ok) { pplToast(j.message, "warn"); result(j.message, "warnbox"); return; }
       pplToast(j.message, "info");
       result(j.message, "okbox");
       // 同梱の既定に戻った値を、その場で欄に出す(読み直さない)
