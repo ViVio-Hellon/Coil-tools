@@ -1031,12 +1031,18 @@ def _confirm_in_page(fr, wait: float = 0.0) -> bool:
 
 def _pump_until(page, fn, timeout=15.0) -> bool:
     """Playwright の知らせ(新しいタブなど)を受け取りながら待つ。`time.sleep` の間は届かない。"""
+    def ok():
+        try:
+            return fn()
+        except Exception:                       # noqa: BLE001 - 面を移っている最中は読めない
+            return False
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if fn():
+        if ok():
             return True
         page.wait_for_timeout(100)
-    return bool(fn())
+    return bool(ok())
 
 
 def _kind(url: str) -> str:
@@ -1077,17 +1083,14 @@ def scenario_rapid(app: App, ctx, sh: Shell, note: dict) -> None:
           ok and pena_toast(p, "計算しました") and text(p, "#nw1") == "165.0", text(p, "#nw1"))
     m = sh.tab("material")
     material_ready(m)
-    if "/calc" not in m.url:
-        m.click('nav.rail a.rail__item[href*="/calc"]')
-        m.wait_for_load_state()
-        m = sh.frame("material")
-        material_ready(m)
     # チェックリストは一連の流れで積んだ行(A123456)を使う。ここで積み足すと、あとの試験
-    # (交互に使う・放置)が数える行数が変わる
+    # (交互に使う・放置)が数える行数が変わる。面を移り終えるまで待つ(押した直後は前の面のまま)
     m.click('nav.rail a.rail__item[href*="/checklist"]')
-    m.wait_for_load_state()
+    _pump_until(page, lambda: "/checklist" in (sh.frame("material").url or "")
+                and sh.frame("material").evaluate("document.readyState") == "complete", 15)
     m = sh.frame("material")
     material_ready(m)
+    _pump_until(page, lambda: m.evaluate("document.querySelectorAll('#rows tr.on').length") >= 1, 10)
     rows = m.evaluate("document.querySelectorAll('#rows tr.on').length")
     check("連続: 用意(資材計算のチェックリストに行がある)", rows >= 1 and "A123456" in text(m, "#rows"), rows)
     d = sh.frame("details")
