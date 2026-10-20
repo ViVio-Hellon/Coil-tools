@@ -154,9 +154,12 @@ class SaveTest(unittest.TestCase):
                     meisai_service.save_hand_edits(self.conn, "L5160Z0", edits)
 
     def test_作り直された明細には書かない(self):
-        """No指定で上書きすると行が作り直される。**古い紙面から紛れ込ませない。**"""
+        """出力済み修正で出し直すと行が作り直される。**古い紙面から紛れ込ませない。**"""
         old_id = self.out.row_id
-        meisai_service.output(self.conn, _board(), specify_no=1, confirm=True)
+        board = _board()
+        meisai_service.reset_stack(board)
+        meisai_service.begin_edit(self.conn, board, 1)
+        meisai_service.output_edit(self.conn, board, confirm=True)
         with self.assertRaises(meisai_service.HandEditError) as caught:
             meisai_service.save_hand_edits(self.conn, "L5160Z0",
                                            self._edits("x", row_id=old_id))

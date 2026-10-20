@@ -4,12 +4,17 @@
 
     1. 重量を読み直す            ReadWeights
     2. 積み上げ順に条番号を並べる   slotKeys
-    3. 副番の重複を確かめる        IsDuplicate  (No指定時はスキップ)
-    4. Noを決める                IncrementSeq / 指定値
+    3. 副番の重複を確かめる        IsDuplicate
+    4. Noを決める                IncrementSeq
     5. 明細を作る                CreateMeisaiSheet + WriteData
     6. 副番を登録する             RegisterFuban
     7. 印刷済フラグをOFFにする     SetPrinted False
     8. 積み上げだけリセットする     ClearGimmickC + BuildGimmickC
+
+【No指定は外した(VER 0.13.23・現場の判断)】
+出力済みを直したいときは、出力済みにチェックを入れて「出力済み修正」で積み直す
+(`begin_edit` → `output_edit`)。同じNoで出し直し、前の紙の履歴には「作り直し」の
+印を付ける。番号を手で打つ No指定は、打ち間違いで別の紙を上書きしうるので使わない。
 
 【VBAが確認を挟む場所は、ここでは「断り」として返す】
 VBA は `MsgBox ... vbYesNo` で利用者に尋ね、「はい」なら続けていた。
@@ -33,14 +38,15 @@ log = get_logger("meisai_service")
 
 # 確認の種類。**文言から推し量らない**
 CONFIRM_DUPLICATE = "duplicate"      # 副番がすでに出力済み
-CONFIRM_OVERWRITE = "overwrite"      # そのNoはもうある
-CONFIRM_BEYOND_SEQ = "beyond_seq"    # 現在連番を超えるNoを指定した
+CONFIRM_EDIT = "edit"                # 出力済みのNoを積み直した並びで出し直す(VER 0.13.23)
 
 # 断りの種類
 REFUSE_INCOMPLETE = "incomplete"     # スロットが埋まっていない
 REFUSE_NO_WEIGHT = "no_weight"       # 重量が未入力
-REFUSE_BAD_NO = "bad_no"             # No指定が数値でない
 REFUSE_TOO_MANY = "too_many"         # 紙の行数を超える
+REFUSE_NOT_EDITING = "not_editing"   # 修正中ではない
+REFUSE_NO_OUTPUT = "no_output"       # そのNoの出力は無い
+REFUSE_USED_ELSEWHERE = "used_elsewhere"  # ほかのNoで使っているコイルを積んでいる
 
 
 @dataclass
@@ -111,14 +117,11 @@ def read_weights(values: list[object], jou_su: int) -> list[int]:
 # 出力 (RULE-07 / RULE-08)
 # ==================================================================
 def output(conn: sqlite3.Connection, board: Board, *,
-           specify_no: Optional[int] = None,
            confirm: bool = False,
            lot: Any = None, orders: Iterable[Any] = ()) -> OutputResult:
-    """明細を1枚出す (VBA `cmdKettei_Click`)。
+    """明細を1枚出す (VBA `cmdKettei_Click`)。次の連番で出す。
 
-    `specify_no` は「No指定」チェックに相当。指定すると
-    **副番の重複チェックを丸ごと飛ばす**(VBA と同じ。再出力用の
-    逃げ道なので、同じ副番が出るのは織り込み済み)。
+    修正中(`board.editing`)は呼ばない ── `output_edit` を使う(呼び出し側が分ける)。
 
     `confirm=False` のうちは確認事項を返すだけで**何も書かない**。
     利用者が了解したら `confirm=True` で呼び直す。
@@ -145,33 +148,13 @@ def output(conn: sqlite3.Connection, board: Board, *,
 
     confirms: list[Confirm] = []
 
-    # --- 副番の重複 (No指定時はスキップ) ---
-    if specify_no is None:
-        dup = history_repo.duplicates(conn, board.lot_no, keys)
-        if dup:
-            confirms.append(Confirm(
-                CONFIRM_DUPLICATE,
-                "以下の副番はすでに出力済みです。このまま出力しますか？",
-                dup))
-
-    # --- Noを決める ---
-    if specify_no is not None:
-        if specify_no < 1:
-            result.refuse = REFUSE_BAD_NO
-            result.message = "出力するNoを入力してください。"
-            return result
-        existing = db.fetch_one(
-            conn, "SELECT 1 FROM 明細出力 WHERE ロット番号 = ? AND No = ?",
-            (board.lot_no, specify_no), caller_name="meisai_service.output")
-        if existing is not None:
-            confirms.append(Confirm(
-                CONFIRM_OVERWRITE, f"No{specify_no}は既に存在します。上書きしますか？"))
-        elif specify_no > history_repo.current_seq(conn):
-            confirms.append(Confirm(
-                CONFIRM_BEYOND_SEQ,
-                f"No{specify_no}は現在の連番"
-                f"(No{history_repo.current_seq(conn)})を超えています。"
-                "作成してよいですか？"))
+    # --- 副番の重複 ---
+    dup = history_repo.duplicates(conn, board.lot_no, keys)
+    if dup:
+        confirms.append(Confirm(
+            CONFIRM_DUPLICATE,
+            "以下の副番はすでに出力済みです。このまま出力しますか？",
+            dup))
 
     if confirms and not confirm:
         result.confirms = confirms
@@ -191,17 +174,7 @@ def output(conn: sqlite3.Connection, board: Board, *,
     # 結果を捨てていたので、1行も書けていないのに画面には
     # 「出力しました」と出ていた。
     with db.transaction(conn, name="明細の出力"):
-        if specify_no is not None:
-            seq_no = specify_no
-            # 上書きされる紙の履歴は**消さずに**「作り直し」の印を付ける
-            for old in conn.execute(
-                    "SELECT 履歴ID FROM 明細出力 WHERE ロット番号 = ? AND No = ?",
-                    (board.lot_no, seq_no)).fetchall():
-                slip_history.mark_replaced(conn, old["履歴ID"])
-            db.write(conn, "DELETE FROM 明細出力 WHERE ロット番号 = ? AND No = ?",
-                     (board.lot_no, seq_no), name="明細の出力")
-        else:
-            seq_no = history_repo.next_seq(conn)
+        seq_no = history_repo.next_seq(conn)
 
         # **履歴にも同じまとまりで書く。** 明細だけ残って履歴が無い(あるいは
         # その逆)を作らない
@@ -222,10 +195,6 @@ def output(conn: sqlite3.Connection, board: Board, *,
             if not history_repo.is_duplicate(conn, full):
                 history_repo.register_fuban(conn, full)
 
-        # --- No指定なら現在連番を引き上げる (VBA `SetCurrentSeq`) ---
-        if specify_no is not None and specify_no > history_repo.current_seq(conn):
-            history_repo.set_seq(conn, specify_no)
-
         # --- 印刷済フラグをOFF ---
         history_repo.set_printed(conn, False)
 
@@ -234,6 +203,137 @@ def output(conn: sqlite3.Connection, board: Board, *,
     result.seq_no = seq_no
     result.message = f"出力しました。No{seq_no}を確認してください。"
     return result
+
+
+# ==================================================================
+# 出力済みの修正 (VER 0.13.23・現場の求め)
+# ==================================================================
+# 出力済みにチェックを入れて「出力済み修正」を押すと、そのNoのコイルを積み上げへ戻して
+# 積み直せる。**ほかのNoで使っているコイルは使えない**(No1〜No3 があってNo1を直すとき、
+# No2・No3 のコイルは積めない)。「修正して出力」で同じNoのまま出し直し、前の紙の履歴には
+# 「作り直し」の印を付ける(消さない)。
+def output_keys(conn: sqlite3.Connection, lot_no: str, *,
+                exclude_no: int = 0) -> set[str]:
+    """そのロットの出力済みに載っているコイル(`exclude_no` のNoを除く)。"""
+    return {k for o in list_outputs(conn, lot_no) if o.seq_no != exclude_no for k in o.keys}
+
+
+def begin_edit(conn: sqlite3.Connection, board: Board, seq_no: int) -> Output:
+    """出力済みの1枚を積み直しに入る。断るときは `RefusedError`。"""
+    found = find_output(conn, board.lot_no, seq_no)
+    if found is None:
+        raise strand_service.RefusedError(REFUSE_NO_OUTPUT, f"No{seq_no}の出力はありません。")
+    if not board.strands:
+        raise strand_service.RefusedError(
+            REFUSE_NO_OUTPUT, "条番号が表示されていません。先に「条番号表示」を押してください。")
+    board.begin_edit(found.seq_no, found.keys, found.weights)
+    # ほかのNoのコイルは使用済みのまま(途中経過から戻した直後でも確実に)
+    for key in output_keys(conn, board.lot_no, exclude_no=found.seq_no):
+        if board.knows(key) and key not in board.restored_used and key not in board.slots:
+            board.restored_used.append(key)
+    return found
+
+
+def output_edit(conn: sqlite3.Connection, board: Board, *, confirm: bool = False,
+                lot: Any = None, orders: Iterable[Any] = ()) -> OutputResult:
+    """修正中のNoを、積み直した並びで出し直す。**Noは変えない。**
+
+    - 埋まっていなければ断る / ほかのNoのコイルが入っていれば断る(念のための最後の砦。
+      積むときにも断っている)
+    - いつも確かめる(前の紙は使えなくなる。刷り直しが要る)
+    - 前の紙の履歴は消さずに「作り直し」の印。書き足したサイズ・LOTNO は引き継ぐ
+    - 副番履歴は、このNoから外れたコイルを外し、加わったコイルを足す
+    """
+    result = OutputResult()
+    if not board.editing:
+        result.refuse = REFUSE_NOT_EDITING
+        result.message = "修正中ではありません。"
+        return result
+    seq_no = board.edit_no
+    old = find_output(conn, board.lot_no, seq_no)
+    if old is None:
+        result.refuse = REFUSE_NO_OUTPUT
+        result.message = f"No{seq_no}の出力はもうありません。修正をやめてください。"
+        return result
+    if not board.is_complete:
+        result.refuse = REFUSE_INCOMPLETE
+        result.message = "積み上げが埋まっていません。"
+        return result
+    keys = board.stacked_keys()
+    if len(keys) > config.SHEET_ROWS:
+        result.refuse = REFUSE_TOO_MANY
+        result.message = (f"1枚に載るのは{config.SHEET_ROWS}行までです"
+                          f"（いま{len(keys)}行）。")
+        return result
+    others = output_keys(conn, board.lot_no, exclude_no=seq_no)
+    clash = [k for k in keys if k in others]
+    if clash:
+        result.refuse = REFUSE_USED_ELSEWHERE
+        result.message = ("ほかのNoで使っているコイルは積めません: " + "、".join(clash))
+        return result
+
+    if not confirm:
+        removed = [k for k in old.keys if k not in keys]
+        added = [k for k in keys if k not in old.keys]
+        detail = [f"前: {' '.join(old.keys)}", f"後: {' '.join(keys)}"]
+        if removed:
+            detail.append("外すコイル: " + "、".join(removed))
+        if added:
+            detail.append("加えるコイル: " + "、".join(added))
+        result.confirms = [Confirm(
+            CONFIRM_EDIT,
+            f"No{seq_no}を積み直した並びで出し直します。前の No{seq_no} の紙は使えなくなります"
+            "(刷り直してください)。よろしいですか？", detail)]
+        result.message = "確認してください。"
+        return result
+
+    with db.transaction(conn, name="出力済みの修正"):
+        # 前の紙の履歴は**消さずに**「作り直し」の印を付ける
+        if old.history_id:
+            slip_history.mark_replaced(conn, old.history_id)
+        history_id = slip_history.record_output(
+            conn, lot_no=board.lot_no, seq_no=seq_no, keys=keys, weights=board.weights,
+            lot=lot, orders=orders, hand_size=old.hand_size, hand_lotno=old.hand_lotno)
+        # 行は作り直す(`管理番号` が変わる)。前の紙面を開いたままでも、その書き足しが
+        # 新しい明細へ紛れ込まない(`save_hand_edits` が断る)
+        db.write(conn, "DELETE FROM 明細出力 WHERE ロット番号 = ? AND No = ?",
+                 (board.lot_no, seq_no), name="出力済みの修正")
+        db.write(
+            conn,
+            "INSERT INTO 明細出力 (ロット番号, No, 副番の並び, 重量, 出力日時, 履歴ID,"
+            " 手入力サイズ, 手入力ロット番号) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (board.lot_no, seq_no, ",".join(keys),
+             ",".join(str(w) for w in board.weights), db.now_db_string(), history_id,
+             old.hand_size, old.hand_lotno),
+            name="出力済みの修正")
+        # 副番履歴: このNoから外れたコイルを外し(ほかのNoに無ければ)、加わったコイルを足す
+        for key in old.keys:
+            if key not in keys and key not in others:
+                history_repo.unregister_fuban(conn, history_repo.fuban_key(board.lot_no, key))
+        for key in keys:
+            full = history_repo.fuban_key(board.lot_no, key)
+            if not history_repo.is_duplicate(conn, full):
+                history_repo.register_fuban(conn, full)
+        history_repo.set_printed(conn, False)
+
+    log.info("output_edit: %s-No%s を積み直しました (%s行)", board.lot_no, seq_no, len(keys))
+    result.ok = True
+    result.seq_no = seq_no
+    result.message = f"No{seq_no}を修正しました。刷り直してください(印刷)。"
+    return result
+
+
+# ==================================================================
+# 全クリア (VER 0.13.23・現場の求め)
+# ==================================================================
+def cancel_lot_history(conn: sqlite3.Connection, lot_no: str) -> int:
+    """そのロットの出力済みの紙を、明細の履歴で「取り消し」にする。戻り値は枚数。
+
+    全クリアは出力済み・副番履歴・連番・途中経過を消して初めからやり直す。紙の履歴まで
+    消すと、取り消す前に刷って現場へ出た紙が追えなくなるので、**消さずに印を付ける**。
+    """
+    ids = [o.history_id for o in list_outputs(conn, lot_no) if o.history_id]
+    return slip_history.mark_cancelled(conn, ids) if ids else 0
 
 
 def reset_stack(board: Board) -> None:
@@ -268,7 +368,7 @@ class Output:
     weights: list[int]
     printed_at: str = ""
     # 行の番号(`管理番号`)。**書き足しを返すときの目印。**
-    # No指定で上書きすると行が作り直されて番号が変わるので、古い紙面
+    # 出力済み修正で出し直すと行が作り直されて番号が変わるので、古い紙面
     # からの書き足しが新しい明細へ紛れ込まない
     row_id: int = 0
     # 印刷の前に紙面で書き足したもの。空なら何も印字しない
@@ -361,7 +461,7 @@ def save_hand_edits(conn: sqlite3.Connection, lot_no: str,
     **1枚でも書けなければ、1枚も書かない。** まとめて開いた紙面で
     一部だけ残ると、刷った紙と記録が食い違う。
 
-    **作り直された明細には書かない。** No指定で上書きすると行が
+    **作り直された明細には書かない。** 出力済み修正で出し直すと行が
     作り直されて `管理番号` が変わる。古い紙面を開いたままだと、
     前の明細への書き足しが新しい明細へ紛れ込むので、断る。
     """

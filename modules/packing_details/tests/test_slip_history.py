@@ -3,7 +3,7 @@
 **守ること**
 - 出力したら、**同じまとまりで**手元の履歴に残る(明細だけ・履歴だけにならない)
 - ロットを切り替えて明細が消えても、履歴は消えない
-- 作り直し(No指定の上書き)は消さずに印を付ける。書き足し・紙面を開いたも映す
+- 作り直し(出力済み修正)・取り消し(全クリア)は消さずに印を付ける。書き足し・紙面を開いたも映す
 - 共有へは手元から送る。**二重にならない**・届かなければ残して送り直す
 - 3年より前は整理する(共有も手元も、1日1回)
 - CSV は Excel でそのまま表になる(副番が日付に化けない)。ダウンロードはしない
@@ -111,7 +111,11 @@ class RecordTest(unittest.TestCase):
     def test_作り直しは消さずに印を付ける(self):
         self._out()
         first = self.conn.execute("SELECT 送信ID FROM 明細履歴").fetchone()[0]
-        self._out(keys=("1-9", "2-7"), specify_no=1)
+        # 出力済み修正(VER 0.13.23): No1 を積み直して出し直す
+        _post(self.client, "/api/edit-output", {"no": 1})
+        _post(self.client, "/api/unstack", {"slot_no": 1})
+        _post(self.client, "/api/unstack", {"slot_no": 2})
+        self._out(keys=("1-9", "2-7"))
         rows = self.conn.execute("SELECT 送信ID, 状態, 作り直し日時 FROM 明細履歴"
                                  " ORDER BY 出力日時, rowid").fetchall()
         self.assertEqual(len(rows), 2)
@@ -382,9 +386,26 @@ class ExportTest(_Base):
         today = date.today().isoformat()
         result = slip_history.export_csv(today, today)
         summary = self._rows(result.summary_file)
-        self.assertEqual(summary[1][2:], ["1", "1", "250.0", "1"])
+        self.assertEqual(summary[1][2:], ["1", "1", "250.0", "1", "0"])
         detail = self._rows(result.detail_file)
         self.assertEqual(len(detail), 4)
+
+    def test_取り消しは明細には出し_集計では数えない(self):
+        """全クリア(VER 0.13.23)で取り消した紙。消さずに残し、枚数は別の列で数える。"""
+        first = _record(self.conn)
+        second = _record(self.conn, no=2, keys=("1-9",))
+        _record(self.conn, no=1, keys=("1-1",))         # やり直したあとの紙
+        with db.transaction(self.conn):
+            self.assertEqual(slip_history.mark_cancelled(self.conn, [first, second]), 2)
+        slip_history.send_pending(self.conn)
+        today = date.today().isoformat()
+        result = slip_history.export_csv(today, today)
+        summary = self._rows(result.summary_file)
+        self.assertEqual(summary[0][-2:], ["作り直した枚数", "取り消した枚数"])
+        self.assertEqual(summary[1][2:], ["1", "1", "250.0", "0", "2"])
+        detail = self._rows(result.detail_file)
+        state = slip_history.DETAIL_CSV_COLUMNS.index("状態")
+        self.assertEqual(sorted(r[state] for r in detail[1:]), ["取り消し", "取り消し", "取り消し", "有効"])
 
     def test_期間とロット番号で絞る(self):
         _record(self.conn, lot="L5160Z0", when="2026-01-10 08:00:00")

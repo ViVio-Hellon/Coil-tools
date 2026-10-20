@@ -81,6 +81,12 @@ def register_fuban(conn: sqlite3.Connection, key: str) -> None:
              (key, db.now_db_string()), name="副番の登録")
 
 
+def unregister_fuban(conn: sqlite3.Connection, key: str) -> None:
+    """副番を履歴から外す。**出力済みの修正で、その紙から外れたコイル**だけに使う
+    (VER 0.13.23)。ほかのNoに載っているコイルは外さない(呼び出し側が確かめる)。"""
+    db.write(conn, "DELETE FROM 副番履歴 WHERE 副番キー = ?", (key,), name="副番の取り消し")
+
+
 def clear_fuban(conn: sqlite3.Connection) -> None:
     """副番履歴を全件消す (VBA `ClearFubanList`)。
 
@@ -207,7 +213,10 @@ def delete_snapshot(conn: sqlite3.Connection, lot_no: str) -> None:
 
 
 def clear_snapshots(conn: sqlite3.Connection) -> None:
-    """全消去 (VBA `ClearAllSnapshots`)。副番履歴クリアと連動する。"""
+    """全消去 (VBA `ClearAllSnapshots`)。VBA では副番履歴クリアと連動していた。
+
+    VER 0.13.23 で副番履歴クリアを外したので、画面からは呼ばない(全クリアは
+    そのロットの分だけ `delete_snapshot` で消す)。"""
     db.write(conn, "DELETE FROM 明細スナップショット",
              name="途中経過の全消去")
 

@@ -134,6 +134,13 @@
   <!-- ============ 積み上げ ============ -->
   <section class="card" id="stackCard" hidden>
     <h2>積み上げ<span class="hint">クリックで解除</span></h2>
+    {# 出力済みの修正中(VER 0.13.23)。そのNoのコイルを積み上げへ戻してある #}
+    <div class="edit-banner" id="editBanner" role="status" hidden>
+      <div><b id="editTitle"></b>　積み直して「修正して出力」を押します。
+        ほかのNoで使っているコイルは積めません。</div>
+      <div class="edit-before" id="editBefore"></div>
+      <button type="button" id="btnEditCancel">修正をやめる</button>
+    </div>
     <div class="row" style="margin-bottom:8px">
       <label for="stackMax">積み条数</label>
       <input type="text" id="stackMax" inputmode="numeric" style="width:50px;text-align:center"
@@ -153,15 +160,14 @@
       <button type="button" id="btnPrint" disabled>印刷</button>
     </div>
     <div class="stamp" id="printNote" style="margin-top:4px"></div>
-    <div class="row" style="margin-top:8px">
-      <label><input type="checkbox" id="chkSpecify"> No指定</label>
-      <input type="text" id="specifyNo" inputmode="numeric" disabled style="width:50px;text-align:center">
-    </div>
     <div class="row" style="margin-top:6px">
       <span class="stamp" id="seqNote"></span>
     </div>
+    {# 副番履歴クリアと No指定は外した(VER 0.13.23)。やり直すときは全クリア #}
     <div class="row" style="margin-top:8px">
-      <button type="button" id="btnClearHistory">副番履歴クリア</button>
+      <button type="button" class="danger" id="btnClearAll"
+              title="このロットの出力済み・副番履歴・連番・条番号と廃棄を消して、初めからやり直します">全クリア</button>
+      <span class="stamp">出力済みも消して初めからやり直す</span>
     </div>
   </section>
 
@@ -169,6 +175,11 @@
   <section class="card" id="outputCard" hidden>
     <h2>出力済み<span class="hint">A4横の左半分に1枚。チェックでまとめて刷れる</span></h2>
     <div class="outputs" id="outputs"></div>
+    {# 出力済みに1つだけチェックを入れて押す(VER 0.13.23) #}
+    <div class="row" style="margin-top:8px">
+      <button type="button" id="btnEditOutput" disabled>出力済み修正</button>
+      <span class="stamp" id="editNote">直す1枚にだけチェックを入れて押します</span>
+    </div>
   </section>
 
   </div>

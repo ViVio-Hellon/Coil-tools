@@ -1,15 +1,27 @@
 {
- "taken": "2026-10-18",
+ "taken": "2026-10-20",
  "versions": {
-  "app": "1.2.22",
-  "details": "0.13.22",
+  "app": "1.2.23",
+  "details": "0.13.23",
   "material": "0.2.23",
   "pena": "1.5.29"
  },
  "images": {
   "details-about": {
    "w": 1280,
-   "h": 691
+   "h": 818
+  },
+  "details-clear-all": {
+   "w": 1280,
+   "h": 818
+  },
+  "details-edit": {
+   "w": 1280,
+   "h": 818
+  },
+  "details-edit-pick": {
+   "w": 1280,
+   "h": 818
   },
   "details-history": {
    "w": 1280,

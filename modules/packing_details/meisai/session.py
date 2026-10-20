@@ -172,9 +172,9 @@ def close_lot(conn: sqlite3.Connection, lot_no: str) -> None:
 
         DeleteLotSheets → ClearFubanList → ResetSeq → DeleteSnapshot
 
-    **順序をそのまま守る。** 連番のリセットは副番履歴クリアでは
+    **順序をそのまま守る。** 連番のリセットは `clear_fuban` では
     起きないので、ここで明示的に呼ぶ(VBA のコメントが同じことを
-    言っている)。
+    言っている)。全クリア(VER 0.13.23)も、ここを通して同じ4つを消す。
     """
     from . import meisai_service
 
@@ -208,9 +208,11 @@ def save(conn: sqlite3.Connection) -> None:
         lot_no=board.lot_no,
         zen_kotei=board.zen_kotei,
         jou_su=board.jou_su,
-        weights=list(board.weights),
+        # 修正中の重量はそのNoを出したときの値。途中経過には修正に入る前の値を残す
+        weights=list(board.edit_weights_before if board.editing else board.weights),
         strands=list(board.strands),
-        used=sorted(board.used, key=_key_order),
+        # 修正中も、紙に載っている前の積み順は使用済みに数える(`committed_used`)
+        used=sorted(board.committed_used, key=_key_order),
         discarded=list(board.discarded),
     ))
 

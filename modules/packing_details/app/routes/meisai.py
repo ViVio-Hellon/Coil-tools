@@ -16,8 +16,14 @@ VBA のボタン・イベントと1対1で対応させてある。
     cmdReverse_Click                         POST /api/reverse
     cmdKettei_Click                           POST /api/output
     cmdPrint_Click                             GET  /report/<lot>/<no>
-    cmdClearDup_Click                           POST /api/clear-history
     lstSheetList / RefreshSheetList               (画面の状態に含める)
+
+    (VER 0.13.23 で足した・外したもの。VBA には無い)
+    出力済み修正                    POST /api/edit-output / POST /api/edit-cancel
+    全クリア                        POST /api/clear-all
+    cmdClearDup_Click(副番履歴クリア) 外した。消すと出力済みのコイルを次のNoへ
+                                    また積めてしまう(現場の判断)
+    No指定                          外した。出力済み修正で足りる
 
 【画面の状態は毎回まるごと返す】
 操作のたびに「いま画面がどう見えるか」を全部返す。差分を返して画面側で
@@ -34,8 +40,9 @@ from urllib.parse import quote
 from flask import (Blueprint, Response, current_app, jsonify, render_template,
                    request)
 
-from modules.packing_details.meisai import (config, data_sync, history_repo, idle_exit, meisai_service,
-                    qa_mark, report, screen, session, slip_history, strand_service)
+from modules.packing_details.meisai import (config, data_sync, db, history_repo, idle_exit,
+                    meisai_service, qa_mark, report, screen, session, slip_history,
+                    strand_service)
 from modules.packing_details.meisai.logging_utils import get_logger
 from modules.packing_details.meisai.strand_service import RefusedError
 
@@ -168,6 +175,9 @@ def _state(conn) -> dict:
         "slots": list(board.slots) if board else [],
         "reversed": board.reversed_view if board else False,
         "complete": board.is_complete if board else False,
+        # 出力済みの修正中なら、そのNoと修正前の積み順(VER 0.13.23)
+        "edit": ({"no": board.edit_no, "keys": list(board.edit_keys)}
+                 if board is not None and board.editing else None),
         "rows": [],
         "outputs": [],
     }
@@ -229,6 +239,16 @@ def _ok(conn, **extra) -> Response:
 
 def _refused(exc: RefusedError, status: int = 400) -> Response:
     return jsonify(error_body(exc.reason, exc.message)), status
+
+
+def _editing_refusal(board, what: str):
+    """出力済みの修正中は、盤面を作り直す操作を断る(修正前の紙と食い違うため)。"""
+    if board is not None and board.editing:
+        return jsonify(error_body(
+            strand_service.REFUSE_EDITING,
+            f"No{board.edit_no}を修正中です。{what}は、修正して出力するか"
+            "「修正をやめる」を押してからにしてください。")), 409
+    return None
 
 
 # ==================================================================
@@ -322,6 +342,9 @@ def set_jou_su():
     if board is None:
         return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
 
+    refused = _editing_refusal(board, "丈数の変更")
+    if refused:
+        return refused
     raw = str((request.get_json(silent=True) or {}).get("value", "")).strip()
     if not (raw.isascii() and raw.isdigit()):
         return jsonify(error_body("bad_number", "丈数を入力してください。",
@@ -374,11 +397,18 @@ def build_strands():
         2. 丈数が入っているか
         3. 前工程実績数が数値で、0より大きいか
         4. 重量がすべて入っているか
+
+    **出力済みのコイルは使用済みのまま(VER 0.13.23)。** VBA は条番号を作り直すと
+    使用済みが全部ほどけ、No1〜No3 で使ったコイルを No4 へまた積めた(副番履歴クリアと
+    同じ穴)。紙に載っているコイルは、作り直したあとも使用済みに戻す。
     """
     conn = get_db()
     board = session.current()
     if board is None:
         return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
+    refused = _editing_refusal(board, "条番号の再表示")
+    if refused:
+        return refused
 
     body = request.get_json(silent=True) or {}
     if session.restored() and not body.get("confirm"):
@@ -386,8 +416,8 @@ def build_strands():
             "ok": False,
             "confirm": "overwrite_restored",
             "message": ("前回の状態が復元されています。\n"
-                        "条番号を再表示すると使用済み情報がリセットされます。"
-                        "(廃棄は維持)\n続行しますか？"),
+                        "条番号を再表示すると、出力していない使用済みはリセットされます。"
+                        "(出力済みのコイルと廃棄は維持)\n続行しますか？"),
         })
 
     if board.jou_su < 1:
@@ -403,6 +433,9 @@ def build_strands():
             "no_weight", f"丈{missing}の重量が未入力です。")), 400
 
     board.build_strands()
+    for key in sorted(meisai_service.output_keys(conn, board.lot_no)):
+        if board.knows(key) and key not in board.restored_used:
+            board.restored_used.append(key)
     session.clear_restored()
     session.save(conn)                  # VBA `SaveCurrentSnapshot`
     return _ok(conn)
@@ -506,7 +539,7 @@ def discard():
 # ==================================================================
 @bp.post("/api/output")
 def output():
-    """明細を1枚出す。"""
+    """明細を1枚出す。出力済みの修正中なら、そのNoを積み直した並びで出し直す。"""
     conn = get_db()
     board = session.current()
     if board is None:
@@ -514,18 +547,9 @@ def output():
 
     body = request.get_json(silent=True) or {}
     confirm = bool(body.get("confirm"))
-    specify = body.get("specify_no")
-    specify_no = None
-    if specify not in (None, ""):
-        try:
-            specify_no = int(specify)
-        except (TypeError, ValueError):
-            return jsonify(error_body(
-                "bad_no", "出力するNoを入力してください。", "specify_no")), 400
-
-    result = meisai_service.output(conn, board, specify_no=specify_no,
-                                   confirm=confirm, lot=session.lot(),
-                                   orders=session.orders())
+    editing = board.editing
+    run = meisai_service.output_edit if editing else meisai_service.output
+    result = run(conn, board, confirm=confirm, lot=session.lot(), orders=session.orders())
     if result.needs_confirm:
         return jsonify({
             "ok": False,
@@ -536,11 +560,55 @@ def output():
     if not result.ok:
         return jsonify(error_body(result.refuse, result.message)), 400
 
-    # VBA: 保存 → 積み上げだけリセット → 一覧を作り直す
-    session.save(conn)
-    meisai_service.reset_stack(board)
+    if editing:
+        # 積み直した並びが紙になった。積み上げを空にして、重量を修正前へ戻す
+        board.end_edit(committed=True)
+        session.save(conn)
+    else:
+        # VBA: 保存 → 積み上げだけリセット → 一覧を作り直す
+        session.save(conn)
+        meisai_service.reset_stack(board)
     slip_history.kick()                 # 履歴を共有へ(裏で)
     return _ok(conn, seq_no=result.seq_no, message=result.message)
+
+
+# ==================================================================
+# 出力済みの修正 (VER 0.13.23・現場の求め)
+# ==================================================================
+@bp.post("/api/edit-output")
+def edit_output():
+    """出力済みの1枚を積み直しに入る(出力済みに1つだけチェックして「出力済み修正」)。
+
+    そのNoのコイルを積み上げへ戻す。**ほかのNoで使っているコイルは使用済みのまま**
+    (積めない)。紙はまだ前のまま ── 「修正して出力」で同じNoのまま出し直す。
+    """
+    conn = get_db()
+    board = session.current()
+    if board is None:
+        return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
+    raw = (request.get_json(silent=True) or {}).get("no")
+    try:
+        seq_no = int(raw)
+    except (TypeError, ValueError):
+        return jsonify(error_body("bad_no", "修正する出力済みを1つ選んでください。")), 400
+    try:
+        meisai_service.begin_edit(conn, board, seq_no)
+    except RefusedError as exc:
+        return _refused(exc, 409 if exc.reason == strand_service.REFUSE_EDITING else 400)
+    return _ok(conn, message=(f"No{seq_no}を修正します。積み直して「修正して出力」を"
+                              "押してください。"))
+
+
+@bp.post("/api/edit-cancel")
+def edit_cancel():
+    """修正をやめる。積み上げを空にし、そのNoのコイルは使用済みへ戻す(紙は前のまま)。"""
+    conn = get_db()
+    board = session.current()
+    if board is None:
+        return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
+    no = board.edit_no
+    board.end_edit(committed=False)
+    return _ok(conn, message=f"No{no}の修正をやめました。" if no else "")
 
 
 @bp.post("/api/printed")
@@ -663,23 +731,46 @@ def save_edits(lot_no: str):
 
 
 # ==================================================================
-# 副番履歴 (VBA `cmdClearDup_Click`)
+# 全クリア (VER 0.13.23・現場の求め)
 # ==================================================================
-@bp.post("/api/clear-history")
-def clear_history():
-    """副番履歴とスナップショットを消す。
+# 副番履歴クリア(VBA `cmdClearDup_Click`)は外した。副番履歴だけ消すと、No1〜No3 で
+# 使ったコイルを No4 へまた積めてしまう(ミスがミスを呼ぶ)。やり直すときは、そのロットの
+# 出力済み・副番履歴・連番・途中経過を**まとめて**消して、初めからやり直す。
+@bp.post("/api/clear-all")
+def clear_all():
+    """そのロットを初めからやり直す。`confirm` が無ければ確かめるだけ。
 
-    VBA は加えて**画面の使用済みと積み上げをほどく**(キャンバスは
-    残す)。同じことをする ── 連番は戻さない。
+    消すもの: 出力済み・副番履歴・連番(No1から)・途中経過(条番号・廃棄)。
+    **明細の履歴は消さない** ── 刷って現場へ出た紙を追えなくなるので「取り消し」の
+    印を付けて残す(集計の枚数には数えない)。
     """
     conn = get_db()
-    history_repo.clear_fuban(conn)
-    history_repo.clear_snapshots(conn)
-
     board = session.current()
-    if board is not None:
-        board.release_all_used()
-    return _ok(conn, message="副番履歴をクリアしました。")
+    if board is None or not board.lot_no:
+        return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
+    lot_no = board.lot_no
+    outputs = meisai_service.list_outputs(conn, lot_no)
+    body = request.get_json(silent=True) or {}
+    if not body.get("confirm"):
+        return jsonify({
+            "ok": False,
+            "confirm": "clear_all",
+            "message": (f"ロット {lot_no} を初めからやり直します。\n"
+                        f"出力済み({len(outputs)}枚)・副番履歴・連番・条番号と廃棄を消します。"
+                        "\n刷った紙は使えなくなります(明細の履歴には「取り消し」と残ります)。"
+                        "\nよろしいですか？"),
+        })
+
+    with db.transaction(conn, name="全クリア"):
+        cancelled = meisai_service.cancel_lot_history(conn, lot_no)
+        session.close_lot(conn, lot_no)
+    # 台帳から開き直す(丈数・前工程実績数は台帳の値に戻る)
+    result = session.open_lot(conn, lot_no)
+    if not result.found:
+        session.clear()
+    slip_history.kick()
+    log.info("clear_all: %s を全クリアしました (取り消し %s枚)", lot_no, cancelled)
+    return _ok(conn, message=f"ロット {lot_no} を全クリアしました。初めからやり直してください。")
 
 
 # ==================================================================

@@ -459,6 +459,8 @@ button.danger{border-color:var(--danger); color:var(--danger)}
   text-overflow:ellipsis}
 .his-table tr.replaced td{color:var(--ink-3)}
 .his-table tr.replaced td.state{color:var(--warn); font-weight:600}
+.his-table tr.cancelled td.state{color:var(--danger)}
+.his-table tr.cancelled td.fuban{text-decoration:line-through}
 .his-table tbody tr{cursor:pointer}
 .his-table tbody tr:hover{background:var(--sunken)}
 .his-files{display:flex; flex-direction:column; gap:6px; margin-bottom:10px;
@@ -554,7 +556,19 @@ dl.about dd.mono{font-family:var(--mono); font-size:11.5px}
   margin-left:auto; height:22px; padding:0 8px; font-size:11px;
   color:var(--ink-3);
 }
+/* 出力済みの修正(VER 0.13.23)。修正中のNoと、積み上げの上の帯 */
+.output.editing{border-color:var(--warn); border-style:dashed}
+.output .tag{font-size:10.5px; color:var(--warn); font-weight:700}
+.edit-banner{
+  border:1px solid var(--line); border-left:4px solid var(--warn); border-radius:var(--ctl-r);
+  background:var(--warn-soft); padding:7px 9px; margin-bottom:8px; font-size:12px;
+  display:flex; flex-direction:column; gap:5px; align-items:flex-start;
+}
+.edit-banner[hidden]{display:none !important}
+.edit-banner b{color:var(--warn)}
+.edit-before{font-family:var(--mono); font-size:11px; color:var(--ink-3); overflow-wrap:anywhere}
 
 /* 設定：そのフォルダに何を探しているか */
 .set-row .files{color:var(--accent); font-weight:600}
 .set-check{display:flex; gap:8px; align-items:center; margin:6px 0; font-size:inherit}  /* 起動時の自動取り込み(統合 1.2.22) */
+#editNote.warn{color:var(--warn); font-weight:600}

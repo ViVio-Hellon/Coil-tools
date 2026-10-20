@@ -393,6 +393,54 @@ def details_stack_and_output(fr, keys):
     return "" if ok else "出力できない: " + text(fr, "#notice")
 
 
+def details_edit_output(fr):
+    """出力済み修正(梱包明細 VER 0.13.23)。No2 を出してから、No2 だけを積み直して同じ No で出し直す。
+
+    No1 には触らない(帳票の別タブで開いたままの No1 を、あとの試験が使う)。
+    """
+    sh_page = fr.page
+    sh_page.bring_to_front()
+    for k in ("1-10", "1-9", "2-10", "2-9"):
+        fr.click(f'#grid button.coil[data-key="{k}"]')
+        fr.wait_for_timeout(150)
+    wait_until(lambda: fr.evaluate("!document.querySelector('#btnOutput').disabled"), 5)
+    fr.click("#btnOutput")
+    fr.wait_for_timeout(500)
+    if visible(fr, "#confirmDialog"):
+        fr.click('#confirmDialog button[value="yes"]')
+    check("梱包明細: 2枚目を出す", wait_until(lambda: fr.locator("#outputs .output").count() == 2, 8),
+          text(fr, "#notice"))
+    fr.check("#pick1")
+    fr.check("#pick2")
+    check("梱包明細: 出力済みに2つチェックすると「出力済み修正」は押せない",
+          fr.evaluate("document.querySelector('#btnEditOutput').disabled")
+          and "1枚ずつ" in text(fr, "#editNote"), text(fr, "#editNote"))
+    fr.uncheck("#pick1")
+    fr.click("#btnEditOutput")
+    check("梱包明細: 出力済み修正で No2 のコイルが積み上げに戻る",
+          wait_until(lambda: visible(fr, "#editBanner") and "修正して出力" in text(fr, "#btnOutput"), 8)
+          and fr.evaluate("[...document.querySelectorAll('#stack button.slot')].map(b => b.textContent)")
+          .count("2-9") == 1, text(fr, "#editBanner"))
+    # 4段目(2-9)を外し、No1 のコイル(1-12)を押しても積まれない → 2-8 を積む
+    fr.click('#stack button.slot >> nth=3')
+    fr.wait_for_timeout(300)
+    fr.click('#grid button.coil[data-key="1-12"]', force=True)
+    fr.wait_for_timeout(300)
+    check("梱包明細: 修正中、ほかの No のコイルは積めない",
+          fr.evaluate("document.querySelector('#btnOutput').disabled"), text(fr, "#notice"))
+    fr.click('#grid button.coil[data-key="2-8"]')
+    wait_until(lambda: fr.evaluate("!document.querySelector('#btnOutput').disabled"), 5)
+    fr.click("#btnOutput")
+    ok = wait_until(lambda: visible(fr, "#confirmDialog") and "No2" in text(fr, "#confirmDialog"), 5)
+    if ok:
+        fr.click('#confirmDialog button[value="yes"]')
+    check("梱包明細: 修正して出力 → 同じ No2 のまま(枚数は2のまま)",
+          ok and wait_until(lambda: "No2を修正しました" in text(fr, "#notice"), 8)
+          and fr.locator("#outputs .output").count() == 2 and not visible(fr, "#editBanner"),
+          text(fr, "#notice"))
+    fr.uncheck("#pick2")
+
+
 # ---- ペナラベル ------------------------------------------------------
 def pena_ready(fr, timeout=15):
     """画面の受付(使ってよい画面か)が済み、接続OK になるまで待つ。"""
@@ -496,6 +544,7 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
     report.keyboard.press("Enter")
     check("梱包明細: 帳票の書き足しが保存される",
           wait_until(lambda: "保存しました" in text(report, "#editSaved"), 8), text(report, "#editSaved"))
+    details_edit_output(fr)
 
     # ---- ペナラベル ----
     fr = sh.tab("pena")

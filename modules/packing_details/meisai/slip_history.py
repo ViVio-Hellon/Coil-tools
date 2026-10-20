@@ -83,7 +83,8 @@ MUTABLE: tuple[str, ...] = (
 )
 
 STATE_VALID = "有効"
-STATE_REPLACED = "作り直し"     # No指定で同じNoを出し直した(上書きされた)
+STATE_REPLACED = "作り直し"     # 出力済み修正で同じNoを出し直した(上書きされた。VER 0.13.22 まではNo指定)
+STATE_CANCELLED = "取り消し"    # 全クリアで、そのロットの紙をまとめて取り消した(VER 0.13.23)
 
 LOCK_NAME = config.HISTORY_DB_NAME + ".lock"
 SEND_BATCH = 500                # 1回に送る枚数の上限(溜まっていても共有を長く掴まない)
@@ -183,7 +184,8 @@ def _coils(keys: Sequence[str], weights: Sequence[int]) -> list[tuple[int, str, 
 
 def record_output(conn: sqlite3.Connection, *, lot_no: str, seq_no: int,
                   keys: Sequence[str], weights: Sequence[int],
-                  lot: Any = None, orders: Iterable[Any] = ()) -> str:
+                  lot: Any = None, orders: Iterable[Any] = (),
+                  hand_size: str = "", hand_lotno: str = "") -> str:
     """出力した1枚を手元の履歴に書く。**出力と同じまとまりの中で呼ぶこと。**
 
     `lot` / `orders` は画面に出ているロット情報(`lot_repo.LotInfo` /
@@ -210,6 +212,8 @@ def record_output(conn: sqlite3.Connection, *, lot_no: str, seq_no: int,
         "包装仕様NO": ",".join(o.spec_no for o in orders if getattr(o, "spec_no", "")),
         "出力PC": shared_settings.pc_name(), "ログインID": shared_settings.login_id(),
         "版": app_config.version(), "更新日時": now,
+        # 出力済みの修正では、前の紙で書き足したサイズ・LOTNO を引き継ぐ
+        "手入力サイズ": hand_size or "", "手入力ロット番号": hand_lotno or "",
     }
     cols = list(values)
     db.write(conn,
@@ -238,9 +242,21 @@ def _touch(conn: sqlite3.Connection, ids: Sequence[str], sets: str,
 
 
 def mark_replaced(conn: sqlite3.Connection, history_id: str) -> None:
-    """No指定で同じNoを出し直した。**古い紙の履歴は消さず、印を付ける。**"""
+    """出力済みの修正で同じNoを出し直した。**古い紙の履歴は消さず、印を付ける。**"""
     _touch(conn, [history_id], "状態 = ?, 作り直し日時 = ?",
            (STATE_REPLACED, _now()), name="明細の履歴(作り直し)")
+
+
+def mark_cancelled(conn: sqlite3.Connection, history_ids: Sequence[str]) -> int:
+    """全クリアで紙をまとめて取り消した(VER 0.13.23)。**履歴は消さず、印を付ける。**
+
+    明細の履歴は「このコイルはどの紙に載ったか」を3年追うためのもの。消すと、
+    取り消す前に刷って現場へ出た紙が追えなくなる。印を付ければ、探す・作り直すの
+    画面で「取り消した紙」と分かり、集計(CSV)の枚数からも外れる。
+    日時は「作り直し日時」の欄に入れる(表の形を変えない)。
+    """
+    return _touch(conn, list(history_ids), "状態 = ?, 作り直し日時 = ?",
+                  (STATE_CANCELLED, _now()), name="明細の履歴(取り消し)")
 
 
 def update_hand(conn: sqlite3.Connection, history_id: str, size: str, lotno: str) -> None:
@@ -867,7 +883,7 @@ DETAIL_CSV_COLUMNS: tuple[str, ...] = (
     "出力PC", "ログインID", "版", "送信ID",
 )
 SUMMARY_CSV_COLUMNS: tuple[str, ...] = (
-    "出力日", "出力PC", "枚数", "本数", "重量合計", "作り直した枚数",
+    "出力日", "出力PC", "枚数", "本数", "重量合計", "作り直した枚数", "取り消した枚数",
 )
 
 
@@ -905,7 +921,7 @@ def export_csv(date_from: str, date_to: str, lot_no: str = "", fuban: str = "", 
     """共有の履歴(全ライン)を CSV に書き出す。**2つのファイル**:
 
         明細 … 1行 = コイル1本(紙の情報つき)。「このコイルはどの紙か」
-        集計 … 1行 = 出力日 × PC。枚数・本数・重量合計(作り直しは数えない)
+        集計 … 1行 = 出力日 × PC。枚数・本数・重量合計(作り直し・取り消しは数えない)
 
     期間は出力日で `date_from` 〜 `date_to`(両端を含む)。`lot_no` は
     ロット番号の前方一致、`fuban` はその副番が載った紙だけ(空ならすべて)。
@@ -954,9 +970,12 @@ def export_csv(date_from: str, date_to: str, lot_no: str = "", fuban: str = "", 
                 sid = record["送信ID"]
                 key = (str(record["出力日時"])[:10], str(record["出力PC"]))
                 bucket = summary.setdefault(key, {"slips": set(), "replaced": set(),
-                                                  "coils": 0, "weight": 0.0})
+                                                  "cancelled": set(), "coils": 0, "weight": 0.0})
                 if record["状態"] == STATE_REPLACED:
                     bucket["replaced"].add(sid)
+                elif record["状態"] == STATE_CANCELLED:
+                    # 全クリアで取り消した紙は数えない(作り直しと同じ扱い。VER 0.13.23)
+                    bucket["cancelled"].add(sid)
                 else:
                     if sid not in bucket["slips"]:
                         bucket["slips"].add(sid)
@@ -976,7 +995,7 @@ def export_csv(date_from: str, date_to: str, lot_no: str = "", fuban: str = "", 
             writer.writerow(SUMMARY_CSV_COLUMNS)
             for (day, pc), b in sorted(summary.items()):
                 writer.writerow([day, excel_cell("出力PC", pc), len(b["slips"]), b["coils"],
-                                 round(b["weight"], 1), len(b["replaced"])])
+                                 round(b["weight"], 1), len(b["replaced"]), len(b["cancelled"])])
                 result.summary_rows += 1
     except OSError as exc:
         raise HistoryError(f"CSV を書けません: {exc}") from exc

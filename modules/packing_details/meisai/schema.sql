@@ -267,7 +267,7 @@ CREATE TABLE IF NOT EXISTS 明細履歴 (
     手入力サイズ        TEXT    NOT NULL DEFAULT '',
     手入力ロット番号     TEXT    NOT NULL DEFAULT '',
     右上の文字          TEXT    NOT NULL DEFAULT '',
-    状態              TEXT    NOT NULL DEFAULT '有効',  -- 有効 / 作り直し(No指定で上書きされた)
+    状態              TEXT    NOT NULL DEFAULT '有効',  -- 有効 / 作り直し(出力済み修正で出し直された) / 取り消し(全クリア)
     作り直し日時        TEXT    NOT NULL DEFAULT '',
     紙面を開いた回数     INTEGER NOT NULL DEFAULT 0,
     最後に紙面を開いた日時 TEXT   NOT NULL DEFAULT '',

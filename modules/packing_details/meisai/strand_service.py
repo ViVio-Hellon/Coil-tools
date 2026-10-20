@@ -33,6 +33,9 @@ REFUSE_USED = "used"                # すでに積み上げ済み
 REFUSE_DISCARDED = "discarded"      # 廃棄済みなので積めない
 REFUSE_UNKNOWN_KEY = "unknown_key"  # そんな条番号は無い
 REFUSE_EMPTY_SLOT = "empty_slot"    # 空のスロットを解除しようとした
+REFUSE_EDITING = "editing"          # 出力済みの修正中なので、その操作はできない
+REFUSE_STACKING = "stacking"        # 積み上げ中のコイルがあるので修正に入れない
+REFUSE_UNKNOWN_OUTPUT = "unknown_output"  # その出力済みの条番号が、いまの盤面に無い
 
 
 class RefusedError(ValueError):
@@ -141,11 +144,18 @@ class Board:
     # (積み条数は入力し直す)。そのため「灰色だがスロットには無い」
     # コイルが残り、押しても反応しない。次の `txtTsumiJouSu_Change` で
     # `ResetGimmickBUsed` が回っても、スロットが空なので**戻らない**。
-    # 解除されるのは条番号の再表示か副番履歴クリアのときだけ。
+    # 解除されるのは条番号の再表示のときだけ(VER 0.13.23 からは、条番号を再表示しても
+    # 出力済みのコイルは使用済みのまま。副番履歴クリアは外した)。
     restored_used: list[str] = field(default_factory=list)
     # 丈ごとの表示の向き。`cmdReverse_Click` は**表示位置だけ**を
     # 入れ替えてキーは変えないので、盤面としては向きだけを覚える
     reversed_view: bool = False
+    # 出力済みの修正(VER 0.13.23・現場の求め)。0 なら修正していない。
+    # 修正中は、そのNoのコイルを積み上げへ戻して積み直す。**ほかのNoで使っている
+    # コイルは使用済みのまま**(積めない)
+    edit_no: int = 0
+    edit_keys: list[str] = field(default_factory=list)      # 修正前の積み順
+    edit_weights_before: list[int] = field(default_factory=list)  # 修正に入る前の重量
 
     # --- 見え方 ---------------------------------------------------
     @property
@@ -326,12 +336,66 @@ class Board:
         """
         return [k for k in self.slots if k]
 
-    def release_all_used(self) -> None:
-        """使用済みを全部ほどく (VBA `ResetAllGimmickBUsed`)。
+    # --- 出力済みの修正 (VER 0.13.23) -------------------------------
+    @property
+    def editing(self) -> bool:
+        return self.edit_no > 0
 
-        副番履歴クリアのときだけ呼ぶ。**条番号のキャンバスは残す** ──
-        VBA も `cmdClearDup_Click` で「条番号・積み上げをリセット
-        (キャンバスは残す)」とコメントしている。廃棄も残る。
+    @property
+    def committed_used(self) -> set[str]:
+        """紙に載っている(または積み上げ中の)コイル。途中経過に残すのはこれ。
+
+        修正中はそのNoのコイルを積み上げから外せるが、**紙はまだ前のまま**。
+        ここで途中経過を書いて開き直したとき、前のNoのコイルが空いて見えないよう、
+        修正前の積み順も使用済みに数える。
         """
-        self.restored_used = []
+        return self.used | set(self.edit_keys)
+
+    def begin_edit(self, seq_no: int, keys: list[str], weights: list[int]) -> None:
+        """出力済みの1枚を積み直す。そのNoのコイルを積み上げへ戻す。
+
+        - 積み上げ中のコイルがあれば断る(黙って外すと、積んでいた分が消える)
+        - いまの盤面に無い条番号があれば断る(条番号を作り直したあと)
+        - 重量はそのNoを出したときの値にする(修正が終われば、入る前の値に戻す)
+        """
+        if self.editing:
+            raise RefusedError(REFUSE_EDITING, f"No{self.edit_no}を修正中です。")
+        if any(self.slots):
+            raise RefusedError(
+                REFUSE_STACKING,
+                "積み上げ中のコイルがあります。出力するか、外してから修正してください。")
+        missing = [k for k in keys if not self.knows(k)]
+        if not keys or missing:
+            raise RefusedError(
+                REFUSE_UNKNOWN_OUTPUT,
+                f"No{seq_no}の条番号がいまの条番号にありません"
+                f"({'、'.join(missing) or '中身がありません'})。修正できません。")
+        self.edit_no = int(seq_no)
+        self.edit_keys = list(keys)
+        self.edit_weights_before = list(self.weights)
+        if len(weights) == self.jou_su and all(w > 0 for w in weights):
+            self.weights = list(weights)
+        self.restored_used = [k for k in self.restored_used if k not in keys]
+        self.stack_max = len(keys)
+        self.slots = list(keys)
+        log.info("begin_edit: No%s を修正します (%s本)", seq_no, len(keys))
+
+    def end_edit(self, *, committed: bool) -> None:
+        """修正を終える。`committed` なら積み直した並びが紙になった。
+
+        やめたときは修正前のコイルを使用済みへ戻す。どちらも積み上げは空にし、
+        重量は修正に入る前の値に戻す。
+        """
+        if not self.editing:
+            return
+        keep = self.stacked_keys() if committed else self.edit_keys
+        for key in keep:
+            if key not in self.restored_used:
+                self.restored_used.append(key)
         self.clear_slots()
+        if self.edit_weights_before:
+            self.weights = list(self.edit_weights_before)
+        log.info("end_edit: No%s の修正を%s", self.edit_no, "終えました" if committed else "やめました")
+        self.edit_no = 0
+        self.edit_keys = []
+        self.edit_weights_before = []

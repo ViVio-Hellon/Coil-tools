@@ -300,6 +300,41 @@ def details_scene(app, ctx, sh, cam):
         (1, box_of(report, 'span.edit[data-placeholder="サイズ"]')),
         (2, box_of(report, "p.editbar button.print"), "r")])
     report.close()
+    # 出力済み修正(VER 0.13.23)。2枚目を出してから、1枚目にだけチェックを入れて押す
+    for k in ("1-10", "1-9", "2-10", "2-9"):
+        fr.click(f'#grid button.coil[data-key="{k}"]')
+        fr.wait_for_timeout(150)
+    E.wait_until(lambda: fr.evaluate("!document.querySelector('#btnOutput').disabled"), 5)
+    fr.click("#btnOutput")
+    fr.wait_for_timeout(500)
+    if E.visible(fr, "#confirmDialog"):
+        fr.click('#confirmDialog button[value="yes"]')
+    E.wait_until(lambda: fr.locator("#outputs .output").count() == 2, 8)
+    fr.check("#pick1")
+    E.wait_until(lambda: fr.evaluate("!document.querySelector('#btnEditOutput').disabled"), 5)
+    into_view(fr, "#outputCard")
+    cam.take("details-edit-pick", pg, clip=clip, marks=[
+        (1, box_of(fr, "#pick1"), "l"), (2, box_of(fr, "#btnEditOutput"))])
+    fr.click("#btnEditOutput")
+    E.wait_until(lambda: E.visible(fr, "#editBanner"), 8)
+    fr.click('#stack button.slot >> nth=3')            # 4段目を外して、積み直すところ
+    fr.wait_for_timeout(300)
+    into_view(fr, "#stackCard")
+    cam.take("details-edit", pg, clip=clip, marks=[
+        (1, box_of(fr, "#editBanner"), "l"), (2, box_of(fr, "#grid"), "l"),
+        (3, box_of(fr, "#btnOutput")), (4, box_of(fr, "#btnEditCancel"))])
+    fr.click("#btnEditCancel")
+    E.wait_until(lambda: E.visible(fr, "#confirmDialog"), 5)
+    fr.click('#confirmDialog button[value="yes"]')
+    E.wait_until(lambda: not E.visible(fr, "#editBanner"), 8)
+    # 全クリアは確かめの窓だけ撮って、やめる
+    fr.uncheck("#pick1")
+    fr.click("#btnClearAll")
+    E.wait_until(lambda: E.visible(fr, "#confirmDialog"), 5)
+    fr.wait_for_timeout(300)
+    cam.take("details-clear-all", pg, clip=clip, marks=[(1, box_of(fr, "#confirmDialog"), "l")])
+    fr.click('#confirmDialog button[value="no"]')
+    E.wait_until(lambda: not E.visible(fr, "#confirmDialog"), 5)
     # 履歴
     fr.click("#btnHistory")
     E.wait_until(lambda: E.visible(fr, "#historyDialog"), 8)

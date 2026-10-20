@@ -129,7 +129,7 @@ VBA と結果が変わってはいけない箇所です。詳細は各モジュ�
 | RULE-04 | 条番号は丈ごとに降順(左端が最大) | `strand_service.keys_for_jou` |
 | RULE-05 | 積み上げは最小の空きスロットへ | `strand_service.Board.stack` |
 | RULE-06 | 重量は丈単位。行はキーの丈番号で引く | `Board.weight_of` |
-| RULE-07 | 副番の重複警告(No指定時はスキップ) | `meisai_service.output` |
+| RULE-07 | 副番の重複警告(No指定は VER 0.13.23 で外した) | `meisai_service.output` |
 | RULE-08 | 連番と No 指定 | `meisai_service.output` |
 | RULE-09 | 丈数1〜20 / 積み条数1〜15 / 明細15行 | `config` |
 | RULE-10 | ロット抽出は `オーダー板丈 = 0` の先頭1行 | `lot_repo.find_lot` |

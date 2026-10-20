@@ -9,8 +9,8 @@ from __future__ import annotations
 import time
 import unittest
 
-from modules.packing_details.meisai import (app_config, config, data_sync, history_repo, screen,
-                    session)
+from modules.packing_details.meisai import (app_config, config, data_sync, history_repo,
+                                           meisai_service, screen, session)
 
 from . import _db
 
@@ -518,9 +518,9 @@ class PrintTest(unittest.TestCase):
 
     def test_作り直された明細への書き足しは409(self):
         rid = self._row_id()
-        _post(self.client, "/api/stack", {"key": "1-7"})
-        _post(self.client, "/api/stack", {"key": "2-5"})
-        _post(self.client, "/api/output", {"confirm": True, "specify_no": 1})
+        # 出力済み修正(VER 0.13.23)で No1 を出し直す
+        _post(self.client, "/api/edit-output", {"no": 1})
+        _post(self.client, "/api/output", {"confirm": True})
         res = self.client.post(f"/report/L5160Z0/edits?t={TOKEN}",
                                json={"edits": {f"{rid}.size": "x"}})
         self.assertEqual(res.status_code, 409)
@@ -611,31 +611,193 @@ class RestoreTest(unittest.TestCase):
         self.assertFalse(body["state"]["restored"])
 
 
-class HistoryTest(unittest.TestCase):
-    """副番履歴クリア (VBA `cmdClearDup_Click`)。"""
+def _three_outputs(case):
+    """No1〜No3 を画面の経路で出す。"""
+    case.client, case.conn = _client(case)
+    _seed(case.conn)
+    _post(case.client, "/api/lot", {"lot_no": "L5160Z0"})
+    _post(case.client, "/api/weights", {"weights": ["250", "248"]})
+    _post(case.client, "/api/strands", {})
+    _post(case.client, "/api/stack-max", {"value": "2"})
+    for keys in (("1-10", "2-8"), ("1-9", "2-7"), ("1-8", "2-6")):
+        for key in keys:
+            _post(case.client, "/api/stack", {"key": key})
+        _post(case.client, "/api/output", {"confirm": True})
+
+
+def _coil_states(state):
+    return {c["key"]: c["state"] for row in state["rows"] for c in row}
+
+
+class RemovedTest(unittest.TestCase):
+    """副番履歴クリアと No指定は外した(VER 0.13.23・現場の判断)。"""
 
     def setUp(self):
-        self.client, self.conn = _client(self)
-        _seed(self.conn)
-        _post(self.client, "/api/lot", {"lot_no": "L5160Z0"})
-        _post(self.client, "/api/weights", {"weights": ["250", "248"]})
-        _post(self.client, "/api/strands", {})
-        _post(self.client, "/api/stack-max", {"value": "2"})
-        _post(self.client, "/api/stack", {"key": "1-10"})
-        _post(self.client, "/api/stack", {"key": "2-8"})
-        _post(self.client, "/api/output", {})
+        _three_outputs(self)
 
-    def test_履歴とスナップショットが消えて画面がほどける(self):
-        body = _post(self.client, "/api/clear-history", {}).get_json()
-        self.assertEqual(history_repo.fuban_count(self.conn), 0)
-        self.assertIsNone(history_repo.load_snapshot(self.conn, "L5160Z0"))
-        # キャンバスは残る
-        self.assertEqual(body["state"]["strands"], [12, 12])
+    def test_副番履歴クリアの口は無い(self):
+        res = _post(self.client, "/api/clear-history", {})
+        self.assertIn(res.status_code, (404, 405))
+        self.assertEqual(history_repo.fuban_count(self.conn), 6)
+
+    def test_No指定を送っても次の連番で出る(self):
+        """古い画面が `specify_no` を送ってきても、上書きにはしない。"""
+        _post(self.client, "/api/stack", {"key": "1-1"})
+        _post(self.client, "/api/stack", {"key": "2-1"})
+        body = _post(self.client, "/api/output", {"confirm": True, "specify_no": 1}).get_json()
+        self.assertEqual(body["seq_no"], 4)
+        self.assertEqual(len(meisai_service.list_outputs(self.conn, "L5160Z0")), 4)
+
+    def test_画面にも無い(self):
+        html = self.client.get(f"/meisai?t={TOKEN}").get_data(as_text=True)
+        for gone in ("btnClearHistory", "chkSpecify", "specifyNo", "副番履歴クリア"):
+            self.assertNotIn(f'id="{gone}"' if gone.isascii() else f">{gone}<", html)
+        for new in ('id="btnEditOutput"', 'id="btnClearAll"', 'id="btnEditCancel"'):
+            self.assertIn(new, html)
+
+
+class EditOutputWebTest(unittest.TestCase):
+    """出力済み修正(VER 0.13.23)。出力済みに1つチェック → 「出力済み修正」。"""
+
+    def setUp(self):
+        _three_outputs(self)
+
+    def test_修正に入るとそのNoが積み上げに戻り_ほかのNoは使用済み(self):
+        body = _post(self.client, "/api/edit-output", {"no": 1}).get_json()
+        state = body["state"]
+        self.assertEqual(state["edit"], {"no": 1, "keys": ["1-10", "2-8"]})
+        self.assertEqual(state["slots"], ["1-10", "2-8"])
+        states = _coil_states(state)
+        for key in ("1-9", "2-7", "1-8", "2-6"):
+            self.assertEqual(states[key], "used", key)
+        self.assertIn("No1を修正します", body["message"])
+
+    def test_ほかのNoのコイルを押しても積まれない(self):
+        _post(self.client, "/api/edit-output", {"no": 1})
+        _post(self.client, "/api/unstack", {"slot_no": 2})
+        body = _post(self.client, "/api/stack", {"key": "2-7"}).get_json()   # No2 のコイル
+        self.assertEqual(body["ignored"], "used")
+        self.assertEqual(body["state"]["slots"], ["1-10", None])
+
+    def test_修正して出力すると同じNoで出し直し_積み上げは空(self):
+        _post(self.client, "/api/edit-output", {"no": 1})
+        _post(self.client, "/api/unstack", {"slot_no": 2})
+        _post(self.client, "/api/stack", {"key": "2-1"})
+        body = _post(self.client, "/api/output", {}).get_json()
+        self.assertEqual(body["confirm"], "output")
+        self.assertEqual(body["confirms"][0]["kind"], "edit")
+        body = _post(self.client, "/api/output", {"confirm": True}).get_json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["seq_no"], 1)
+        state = body["state"]
+        self.assertIsNone(state["edit"])
+        self.assertEqual(state["slots"], [None, None])
+        self.assertEqual(state["current_seq"], 3)
+        self.assertEqual([o["no"] for o in state["outputs"]], [1, 2, 3])
+        states = _coil_states(state)
+        self.assertEqual(states["2-8"], "available")     # 外したコイルは空く
+        self.assertEqual(states["2-1"], "used")
+        self.assertEqual(meisai_service.find_output(self.conn, "L5160Z0", 1).keys,
+                         ["1-10", "2-1"])
+        snap = history_repo.load_snapshot(self.conn, "L5160Z0")
+        self.assertIn("2-1", snap.used)
+        self.assertNotIn("2-8", snap.used)
+
+    def test_やめると前のまま(self):
+        _post(self.client, "/api/edit-output", {"no": 2})
+        _post(self.client, "/api/unstack", {"slot_no": 1})
+        body = _post(self.client, "/api/edit-cancel", {}).get_json()
+        self.assertIsNone(body["state"]["edit"])
         self.assertEqual(body["state"]["slots"], [None, None])
+        self.assertEqual(_coil_states(body["state"])["1-9"], "used")
+        self.assertEqual(meisai_service.find_output(self.conn, "L5160Z0", 2).keys,
+                         ["1-9", "2-7"])
 
-    def test_連番は戻らない(self):
-        _post(self.client, "/api/clear-history", {})
-        self.assertEqual(history_repo.current_seq(self.conn), 1)
+    def test_修正中は条番号の再表示と丈数の変更を断る(self):
+        _post(self.client, "/api/edit-output", {"no": 1})
+        for path, data in (("/api/strands", {"confirm": True}), ("/api/jou-su", {"value": "3"})):
+            with self.subTest(path=path):
+                res = _post(self.client, path, data)
+                self.assertEqual(res.status_code, 409)
+                self.assertEqual(res.get_json()["error"]["code"], "editing")
+
+    def test_修正中にもう1枚は断る(self):
+        _post(self.client, "/api/edit-output", {"no": 1})
+        res = _post(self.client, "/api/edit-output", {"no": 2})
+        self.assertEqual(res.status_code, 409)
+
+    def test_無いNo_番号でないものは断る(self):
+        self.assertEqual(_post(self.client, "/api/edit-output", {"no": 9}).status_code, 400)
+        self.assertEqual(_post(self.client, "/api/edit-output", {"no": "x"}).status_code, 400)
+
+    def test_修正中に落ちて開き直しても前の紙のコイルは使用済み(self):
+        _post(self.client, "/api/edit-output", {"no": 1})
+        _post(self.client, "/api/unstack", {"slot_no": 1})
+        _post(self.client, "/api/discard", {"key": "1-1"})       # 途中経過が書かれる
+        session.clear()
+        body = _post(self.client, "/api/lot", {"lot_no": "L5160Z0"}).get_json()
+        states = _coil_states(body["state"])
+        self.assertEqual(states["1-10"], "used")
+        self.assertEqual(states["2-8"], "used")
+        self.assertIsNone(body["state"]["edit"])
+
+    def test_条番号を再表示しても出力済みのコイルは使用済みのまま(self):
+        """No1〜No3 のコイルを No4 へまた積めないように(VER 0.13.23)。"""
+        body = _post(self.client, "/api/strands", {}).get_json()
+        states = _coil_states(body["state"])
+        for key in ("1-10", "2-8", "1-9", "2-7", "1-8", "2-6"):
+            self.assertEqual(states[key], "used", key)
+        self.assertEqual(states["1-1"], "available")
+
+
+class ClearAllTest(unittest.TestCase):
+    """全クリア(VER 0.13.23)。履歴も含めて消して、初めからやり直す。"""
+
+    def setUp(self):
+        _three_outputs(self)
+        _post(self.client, "/api/discard", {"key": "1-1"})
+
+    def test_確かめるまでは何も消さない(self):
+        body = _post(self.client, "/api/clear-all", {}).get_json()
+        self.assertEqual(body["confirm"], "clear_all")
+        self.assertIn("3枚", body["message"])
+        self.assertEqual(len(meisai_service.list_outputs(self.conn, "L5160Z0")), 3)
+
+    def test_出力済み_副番履歴_連番_途中経過が消える(self):
+        body = _post(self.client, "/api/clear-all", {"confirm": True}).get_json()
+        self.assertTrue(body["ok"])
+        state = body["state"]
+        self.assertEqual(state["outputs"], [])
+        self.assertEqual(state["current_seq"], 0)
+        self.assertEqual(state["fuban_count"], 0)
+        self.assertEqual(state["strands"], [])          # 条番号表示からやり直す
+        self.assertEqual(state["lot_no"], "L5160Z0")    # ロットは開いたまま
+        self.assertTrue(state["printed"])
+        self.assertIsNone(history_repo.load_snapshot(self.conn, "L5160Z0"))
+        # 次の出力は No1 から。前のコイルも使える
+        _post(self.client, "/api/weights", {"weights": ["250", "248"]})
+        state = _post(self.client, "/api/strands", {}).get_json()["state"]
+        self.assertEqual(_coil_states(state)["1-10"], "available")
+        self.assertEqual(_coil_states(state)["1-1"], "available")   # 廃棄も消える
+        _post(self.client, "/api/stack-max", {"value": "1"})
+        _post(self.client, "/api/stack", {"key": "1-10"})
+        body = _post(self.client, "/api/output", {}).get_json()
+        self.assertEqual(body["seq_no"], 1)                         # 重複の確認も出ない
+
+    def test_明細の履歴は消さずに取り消しにする(self):
+        _post(self.client, "/api/clear-all", {"confirm": True})
+        states = [r[0] for r in self.conn.execute("SELECT 状態 FROM 明細履歴")]
+        self.assertEqual(states, ["取り消し"] * 3)
+
+    def test_修正中でも全クリアできる(self):
+        _post(self.client, "/api/edit-output", {"no": 1})
+        body = _post(self.client, "/api/clear-all", {"confirm": True}).get_json()
+        self.assertIsNone(body["state"]["edit"])
+        self.assertEqual(body["state"]["outputs"], [])
+
+    def test_ロットを開いていなければ断る(self):
+        _post(self.client, "/api/clear-lot", {})
+        self.assertEqual(_post(self.client, "/api/clear-all", {"confirm": True}).status_code, 409)
 
 
 class SettingsTest(unittest.TestCase):

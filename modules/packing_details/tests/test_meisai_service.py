@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import unittest
 
-from modules.packing_details.meisai import config, history_repo, meisai_service, report
+from modules.packing_details.meisai import (config, history_repo, meisai_service, report,
+                                           slip_history, strand_service)
 from modules.packing_details.meisai.history_repo import Snapshot
-from modules.packing_details.meisai.meisai_service import (CONFIRM_BEYOND_SEQ, CONFIRM_DUPLICATE,
-                                   CONFIRM_OVERWRITE, REFUSE_INCOMPLETE,
-                                   REFUSE_NO_WEIGHT, Output)
+from modules.packing_details.meisai.meisai_service import (CONFIRM_DUPLICATE, CONFIRM_EDIT,
+                                   REFUSE_INCOMPLETE, REFUSE_NO_WEIGHT, Output)
 from modules.packing_details.meisai.strand_service import Board, RefusedError
 
 from . import _db
@@ -136,25 +136,12 @@ class DuplicateTest(unittest.TestCase):
         meisai_service.output(self.conn, filled(), confirm=True)
         self.assertEqual(history_repo.fuban_count(self.conn), 6)
 
-    def test_No指定なら重複チェックを飛ばす(self):
-        """VBA: `If Not chkSpecifyNo.Value Then ...` 再出力用の逃げ道。
-
-        **重複の確認だけが消える。** No指定そのものの確認(上書き・
-        連番超過)は残る ── VBA も `chkSpecifyNo` の枝の中で
-        `ElseIf seqNo > GetCurrentSeq Then` を尋ねている。
-        いまの連番は1なので、5を指定すれば連番超過だけが返る。
-        """
-        result = meisai_service.output(self.conn, filled(), specify_no=5)
-        self.assertNotIn(CONFIRM_DUPLICATE, [c.kind for c in result.confirms])
-        self.assertEqual([c.kind for c in result.confirms], [CONFIRM_BEYOND_SEQ])
-
-    def test_連番内のNo指定なら何も尋ねずに出せる(self):
-        # 既出の副番ばかりでも、No指定なら重複は尋ねない
-        meisai_service.output(self.conn, filled(), confirm=True)   # No2 まで進める
-        result = meisai_service.output(self.conn, filled(), specify_no=2,
-                                       confirm=True)
-        self.assertTrue(result.ok)
-        self.assertEqual(result.seq_no, 2)
+    def test_No指定は受け付けない(self):
+        """No指定は外した(VER 0.13.23)。出力はいつも次の連番で、重複も必ず確かめる。"""
+        with self.assertRaises(TypeError):
+            meisai_service.output(self.conn, filled(), specify_no=1)   # noqa
+        result = meisai_service.output(self.conn, filled())
+        self.assertEqual([c.kind for c in result.confirms], [CONFIRM_DUPLICATE])
 
     def test_一部だけ重複していればその分だけ出す(self):
         b = filled(keys=("1-10", "1-1"))       # 1-10 は既出、1-1 は新しい
@@ -163,54 +150,203 @@ class DuplicateTest(unittest.TestCase):
 
 
 class SeqTest(unittest.TestCase):
-    """RULE-08: 連番とNo指定。"""
+    """RULE-08: 連番(No指定は VER 0.13.23 で外した)。"""
 
     def setUp(self):
         self.conn = _db.case_db(self)
-
-    def test_既存のNoを指定すると上書き確認(self):
-        meisai_service.output(self.conn, filled())        # No1
-        result = meisai_service.output(self.conn, filled(), specify_no=1)
-        self.assertEqual([c.kind for c in result.confirms], [CONFIRM_OVERWRITE])
-
-    def test_上書きを了解すると入れ替わる(self):
-        meisai_service.output(self.conn, filled())
-        b = filled(keys=("2-1", "2-2"))
-        meisai_service.output(self.conn, b, specify_no=1, confirm=True)
-        found = meisai_service.find_output(self.conn, "L5160Z0", 1)
-        self.assertEqual(found.keys, ["2-1", "2-2"])
-        self.assertEqual(len(meisai_service.list_outputs(self.conn, "L5160Z0")), 1)
-
-    def test_連番を超えるNoは確認する(self):
-        result = meisai_service.output(self.conn, filled(), specify_no=9)
-        self.assertEqual([c.kind for c in result.confirms], [CONFIRM_BEYOND_SEQ])
-
-    def test_了解すると現在連番が引き上がる(self):
-        meisai_service.output(self.conn, filled(), specify_no=9, confirm=True)
-        self.assertEqual(history_repo.current_seq(self.conn), 9)
-
-    def test_現在連番より小さいNoは引き下げない(self):
-        meisai_service.output(self.conn, filled())                     # No1
-        meisai_service.output(self.conn, filled(), specify_no=1, confirm=True)
-        self.assertEqual(history_repo.current_seq(self.conn), 1)
-
-    def test_0以下のNoは断る(self):
-        result = meisai_service.output(self.conn, filled(), specify_no=0)
-        self.assertFalse(result.ok)
-        self.assertEqual(result.refuse, meisai_service.REFUSE_BAD_NO)
 
     def test_連番のリセット(self):
         meisai_service.output(self.conn, filled())
         history_repo.reset_seq(self.conn)
         self.assertEqual(history_repo.current_seq(self.conn), 0)
 
-    def test_副番履歴クリアは連番を戻さない(self):
-        # VBA: 「seqNo は副番履歴クリアでリセットしない」
+    def test_副番履歴を消しても連番は戻さない(self):
+        # VBA: 「seqNo は副番履歴クリアでリセットしない」。画面の副番履歴クリアは
+        # VER 0.13.23 で外したが、ロット切替・全クリアの片付け(`close_lot`)が使う
         meisai_service.output(self.conn, filled())
         history_repo.clear_fuban(self.conn)
         self.assertEqual(history_repo.current_seq(self.conn), 1)
         self.assertEqual(history_repo.fuban_count(self.conn), 0)
         self.assertTrue(history_repo.is_printed(self.conn))
+
+
+def three_outputs(conn) -> Board:
+    """No1〜No3 を出した盤面(画面と同じ流れ: 積む → 出力 → 積み上げだけ空にする)。"""
+    b = board(stack=2)
+    for keys in (("1-1", "1-2"), ("1-3", "1-4"), ("2-1", "2-2")):
+        b.set_stack_max(len(keys))
+        for key in keys:
+            b.stack(key)
+        result = meisai_service.output(conn, b, confirm=True)
+        assert result.ok, result.message
+        meisai_service.reset_stack(b)
+    return b
+
+
+class EditOutputTest(unittest.TestCase):
+    """出力済みの修正(VER 0.13.23・現場の求め)。"""
+
+    def setUp(self):
+        self.conn = _db.case_db(self)
+        self.b = three_outputs(self.conn)
+
+    def _keys(self, no):
+        return meisai_service.find_output(self.conn, "L5160Z0", no).keys
+
+    def test_修正に入るとそのNoのコイルが積み上げへ戻る(self):
+        meisai_service.begin_edit(self.conn, self.b, 1)
+        self.assertTrue(self.b.editing)
+        self.assertEqual(self.b.slots, ["1-1", "1-2"])
+        self.assertEqual(self.b.stack_max, 2)
+        # ほかのNoのコイルは使用済みのまま
+        for key in ("1-3", "1-4", "2-1", "2-2"):
+            self.assertEqual(self.b.state_of(key), "used", key)
+
+    def test_ほかのNoのコイルは積めない(self):
+        """No1〜No3 があってNo1を直すとき、No2・No3 のコイルは使えない。"""
+        meisai_service.begin_edit(self.conn, self.b, 1)
+        self.b.unstack(2)
+        for key in ("1-3", "2-2"):
+            with self.subTest(key=key), self.assertRaises(RefusedError) as cm:
+                self.b.stack(key)
+            self.assertEqual(cm.exception.reason, strand_service.REFUSE_USED)
+        self.b.stack("1-5")                     # 未使用なら積める
+        self.assertEqual(self.b.slots, ["1-1", "1-5"])
+
+    def test_最後の砦でもほかのNoのコイルは断る(self):
+        meisai_service.begin_edit(self.conn, self.b, 1)
+        self.b.slots[1] = "1-3"                 # 画面を通さずに無理やり
+        result = meisai_service.output_edit(self.conn, self.b, confirm=True)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.refuse, meisai_service.REFUSE_USED_ELSEWHERE)
+        self.assertEqual(self._keys(1), ["1-1", "1-2"])
+
+    def test_いつも確かめて_確かめるまでは何も書かない(self):
+        meisai_service.begin_edit(self.conn, self.b, 1)
+        self.b.unstack(2)
+        self.b.stack("1-5")
+        result = meisai_service.output_edit(self.conn, self.b)
+        self.assertEqual([c.kind for c in result.confirms], [CONFIRM_EDIT])
+        detail = result.confirms[0].detail
+        self.assertIn("前: 1-1 1-2", detail)
+        self.assertIn("後: 1-1 1-5", detail)
+        self.assertIn("外すコイル: 1-2", detail)
+        self.assertIn("加えるコイル: 1-5", detail)
+        self.assertEqual(self._keys(1), ["1-1", "1-2"])
+
+    def test_同じNoのまま出し直す(self):
+        meisai_service.begin_edit(self.conn, self.b, 1)
+        self.b.unstack(2)
+        self.b.stack("1-5")
+        history_repo.set_printed(self.conn, True)
+        result = meisai_service.output_edit(self.conn, self.b, confirm=True)
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(result.seq_no, 1)
+        self.assertEqual(self._keys(1), ["1-1", "1-5"])
+        self.assertEqual([o.seq_no for o in meisai_service.list_outputs(self.conn, "L5160Z0")],
+                         [1, 2, 3])
+        self.assertEqual(history_repo.current_seq(self.conn), 3)   # 連番は進まない
+        self.assertFalse(history_repo.is_printed(self.conn))       # 刷り直しが要る
+
+    def test_副番履歴は外れた分を外し加わった分を足す(self):
+        meisai_service.begin_edit(self.conn, self.b, 1)
+        self.b.unstack(2)
+        self.b.stack("1-5")
+        meisai_service.output_edit(self.conn, self.b, confirm=True)
+        self.assertFalse(history_repo.is_duplicate(self.conn, "L5160Z0-1-2"))
+        self.assertTrue(history_repo.is_duplicate(self.conn, "L5160Z0-1-5"))
+        self.assertTrue(history_repo.is_duplicate(self.conn, "L5160Z0-1-3"))   # No2 のまま
+        self.assertEqual(history_repo.fuban_count(self.conn), 6)
+
+    def test_修正を終えると外したコイルは空き_加えたコイルは使用済み(self):
+        meisai_service.begin_edit(self.conn, self.b, 1)
+        self.b.unstack(2)
+        self.b.stack("1-5")
+        meisai_service.output_edit(self.conn, self.b, confirm=True)
+        self.b.end_edit(committed=True)
+        self.assertFalse(self.b.editing)
+        self.assertEqual(self.b.state_of("1-2"), "available")
+        self.assertEqual(self.b.state_of("1-5"), "used")
+        self.assertFalse(any(self.b.slots))
+
+    def test_やめると前のまま(self):
+        meisai_service.begin_edit(self.conn, self.b, 2)
+        self.b.unstack(1)
+        self.b.end_edit(committed=False)
+        self.assertFalse(self.b.editing)
+        for key in ("1-3", "1-4"):
+            self.assertEqual(self.b.state_of(key), "used")
+        self.assertEqual(self._keys(2), ["1-3", "1-4"])
+
+    def test_重量はそのNoを出したときの値で出し直し_終われば戻す(self):
+        # No1 を出したあとで重量を変えた
+        self.b.weights = [300, 299]
+        meisai_service.begin_edit(self.conn, self.b, 1)
+        self.assertEqual(self.b.weights, [250, 248])
+        meisai_service.output_edit(self.conn, self.b, confirm=True)
+        self.assertEqual(meisai_service.find_output(self.conn, "L5160Z0", 1).weights, [250, 248])
+        self.b.end_edit(committed=True)
+        self.assertEqual(self.b.weights, [300, 299])
+
+    def test_書き足しは引き継ぐ(self):
+        meisai_service.save_hand_edits(self.conn, "L5160Z0", {
+            f"{meisai_service.find_output(self.conn, 'L5160Z0', 1).row_id}.size": "0.3x50",
+            f"{meisai_service.find_output(self.conn, 'L5160Z0', 1).row_id}.lotno": "AB12"})
+        meisai_service.begin_edit(self.conn, self.b, 1)
+        meisai_service.output_edit(self.conn, self.b, confirm=True)
+        found = meisai_service.find_output(self.conn, "L5160Z0", 1)
+        self.assertEqual((found.hand_size, found.hand_lotno), ("0.3x50", "AB12"))
+
+    def test_前の紙の履歴は作り直し_新しい紙は有効(self):
+        old_id = meisai_service.find_output(self.conn, "L5160Z0", 1).history_id
+        meisai_service.begin_edit(self.conn, self.b, 1)
+        meisai_service.output_edit(self.conn, self.b, confirm=True)
+        new_id = meisai_service.find_output(self.conn, "L5160Z0", 1).history_id
+        self.assertNotEqual(old_id, new_id)
+        states = dict(self.conn.execute("SELECT 送信ID, 状態 FROM 明細履歴").fetchall())
+        self.assertEqual(states[old_id], slip_history.STATE_REPLACED)
+        self.assertEqual(states[new_id], slip_history.STATE_VALID)
+
+    def test_断る場面(self):
+        with self.subTest("無いNo"), self.assertRaises(RefusedError) as cm:
+            meisai_service.begin_edit(self.conn, self.b, 9)
+        self.assertEqual(cm.exception.reason, meisai_service.REFUSE_NO_OUTPUT)
+        with self.subTest("積み上げ中"):
+            self.b.set_stack_max(1)
+            self.b.stack("1-6")
+            with self.assertRaises(RefusedError) as cm:
+                meisai_service.begin_edit(self.conn, self.b, 1)
+            self.assertEqual(cm.exception.reason, strand_service.REFUSE_STACKING)
+            self.b.unstack(1)
+        with self.subTest("修正中にもう1枚"):
+            meisai_service.begin_edit(self.conn, self.b, 1)
+            with self.assertRaises(RefusedError) as cm:
+                meisai_service.begin_edit(self.conn, self.b, 2)
+            self.assertEqual(cm.exception.reason, strand_service.REFUSE_EDITING)
+        with self.subTest("修正中でなければ修正の出力はできない"):
+            self.b.end_edit(committed=False)
+            result = meisai_service.output_edit(self.conn, self.b, confirm=True)
+            self.assertEqual(result.refuse, meisai_service.REFUSE_NOT_EDITING)
+
+    def test_修正中の途中経過は前の紙のコイルも使用済みに数える(self):
+        """修正中にタブが落ちて開き直しても、前のNoのコイルが空いて見えない。"""
+        meisai_service.begin_edit(self.conn, self.b, 1)
+        self.b.unstack(1)
+        self.b.unstack(2)
+        self.assertTrue({"1-1", "1-2"} <= self.b.committed_used)
+        self.assertNotIn("1-1", self.b.used)
+
+
+class CancelLotHistoryTest(unittest.TestCase):
+    """全クリアで紙の履歴は消さずに「取り消し」にする(VER 0.13.23)。"""
+
+    def test_そのロットの紙を取り消しにする(self):
+        conn = _db.case_db(self)
+        three_outputs(conn)
+        self.assertEqual(meisai_service.cancel_lot_history(conn, "L5160Z0"), 3)
+        states = [r[0] for r in conn.execute("SELECT 状態 FROM 明細履歴")]
+        self.assertEqual(states, [slip_history.STATE_CANCELLED] * 3)
+        self.assertEqual(meisai_service.cancel_lot_history(conn, "XXXXXXX"), 0)
 
 
 class SnapshotTest(unittest.TestCase):

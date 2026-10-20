@@ -402,23 +402,31 @@ def render_history(slips: list[dict], *, current_qa: str, source: str = "shared"
 
     右上の文字は**その紙を開いたときに刷られた文字**(履歴の記録)。記録が
     無い紙(一度も開いていない)は、いまの文字で刷って、画面にそう出す。
-    作り直された(No指定で上書きされた)紙は、画面にそう出す ── 新しい紙が
-    別にある。
+    作り直された(出力済み修正で出し直された)紙は、画面にそう出す ── 新しい紙が
+    別にある。全クリアで取り消された紙も、そう出す(その紙はもう使わない)。
     """
+    from .slip_history import STATE_CANCELLED, STATE_REPLACED
+
     outputs = [_from_history(slip) for slip in slips]
-    qas, no_record, replaced = [], [], []
+    qas, no_record, replaced, cancelled = [], [], [], []
     for slip, out in zip(slips, outputs):
         recorded = str(slip["head"]["右上の文字"] or "")
         qas.append(recorded or current_qa)
         if not recorded:
             no_record.append(out.sheet_name)
-        if slip["head"]["状態"] == "作り直し":
+        state = slip["head"]["状態"]
+        if state == STATE_REPLACED:
             replaced.append(out.sheet_name)
+        elif state == STATE_CANCELLED:
+            cancelled.append(out.sheet_name)
     where = {"shared": "全ラインの履歴", "local": "この PC の履歴",
              "mixed": "全ラインの履歴(一部はこの PC の履歴)"}.get(source, "履歴")
     notes = [f"{where}から作り直した紙面です（{len(outputs)}枚）。記録のとおりに組んでいます。"]
     if replaced:
         notes.append(f"{'・'.join(replaced)} は、このあと作り直されています（新しい紙があります）。")
+    if cancelled:
+        notes.append(f"{'・'.join(cancelled)} は、このあと全クリアで取り消されています"
+                     "（この紙は使いません）。")
     if no_record:
         notes.append(f"{'・'.join(no_record)} は右上の文字の記録が無いため、"
                      f"いまの文字（{current_qa}）で刷ります。")

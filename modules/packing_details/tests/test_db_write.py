@@ -56,13 +56,20 @@ class WriteFailureTest(unittest.TestCase):
         with self.assertRaises(db.WriteError):
             meisai_service.output(self.conn, _board(), confirm=True)
 
-    def test_No指定でも例外で止まる(self):
-        """No指定は連番を採らないので、以前はここだけ素通りしていた。"""
+    def test_出力済み修正でも例外で止まる(self):
+        """修正は連番を採らない(同じNoで出し直す)。No指定のときはここだけ素通りしていた
+        ので、同じ形の修正(VER 0.13.23)でも書けなければ止まり、前の紙が残ることを確かめる。"""
+        board = _board()
+        meisai_service.output(self.conn, board, confirm=True)
+        meisai_service.reset_stack(board)
+        meisai_service.begin_edit(self.conn, board, 1)
+        board.unstack(2)
+        board.stack("2-11")
         self._hold()
         with self.assertRaises(db.WriteError):
-            meisai_service.output(self.conn, _board(), specify_no=3, confirm=True)
-        row = self.conn.execute("SELECT COUNT(*) c FROM 明細出力").fetchone()
-        self.assertEqual(row["c"], 0)
+            meisai_service.output_edit(self.conn, board, confirm=True)
+        found = meisai_service.find_output(self.conn, "L5160Z0", 1)
+        self.assertEqual(found.keys, ["1-12", "2-12"])
 
     def test_途中で失敗したら全部戻る(self):
         """明細だけ残って副番が登録されない、という半端を作らない。"""

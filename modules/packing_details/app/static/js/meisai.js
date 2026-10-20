@@ -302,6 +302,23 @@ function renderStack(state) {
     box.appendChild(button);
   }
   $("btnOutput").disabled = !state.complete;
+  renderEdit(state);
+}
+
+/**
+ * 出力済みの修正中か(VER 0.13.23)。修正中は「出力」が「修正して出力」になり、
+ * 条番号の再表示・丈数の変更は止める(サーバも断る)。
+ */
+function renderEdit(state) {
+  const edit = state.edit;
+  $("editBanner").hidden = !edit;
+  $("btnOutput").textContent = edit ? "修正して出力" : "出力";
+  $("btnStrands").disabled = Boolean(edit);
+  $("jouSu").disabled = Boolean(edit);
+  document.querySelectorAll("[data-jou]").forEach((b) => { b.disabled = Boolean(edit); });
+  if (!edit) return;
+  $("editTitle").textContent = `No${edit.no}を修正中`;
+  $("editBefore").textContent = `修正前: ${edit.keys.join(" ")}`;
 }
 
 function renderOutputs(state) {
@@ -327,9 +344,10 @@ function renderOutputs(state) {
     if (!alive.has(no)) checkedOutputs.delete(no);
   }
 
+  const editingNo = state.edit ? state.edit.no : 0;
   for (const output of state.outputs) {
     const row = document.createElement("div");
-    row.className = "output";
+    row.className = output.no === editingNo ? "output editing" : "output";
     row.setAttribute("aria-pressed", String(output.no === selectedOutput));
 
     // まとめて刷れるように選べるようにする(1枚ずつ別の用紙に出る)
@@ -341,6 +359,7 @@ function renderOutputs(state) {
       if (check.checked) checkedOutputs.add(output.no);
       else checkedOutputs.delete(output.no);
       updatePrintLabel();
+      updateEditButton();
     });
 
     const name = document.createElement("label");
@@ -359,10 +378,38 @@ function renderOutputs(state) {
       $("btnPrint").disabled = false;
     });
 
-    row.append(check, name, open);
+    row.append(check, name);
+    if (output.no === editingNo) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "修正中";
+      row.appendChild(tag);
+    }
+    row.append(open);
     box.appendChild(row);
   }
   updatePrintLabel();
+  updateEditButton();
+}
+
+/**
+ * 「出力済み修正」は**チェック1つのときだけ**押せる(VER 0.13.23・複数は不可)。
+ * 押せない理由はボタンの横に出す。
+ */
+function updateEditButton() {
+  const state = window.APP.state || {};
+  const button = $("btnEditOutput");
+  const note = $("editNote");
+  const n = checkedOutputs.size;
+  let reason = "";
+  if (state.edit) reason = `No${state.edit.no}を修正中です`;
+  else if (!(state.strands || []).length) reason = "先に「条番号表示」を押してください";
+  else if (n === 0) reason = "直す1枚にだけチェックを入れて押します";
+  else if (n > 1) reason = `修正は1枚ずつです（いま${n}枚にチェック）`;
+  else if ((state.slots || []).some(Boolean)) reason = "積み上げ中のコイルを出力するか外してから押します";
+  button.disabled = Boolean(reason);
+  note.textContent = reason || `No${[...checkedOutputs][0]}を積み直します`;
+  note.classList.toggle("warn", n > 1);
 }
 
 /** 印刷ボタンに「いま何枚刷るか」を出す。**紙の枚数も添える。** */
@@ -423,6 +470,12 @@ async function send(path, data, onDone) {
 }
 
 async function openLot(lotNo, confirm = false) {
+  const edit = (window.APP.state || {}).edit;
+  if (edit && !confirm && !await confirmAsk(
+      `No${edit.no}を修正中です。修正をやめてロットを開き直しますか？（紙は前のままです）`)) {
+    $("lotNo").value = window.APP.state.lot_no || "";
+    return;
+  }
   const body = await send("/api/lot", { lot_no: lotNo, confirm });
   if (body && body.confirm === "unprinted") {
     if (await confirmAsk(body.message)) openLot(lotNo, true);
@@ -458,8 +511,9 @@ function unstack(slotNo) {
 }
 
 async function doOutput(confirm = false) {
-  const specify = $("chkSpecify").checked ? $("specifyNo").value : null;
-  const body = await send("/api/output", { confirm, specify_no: specify });
+  // 修正中なら、サーバがそのNoを積み直した並びで出し直す(確認は kind "edit")
+  const editing = Boolean((window.APP.state || {}).edit);
+  const body = await send("/api/output", { confirm });
   if (body && body.confirm === "output") {
     const first = body.confirms[0];
     const detail = body.confirms.flatMap((c) => c.detail || []);
@@ -467,13 +521,28 @@ async function doOutput(confirm = false) {
     if (await confirmAsk(message, detail)) doOutput(true);
     else if (!first) notify("");
   } else if (body && body.ok) {
-    // 出したら No指定は外す (VBA も chkSpecifyNo.Value = False にする)
-    $("chkSpecify").checked = false;
-    $("specifyNo").value = "";
-    $("specifyNo").disabled = true;
     selectedOutput = body.seq_no;
+    // 直した1枚をそのまま刷れるように、チェックは外して選んでおく
+    if (editing) checkedOutputs.clear();
     renderOutputs(window.APP.state);
   }
+}
+
+/** 出力済みの1枚を積み直しに入る(チェック1つ)。 */
+function beginEdit() {
+  if (checkedOutputs.size !== 1) return;
+  const no = [...checkedOutputs][0];
+  send("/api/edit-output", { no }, () => {
+    selectedOutput = no;
+    renderOutputs(window.APP.state);
+  });
+}
+
+async function cancelEdit() {
+  const edit = (window.APP.state || {}).edit;
+  if (!edit) return;
+  if (!await confirmAsk(`No${edit.no}の修正をやめますか？（紙は前のままです）`)) return;
+  send("/api/edit-cancel", {});
 }
 
 async function doPrint() {
@@ -490,9 +559,19 @@ async function doPrint() {
   window.open(url, "_blank", "noopener");
 }
 
-async function clearHistory() {
-  if (!await confirmAsk("副番履歴を全件クリアしますか？")) return;
-  send("/api/clear-history", {});
+/**
+ * 全クリア(VER 0.13.23)。そのロットの出力済み・副番履歴・連番・条番号と廃棄を消して、
+ * 初めからやり直す。サーバが確認の文言(何枚消えるか)を返すので、それを訊いてから送る。
+ */
+async function clearAll(confirm = false) {
+  const body = await send("/api/clear-all", { confirm });
+  if (body && body.confirm === "clear_all") {
+    if (await confirmAsk(body.message)) clearAll(true);
+  } else if (body && body.ok) {
+    checkedOutputs.clear();
+    selectedOutput = null;
+    renderOutputs(window.APP.state);
+  }
 }
 
 // ------------------------------------------------------------------
@@ -630,7 +709,9 @@ function renderHistoryRows(body) {
   tbody.textContent = "";
   for (const row of body.rows) {
     const tr = document.createElement("tr");
+    // 作り直し(出力済み修正で出し直された)・取り消し(全クリア)は、使わない紙
     if (row["状態"] === "作り直し") tr.className = "replaced";
+    else if (row["状態"] === "取り消し") tr.className = "replaced cancelled";
     const cell = (text, cls = "") => {
       const td = document.createElement("td");
       if (cls) td.className = cls;
@@ -863,13 +944,9 @@ function wire() {
   // --- 出力・印刷 ---
   $("btnOutput").addEventListener("click", () => doOutput());
   $("btnPrint").addEventListener("click", doPrint);
-  $("chkSpecify").addEventListener("change", () => {
-    $("specifyNo").disabled = !$("chkSpecify").checked;
-    if ($("chkSpecify").checked) $("specifyNo").focus();
-    else $("specifyNo").value = "";
-  });
-
-  $("btnClearHistory").addEventListener("click", clearHistory);
+  $("btnEditOutput").addEventListener("click", beginEdit);
+  $("btnEditCancel").addEventListener("click", cancelEdit);
+  $("btnClearAll").addEventListener("click", () => clearAll());
   $("btnImport").addEventListener("click", runImport);
   wireBusy();
   settings.wire({ showError, afterImport });
@@ -967,9 +1044,7 @@ function unsaved() {
       && weights.some(([v, sent]) => String(v).trim() !== "" && String(v) !== String(sent))) {
     out.push("重量(空の丈があるので、まだ送っていない)");
   }
-  if ($("chkSpecify").checked && ($("specifyNo").value || "").trim()) {
-    out.push("No指定(「出力」を押していない)");
-  }
+  if (state.edit) out.push(`No${state.edit.no}の出力済み修正(「修正して出力」を押していない)`);
   return out.concat(settings.unsaved()).map((name) => `梱包明細: ${name}`);
 }
 window.cptUnsaved = unsaved;
