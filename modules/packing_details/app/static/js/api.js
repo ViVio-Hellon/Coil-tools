@@ -23,7 +23,7 @@ export class ApiError extends Error {
   }
 }
 
-async function call(path, options) {
+async function call(path, options, extraHeaders = {}) {
   const res = await fetch(BASE + path, {
     cache: "no-store",
     headers: {
@@ -33,6 +33,7 @@ async function call(path, options) {
       // 持ち主でない画面の操作はサーバが 409 で断る(`screen_taken`)
       "X-Tool-Screen": window.APP.screen || "",
       "Content-Type": "application/json",
+      ...extraHeaders,
     },
     ...options,
   });
@@ -46,8 +47,8 @@ async function call(path, options) {
 
 export const api = {
   get: (path) => call(path, { method: "GET" }),
-  post: (path, data) => call(path, {
+  post: (path, data, extraHeaders) => call(path, {
     method: "POST",
     body: JSON.stringify(data || {}),
-  }),
+  }, extraHeaders),
 };

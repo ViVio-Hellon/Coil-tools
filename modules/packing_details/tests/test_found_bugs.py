@@ -202,3 +202,45 @@ class OutputThenSaveFailsTest(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OtherLotRequestTest(_Base):
+    """前のロットの画面で打った操作が、開いたロットに入らない(統合 1.2.26・通し試験で見つけた)。
+
+    画面は押した順に1つずつ送る。ロットを開く要求のうしろに、開く前の画面で打った重量が並ぶと、
+    前のロットの丈2の重量が、開いたロットに入っていた。画面は押したときのロットを
+    `X-Screen-Lot` に付けて送り、サーバはいまのロットと違えば使わない。
+    """
+
+    def setUp(self):
+        super().setUp()
+        _seed(self.conn, lot="A123456", tate="2", yoko="6")
+
+    def _post_from(self, screen_lot, path, data):
+        from .test_web import HEADERS
+        return self.client.post(path, json=data, headers={**HEADERS, "X-Screen-Lot": screen_lot})
+
+    def test_開く前の画面で打った重量は_開いたロットに入れない(self):
+        _post(self.client, "/api/lot", {"lot_no": "A123456", "confirm": True})
+        res = self._post_from("L5160Z0", "/api/weights", {"weights": ["300", "248"]})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"]["code"], "lot_changed")
+        self.assertEqual(session.current().lot_no, "A123456")
+        self.assertNotIn(248, session.current().weights, "前のロットの重量が入った")
+
+    def test_いまのロットの画面からなら通す(self):
+        _post(self.client, "/api/lot", {"lot_no": "A123456", "confirm": True})
+        res = self._post_from("A123456", "/api/weights", {"weights": ["300", "302"]})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(list(session.current().weights), [300, 302])
+
+    def test_ロットを開く口は_開く前の画面から押せる(self):
+        res = self._post_from("L5160Z0", "/api/lot", {"lot_no": "A123456", "confirm": True})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(session.current().lot_no, "A123456")
+
+    def test_前のロットの画面で押したコイルを_開いたロットに積まない(self):
+        _post(self.client, "/api/lot", {"lot_no": "A123456", "confirm": True})
+        res = self._post_from("L5160Z0", "/api/stack", {"key": "1-6"})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"]["code"], "lot_changed")

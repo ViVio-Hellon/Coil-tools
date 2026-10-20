@@ -52,6 +52,37 @@ log = get_logger("app.routes.meisai")
 
 bp = Blueprint("meisai", __name__)
 
+#: 画面の JS が「どのロットの画面で押したか」を付けて送るヘッダ(`meisai.js` の `queued`)
+SCREEN_LOT_HEADER = "X-Screen-Lot"
+
+
+@bp.before_request
+def _refuse_other_lot():
+    """**ほかのロットの画面で押した操作は使わない**(統合 1.2.26)。
+
+    画面は押した順に1つずつ送るので、ロットを開く要求のうしろに、開く前の画面で打った重量
+    などが並ぶことがある。そのまま通すと、前のロットの画面の値(丈2の重量など)が、開いた
+    ロットに入った(台帳の読み込みが遅いと起きる。通し試験で見つけた)。
+
+    ロットを開く口は、開く前の画面から押すものなので見ない。ヘッダの無い要求(帳票の別タブ・
+    設定・試験)も見ない。
+    """
+    if request.method != "POST":
+        return None
+    sent = request.headers.get(SCREEN_LOT_HEADER)
+    if sent is None or request.path.endswith("/api/lot"):
+        return None
+    board = session.current()
+    now = board.lot_no if board else ""
+    if sent.strip().upper() == now:
+        return None
+    log.info("ほかのロットの画面の操作を断りました: %s (画面 %s / いま %s)",
+             request.path, sent or "(なし)", now or "(なし)")
+    return jsonify(error_body(
+        "lot_changed",
+        f"ロットが {now or '(なし)'} に変わったので、{sent or '(なし)'} の画面で押した操作は"
+        "使いませんでした。画面を確かめて、もう一度操作してください。")), 409
+
 
 # ==================================================================
 # 画面

@@ -191,6 +191,17 @@ function renderSpec(state) {
 
 function renderWeights(state) {
   const box = $("weights");
+  // 丈の数が同じなら欄は作り直さず、値だけ合わせる。**打っている最中の欄には触らない**
+  // (統合 1.2.26。作り直すと、丈1を送った返事が、丈2へ打ちかけた値を前の値に戻していた)
+  const inputs = box.querySelectorAll("input[id^='weight']");
+  if (state.jou_su > 0 && inputs.length === state.jou_su) {
+    inputs.forEach((input, index) => {
+      if (input === document.activeElement && document.hasFocus()) return;
+      input.value = state.weights[index] || "";
+      input.classList.remove("is-bad");
+    });
+    return;
+  }
   box.textContent = "";
   for (let jou = 1; jou <= state.jou_su; jou += 1) {
     const cell = document.createElement("div");
@@ -470,7 +481,10 @@ function printTargets() {
 */
 let sendChain = Promise.resolve();
 function queued(path, data) {
-  const run = sendChain.then(() => api.post(path, data));
+  // **押したときの画面のロットを付ける**(統合 1.2.26)。並んで待つあいだにロットが変わったら、
+  // サーバは使わずに断る(`lot_changed`)。前のロットの画面で打った重量を、開いたロットへ入れない
+  const lot = (window.APP.state || {}).lot_no || "";
+  const run = sendChain.then(() => api.post(path, data, { "X-Screen-Lot": lot }));
   sendChain = run.catch(() => {});
   return run;
 }

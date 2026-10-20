@@ -362,7 +362,30 @@ def material_toast(fr, want, timeout=10):
 def details_open_lot(fr, lot):
     fr.fill("#lotNo", "")
     fr.type("#lotNo", lot, delay=20)
-    return wait_until(lambda: visible(fr, "#lotInfo") and text(fr, "#warisu"), 10)
+    # **そのロットが開いたのを待つ。** 前のロットの表示が出ているだけでは開いたことにしない
+    # (統合 1.2.26。開く前に重量を打ち、前のロットの画面の値が開いたロットに入っていた)
+    return wait_until(lambda: details_lot(fr) == lot.upper()
+                      and visible(fr, "#lotInfo") and text(fr, "#warisu"), 10)
+
+
+def details_lot(fr) -> str:
+    """梱包明細の画面がいま描いているロット(サーバの返事で描いたもの)。"""
+    return fr.evaluate("(window.APP && window.APP.state && window.APP.state.lot_no) || ''")
+
+
+def details_slow_lot(fr, seconds: float):
+    """画面からロットを開く要求だけ、送るのを遅らせる(台帳の読み込みが遅いときと同じ形)。
+
+    Playwright の route は試験の側で待つので、打つ操作まで止まってしまう。画面の中で遅らせる。
+    """
+    fr.evaluate("""ms => {
+        if (!window.__origFetch) window.__origFetch = window.fetch;
+        const orig = window.__origFetch;
+        window.fetch = (url, opts) => String(url).endsWith('/api/lot')
+            ? new Promise(r => setTimeout(r, ms)).then(() => orig(url, opts))
+            : orig(url, opts);
+    }""", int(seconds * 1000))
+    return lambda: fr.evaluate("() => { if (window.__origFetch) window.fetch = window.__origFetch; }")
 
 
 def details_weights(fr, w1, w2):
@@ -370,6 +393,32 @@ def details_weights(fr, w1, w2):
     fr.fill("#weight2", str(w2))
     fr.press("#weight2", "Tab")
     fr.wait_for_timeout(400)
+
+
+def details_weights_late_reply(ctx, fr):
+    """丈1を送った返事が、丈2へ移ったあとに届いても、丈2に打つ数字を失わない(統合 1.2.26)。
+
+    以前は返事のたびに重量の欄を作り直していた。丈1 → Tab → 丈2 と打つあいだに丈1の返事が
+    届くと、丈2の欄が作り直されて入力の場所(フォーカス)が消え、続けて打った数字がどこにも
+    入らなかった(打ちかけの途中なら、そこまでの数字が送られた)。共有フォルダが遅い・PC が
+    重いと起きる。
+    """
+    fr.page.bring_to_front()               # 打っている窓が前にある
+    before = (fr.input_value("#weight1"), fr.input_value("#weight2"))
+    undo = _delay(ctx, "**/details/api/weights", 1.0)
+    try:
+        fr.fill("#weight1", "251")
+        fr.click("#weight2")                # 丈1の change が飛ぶ(返事は1秒遅れる)
+        fr.wait_for_timeout(1800)           # 遅れた返事が届いて画面が描き直されるまで
+        fr.page.keyboard.press("Control+A")
+        fr.page.keyboard.type("249", delay=20)
+        typed = fr.input_value("#weight2")
+    finally:
+        undo()
+    fr.press("#weight2", "Tab")
+    fr.wait_for_timeout(500)
+    check("梱包明細: 丈2へ移ったあとに丈1の返事が届いても、丈2に打った重量が入る", typed == "249", typed)
+    details_weights(fr, *before)            # 元へ戻す(あとの試験が使う)
 
 
 def details_stack_and_output(fr, keys):
@@ -537,6 +586,7 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
     check("梱包明細: 割数(縦割2 × 横割12)", "縦割2" in text(fr, "#warisu") and "横割12" in text(fr, "#warisu"),
           text(fr, "#warisu"))
     details_weights(fr, 250, 248)
+    details_weights_late_reply(ctx, fr)
     err = details_stack_and_output(fr, ["1-12", "1-11", "2-12", "2-11"])
     check("梱包明細: 重量 → 条番号表示 → 積み → 出力", not err, err or text(fr, "#notice"))
     with ctx.expect_page() as info:
@@ -737,6 +787,22 @@ def scenario_alternate(app: App, ctx, sh: Shell, note: dict) -> None:
     print("■ 2. 交互に使う")
     # --- 途中まで入れてはタブを替える ---
     d = sh.tab("details")
+    # 台帳の読み込みが遅く、ロットが開く前に重量を打った(前のロットの画面のまま)。
+    # その重量は、開いたロットに入れずに断る(統合 1.2.26。以前は前のロットの丈2の重量が入った)
+    old_lot = details_lot(d)
+    undo = details_slow_lot(d, 1.5)
+    try:
+        d.fill("#lotNo", "")
+        d.type("#lotNo", "A123456", delay=20)
+        details_weights(d, 300, 302)
+        opened = wait_until(lambda: details_lot(d) == "A123456", 10)
+        d.wait_for_timeout(800)
+    finally:
+        undo()
+    late = d.evaluate("(window.APP.state.weights || []).map(String)")
+    check("交互: ロットが開く前に打った重量は、開いたロットに入れず知らせる",
+          opened and all(w in ("", "0") for w in late) and "変わったので" in text(d, "#notice"),
+          (old_lot, late, text(d, "#notice")[:60]))
     ok = details_open_lot(d, "A123456")
     details_weights(d, 300, 302)
     check("交互: 梱包明細を途中まで(別のロット・重量)", ok and "横割6" in text(d, "#warisu"), text(d, "#warisu"))
