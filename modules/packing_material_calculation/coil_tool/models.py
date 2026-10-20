@@ -210,6 +210,18 @@ class CalcState:
         入力(LotNo・受注情報・検入数・外径)は残す。もう一度
         「計算Start」を押したときに入力から入れ直さずに済む。
         """
+        self.clear_results()
+
+    def clear_results(self, *, keep_stack: bool = False) -> None:
+        """計算で埋まる欄・印・断りを全部消す(入力と単重再計算は残す)。**消し方はここ1か所。**
+
+        `keep_stack=True` … 手で入れた積数だけ残す(積数の手直し・バリ揃えの結果転送)。
+
+        計算Start・積数の手直し・バリ揃えの結果転送・検入数/外径の変更が、みな前の結果を
+        ここで消す。以前は積数の手直しとバリ揃えが別枠(Re_)と印を残し、1本積み不可で
+        分けたあとに台数を二重に数えた(VBA `積数_AfterUpdate` のバグ。統合 1.2.26)
+        """
+        stack = self.積数
         self.総高さ = ""
         self.パレット種類 = ""
         self.パレットサイズ = ""
@@ -238,6 +250,8 @@ class CalcState:
         self.IMI中間本数 = ""
         self.flags.clear()
         self.messages.clear()
+        if keep_stack:
+            self.積数 = stack
 
     def form_clear(self) -> None:
         """VBA `フォームクリア`。入力ごと全部消す(LotNo を打ち直したとき)。"""

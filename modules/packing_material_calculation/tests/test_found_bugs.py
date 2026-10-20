@@ -33,7 +33,6 @@ def run(conn, *, 検入数, 枚数, 枚数範囲="1不可", 単重="100.00", 外
 # ==================================================================
 # 積数を手で直したとき(VBA `積数_AfterUpdate` のバグ。現場で確認済み)
 # ==================================================================
-@pytest.mark.xfail(strict=True, reason="積み直しで別枠(Re_)が残り、台数を二重に数える")
 def test_1本積み不可で分けたあと積数を直すと_別枠は消える(conn):
     s, r = run(conn, 検入数=13, 枚数=4)
     assert r.ok and s.Re_台数 == "2"            # 2台 + 別枠2台
@@ -86,7 +85,6 @@ def test_バリ揃えの積数も整数に切り捨てる():
     assert burr_split._decide_stack(order, PackagingSpec()) == 2.0
 
 
-@pytest.mark.xfail(strict=True, reason="結果転送で別枠(Re_)が残り、チェックリストで台数を足してしまう")
 def test_バリ揃えの結果転送で別枠は消える(conn):
     s, r = run(conn, 検入数=13, 枚数=4)
     assert s.Re_台数 == "2"
@@ -110,8 +108,41 @@ def ready(client, sandbox):
     return client
 
 
-@pytest.mark.xfail(strict=True, reason="検入数を変えても前の結果が残り、そのまま積める")
 def test_検入数を変えたら計算し直すまで積めない(ready):
     ready.post("/api/calc/input", json={"検入数": "20"})
     r = ready.post("/api/checklist/add", json={})
     assert r.status_code == 422
+
+
+def test_積数を直しても分けない_HBもリプラも3台ぶん(conn):
+    s, r = run(conn, 検入数=13, 枚数=4)
+    hb_before = s.HB枚数
+    s.積数 = "5"
+    assert calc_service.recalculate_from_stack(conn, s).ok
+    assert s.HB枚数 != hb_before
+    assert s.HB枚数 == "3"
+    assert not s.messages, "前の計算の断り・知らせが残っている"
+
+
+@pytest.mark.parametrize("積数", ["0", ""])
+def test_積数の手直しが断られたら_前の台数で積めない(ready, 積数):
+    ready.post("/api/calc/input", json={"積数": 積数})
+    r = ready.post("/api/calc/restack", json={})
+    assert r.status_code == 422
+    assert r.get_json()["view"]["result"]["台数"] == ""
+    assert ready.post("/api/checklist/add", json={}).status_code == 422
+
+
+def test_外径を変えたら消す_同じ値の書き方違いなら消さない(ready):
+    view = ready.post("/api/calc/input", json={"外径": "900.0"}).get_json()["view"]
+    assert view["result"]["台数"] != "", "同じ値なのに消した"
+    body = ready.post("/api/calc/input", json={"外径": "950"}).get_json()
+    assert body["view"]["result"]["台数"] == ""
+    assert any("前の計算結果を消しました" in m for m in body["view"]["messages"])
+
+
+def test_バリ揃えの結果転送のあと積める(ready):
+    r = ready.post("/api/calc/burr/transfer", json={"上本数": 6, "下本数": 4})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["view"]["result"]["台数"] == "3"
+    assert ready.post("/api/checklist/add", json={}).status_code == 200

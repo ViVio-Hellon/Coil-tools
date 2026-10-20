@@ -21,17 +21,45 @@ class AddedSizeWeightCheckTest(unittest.TestCase):
         self.assertEqual(V.check_weight_inputs(FormState(selected_ob=1)), "重量入力がありません　丈1")
         self.assertEqual(V.check_weight_inputs(FormState(selected_ob=2)), "重量入力がありません　丈2")
 
-    @unittest.expectedFailure
     def test_足したサイズの丈1も断る(self):
         for ob in (SM.FIRST_EXTRA_OB, SM.FIRST_EXTRA_OB + 2, SM.FIRST_EXTRA_OB + 4):
             self.assertEqual(V.check_weight_inputs(FormState(selected_ob=ob)),
                              "重量入力がありません　丈1", ob)
 
-    @unittest.expectedFailure
     def test_足したサイズの丈2も断る(self):
         for ob in (SM.FIRST_EXTRA_OB + 1, SM.FIRST_EXTRA_OB + 3):
             self.assertEqual(V.check_weight_inputs(FormState(selected_ob=ob)),
                              "重量入力がありません　丈2", ob)
+
+
+    def test_重量が入っていれば通す(self):
+        for ob, w in ((SM.FIRST_EXTRA_OB, "weight1"), (SM.FIRST_EXTRA_OB + 1, "weight2")):
+            self.assertIsNone(V.check_weight_inputs(FormState(selected_ob=ob, **{w: "12.3"})), ob)
+
+    def test_同梱のサイズの答えは前と同じ(self):
+        """番号の決め打ち(前の判定)と、丈の決まり(いまの判定)が 0〜14 で全部同じ答え。"""
+        def legacy(state, mode):
+            w1, w2 = state.weight1 or "", state.weight2 or ""
+            ob = state.selected_ob
+            if mode == 1:
+                return bool((ob and ob % 2 == 1 and ob <= 11) or ob == 13) and w1 == ""
+            if mode == 2:
+                return bool((ob and ob % 2 == 0 and ob <= 12) or ob == 14) and w2 == ""
+            return V.inp_check(state, 3)
+        for ob in range(0, 15):
+            for cb in (0, 1, 3, 6):
+                for named in (False, True):
+                    for w1 in ("", "12.3"):
+                        for w2 in ("", "9.8"):
+                            st = FormState(selected_ob=ob, selected_cb=cb, named_cb=named,
+                                           weight1=w1, weight2=w2)
+                            for mode in (1, 2, 3):
+                                self.assertEqual(V.inp_check(st, mode), legacy(st, mode),
+                                                 (ob, cb, named, w1, w2, mode))
+
+    def test_丈の決まりは1か所(self):
+        for cfg in SM.SizeMaster().all():
+            self.assertEqual(cfg.take_type, SM.take_of(cfg.ob_idx))
 
 
 class ScreenGuardListTest(unittest.TestCase):

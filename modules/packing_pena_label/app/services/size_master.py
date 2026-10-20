@@ -99,6 +99,16 @@ NAMED_CB_KEY = "ck_08_53"
 NAMED_CB_PAIR = (13, 14)
 
 
+def take_of(ob_idx) -> int:
+    """その台紙番号が丈1か丈2か(VBA ``GetTakeType``: 奇数=丈1 / 偶数=丈2)。
+
+    **丈の決まりはここ1か所。** 同梱のサイズ(1〜14)も、足したサイズ(15〜)も同じ。
+    以前は重量の未入力チェックが「11 以下の奇数か 13」「12 以下の偶数か 14」と番号を
+    決め打ちしていて、足したサイズは重量が空でも重量反映が通った(統合 1.2.26・構造点検)。
+    """
+    return 1 if int(ob_idx) % 2 == 1 else 2
+
+
 @dataclass
 class SizeConfig:
     """VBA ``GetSizeConfig`` の戻り値 Array(0..4) に対応。"""
@@ -117,7 +127,7 @@ class SizeConfig:
     @property
     def take_type(self) -> int:
         """VBA GetTakeType: 奇数=丈1 / 偶数=丈2。"""
-        return 1 if self.ob_idx % 2 == 1 else 2
+        return take_of(self.ob_idx)
 
     @property
     def sheet_name(self) -> str:
@@ -329,7 +339,7 @@ class SizeMaster:
 
     def take_type(self, ob_idx: int) -> int:
         """VBA GetTakeType。cfg が無くても奇偶で決まる。"""
-        return 1 if int(ob_idx) % 2 == 1 else 2
+        return take_of(ob_idx)
 
     # ------------------------------------------------------------ ペア
     def cb_to_pair(self, cb_idx: int) -> tuple:

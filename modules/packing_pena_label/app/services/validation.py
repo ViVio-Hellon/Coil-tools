@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from .size_master import take_of
 from .vba_compat import is_numeric, to_narrow
 
 #: VBA ValidateKensaNo の共通メッセージ前半（Chr(10) = LF）
@@ -70,19 +71,16 @@ def inp_check(state, mode: int) -> bool:
     w1 = state.weight1 or ""
     w2 = state.weight2 or ""
 
+    # VBA: For i = 1 To 11 Step 2 / For i = 2 To 12 Step 2 と名前付き OB(13・14)を見ていた。
+    # どれも「奇数=丈1・偶数=丈2」なので、丈の決まり(`take_of`)で見る ── 足したサイズ
+    # (15〜)も同じに断る(統合 1.2.26。以前は番号を決め打ちして、足したサイズを見落とした)
     if mode == 1:
-        # VBA: For i = 1 To 11 Step 2 … 最初に ON を見つけたら Exit For
-        if state.selected_ob and state.selected_ob % 2 == 1 and state.selected_ob <= 11:
-            return w1 == ""
-        # 名前付き OB（lblSpec_08_53_1 = obIdx 13）
-        if state.selected_ob == 13:
+        if state.selected_ob and take_of(state.selected_ob) == 1:
             return w1 == ""
         return False
 
     if mode == 2:
-        if state.selected_ob and state.selected_ob % 2 == 0 and state.selected_ob <= 12:
-            return w2 == ""
-        if state.selected_ob == 14:
+        if state.selected_ob and take_of(state.selected_ob) == 2:
             return w2 == ""
         return False
 

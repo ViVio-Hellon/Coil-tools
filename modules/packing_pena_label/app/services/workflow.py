@@ -312,6 +312,10 @@ class Workflow:
         elif state.is_ob_mode:
             ob = state.selected_ob
             cfg = self.master.get(ob)
+            if cfg is None:
+                # 足したサイズの表が読めない・知らない番号が来た。500 で落とさずに理由を返す
+                return Result(False, "選んだサイズの定義が見つかりません。サイズを選び直してください",
+                              "warn")
             take = cfg.take_type
             wt = state.weight1 if take == 1 else state.weight2
 

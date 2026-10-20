@@ -188,6 +188,13 @@ def load_order():
 # ==================================================================
 # 入力
 # ==================================================================
+def _changed(old: str, new: str) -> bool:
+    """値として変わったか("900" と "900.00" は同じ)。"""
+    if vba.is_numeric(old) and vba.is_numeric(new):
+        return vba.val(old) != vba.val(new)
+    return str(old).strip() != str(new).strip()
+
+
 @bp.post("/api/calc/input")
 def set_input():
     """検入数・外径・積数を受ける。
@@ -216,11 +223,23 @@ def set_input():
             return jsonify(ok=False, reason="not_positive",
                            message=f"検入数には1以上を入れてください: {raw}",
                            view=view_of(state)), 422
+    before = (state.検入数, state.外径)
+    if "検入数" in payload:
+        raw = str(payload["検入数"]).strip()
         state.検入数 = vba.int_text(raw) if vba.is_numeric(raw) else ""
 
     if "外径" in payload:
         raw = str(payload["外径"]).strip()
         state.外径 = vba.fmt(raw, 2) if vba.is_numeric(raw) else ""
+
+    # 検入数・外径が変わったら前の結果は使えない。消して、計算し直すまで積めないようにする
+    # (統合 1.2.26・構造点検。以前は前の台数のままチェックリストへ積めた)
+    if _changed(before[0], state.検入数) or _changed(before[1], state.外径):
+        had_result = bool(str(state.台数).strip() or state.パレット種類)
+        state.clear_results()
+        if had_result:
+            state.note("検入数・外径が変わったので前の計算結果を消しました。"
+                       "「計算Start」で出し直してください")
 
     if "積数" in payload:
         raw = str(payload["積数"]).strip()
@@ -337,5 +356,10 @@ def burr_transfer():
                        message="上下の台数を出せません"), 422
 
     burr_split.transfer(state, result)
-    total = ripla_service.calculate(conn, state)
-    return _ok(state, total_ripla=total)
+    # 送った積数・台数で、積数の手直しと同じ道を通す(パレット・リプラを出し直す。
+    # 前の別枠・印は transfer が消している)
+    done = calc_service.recalculate_from_stack(conn, state, units=result.台数)
+    if not done.ok:
+        return jsonify(ok=False, reason=done.reason, view=view_of(state),
+                       message=state.messages[-1] if state.messages else ""), 422
+    return _ok(state, shape=done.shape, total_ripla=done.total_ripla)

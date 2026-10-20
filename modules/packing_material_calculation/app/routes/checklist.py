@@ -54,7 +54,7 @@ def add():
     conn = get_db()
     state = session.get()
 
-    if not str(state.台数).strip():
+    if not str(state.台数).strip() or state.台数値 < 1:
         return jsonify(ok=False, reason="not_calculated",
                        message="先に計算してください"), 422
 

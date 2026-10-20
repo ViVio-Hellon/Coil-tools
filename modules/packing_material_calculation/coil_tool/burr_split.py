@@ -138,5 +138,7 @@ def transfer(state: CalcState, result: BurrSplit) -> None:
     """
     if not result.ok:
         return
+    # 前の計算の別枠(Re_)・印を消す。残すとチェックリストで台数を足してしまう(統合 1.2.26)
+    state.clear_results()
     state.積数 = vba.int_text(result.積数)
     state.台数 = vba.int_text(result.台数)

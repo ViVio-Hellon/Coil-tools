@@ -38,10 +38,14 @@ class CalcResult:
 
 
 def refuse_inspection_count(state: CalcState) -> Optional[CalcResult]:
-    """検入数が1未満なら断る(統合 1.2.26・構造点検)。
+    """検入数が空・1未満なら断る(計算Start・積数の手直しで共通)。
 
-    VBA は 0 や負の検入数でもそのまま計算し、台数 0・-2 などをチェックリストへ積めた。
+    VBA は 0 や負の検入数でもそのまま計算し、台数 0・-2 などをチェックリストへ積めた
+    (統合 1.2.26・構造点検)。
     """
+    if not str(state.検入数).strip():
+        state.note("検入数を入力してください")
+        return CalcResult(ok=False, reason="no_inspection_count")
     if state.検入数値 < 1:
         state.note("検入数には1以上を入れてください")
         return CalcResult(ok=False, reason="bad_inspection_count")
@@ -53,14 +57,11 @@ def calculate(conn: sqlite3.Connection, state: CalcState) -> CalcResult:
 
     検入数が無いと何も出せないので、そこだけ先に断る。
     """
-    if not str(state.検入数).strip():
-        state.note("検入数を入力してください")
-        return CalcResult(ok=False, reason="no_inspection_count")
+    # 先に消す。断ったときに前の結果が残ると、そのままチェックリストへ積めてしまう(統合 1.2.26)
+    state.soft_clear()
     refused = refuse_inspection_count(state)
     if refused:
         return refused
-
-    state.soft_clear()
 
     pallet_service.pallet_type(conn, state)
     pallet_service.pallet_size(conn, state)
@@ -81,16 +82,28 @@ def calculate(conn: sqlite3.Connection, state: CalcState) -> CalcResult:
     return CalcResult(ok=True, total_ripla=total, shape=shape)
 
 
-def recalculate_from_stack(conn: sqlite3.Connection, state: CalcState) -> CalcResult:
+def recalculate_from_stack(conn: sqlite3.Connection, state: CalcState, *,
+                           units: Optional[int] = None) -> CalcResult:
     """積数を手で直したときの再計算 (VBA `積数_AfterUpdate`)。
 
     パレットは引き直すが、**台数は積数から出し直す**(`台数計算` は
     呼ばない)。手で入れた積数を、規則で上書きしてしまわないため。
 
-        台数 = 切り上げ(検入数 ÷ 積数)
+        台数 = 切り上げ(検入数 ÷ 積数)   (`units` を渡すとそれ。バリ揃えの結果転送)
+
+    【VBA のバグを直した(統合 1.2.26・現場で確認)】VBA は前の計算の別枠(Re_積数・Re_台数)・
+    印・断りを消さずに計算し直していた。1本積み不可で分けたあとに積数を直すと、チェック
+    リスト・HB・リプラで台数を二重に数えた(検入数13・枚数4 → 積数5 で3台のはずが5台)。
+    手で入れた積数のほかは全部消してから出し直す。分ける・高さで直すはしない(手で入れた
+    積数が最後の答え)
     """
+    state.clear_results(keep_stack=True)
     if not str(state.積数).strip():
+        state.note("積数を入力してください")
         return CalcResult(ok=False, reason="no_stack")
+    refused = refuse_inspection_count(state)
+    if refused:
+        return refused
 
     pallet_service.pallet_type(conn, state)
     pallet_service.pallet_size(conn, state)
@@ -101,7 +114,9 @@ def recalculate_from_stack(conn: sqlite3.Connection, state: CalcState) -> CalcRe
         state.note("積数には1以上を入れてください")
         return CalcResult(ok=False, reason="zero_stack")
 
-    state.台数 = vba.int_text(vba.round_up(state.検入数値 / state.積数値))
+    if units is None:
+        units = vba.round_up(state.検入数値 / state.積数値)
+    state.台数 = vba.int_text(units)
 
     total = ripla_service.calculate(conn, state)
     shape = ripla_service.shape_view(
