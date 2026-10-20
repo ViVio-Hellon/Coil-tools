@@ -444,6 +444,9 @@ def details_edit_output(fr):
           fr.evaluate("document.querySelector('#jouSu').disabled")
           and visible(fr, "#jouLockNote") and "全クリア" in text(fr, "#jouLockNote"),
           text(fr, "#jouLockNote"))
+    check("梱包明細: 積み上げを始めたら前工程実績数も変えられない(VER 0.13.25)",
+          fr.evaluate("document.querySelector('#btnEditZen').disabled") and visible(fr, "#zenLockNote"),
+          text(fr, "#zenLockNote"))
 
 
 # ---- ペナラベル ------------------------------------------------------

@@ -1,8 +1,8 @@
 {
  "taken": "2026-10-20",
  "versions": {
-  "app": "1.2.24",
-  "details": "0.13.24",
+  "app": "1.2.25",
+  "details": "0.13.25",
   "material": "0.2.23",
   "pena": "1.5.29"
  },
@@ -37,7 +37,7 @@
   },
   "details-ready": {
    "w": 1280,
-   "h": 677
+   "h": 818
   },
   "details-report": {
    "w": 1280,
@@ -57,7 +57,7 @@
   },
   "details-stack": {
    "w": 1280,
-   "h": 677
+   "h": 818
   },
   "details-start": {
    "w": 1280,

@@ -319,6 +319,17 @@ function renderEdit(state) {
   $("jouSu").disabled = jouLocked;
   document.querySelectorAll("[data-jou]").forEach((b) => { b.disabled = jouLocked; });
   $("jouLockNote").hidden = !(state.jou_su_locked && !edit);
+  // 前工程実績数も、修正中か積み上げを始めたら変えられない(VER 0.13.25)
+  const zenLocked = Boolean(edit) || Boolean(state.zen_kotei_locked);
+  $("btnEditZen").disabled = zenLocked;
+  $("zenLockNote").hidden = !(state.zen_kotei_locked && !edit);
+  if (zenLocked && editingZen) {
+    // 打ちかけの「確定する」は取りやめる(サーバも断る)
+    editingZen = false;
+    $("zenKotei").readOnly = true;
+    $("zenKotei").value = state.zen_kotei || "";
+    $("btnEditZen").textContent = "修正する";
+  }
   if (!edit) return;
   $("editTitle").textContent = `No${edit.no}を修正中`;
   $("editBefore").textContent = `修正前: ${edit.keys.join(" ")}`;

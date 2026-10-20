@@ -157,6 +157,7 @@ def _state(conn) -> dict:
     """いま画面がどう見えるか。**操作のたびにこれを丸ごと返す。**"""
     board = session.current()
     lot = session.lot()
+    started = bool(board and _stacking_started(conn, board))
 
     state: dict = {
         "lot_no": board.lot_no if board else "",
@@ -176,7 +177,9 @@ def _state(conn) -> dict:
         "reversed": board.reversed_view if board else False,
         "complete": board.is_complete if board else False,
         # 積み上げを始めたら丈数は変えられない(VER 0.13.24)。変えるときは全クリア
-        "jou_su_locked": bool(board and _stacking_started(conn, board)),
+        "jou_su_locked": started,
+        # 前工程実績数も同じ(VER 0.13.25)。変えて条番号表示を押すと条番号が配り直される
+        "zen_kotei_locked": started,
         # 出力済みの修正中なら、そのNoと修正前の積み順(VER 0.13.23)
         "edit": ({"no": board.edit_no, "keys": list(board.edit_keys)}
                  if board is not None and board.editing else None),
@@ -226,8 +229,9 @@ def _stacking_started(conn, board) -> bool:
     """そのロットで積み上げを始めたか(VER 0.13.24・現場の求め)。
 
     出力済みがある・積み上げにコイルがある・使用済みのコイルがある(途中経過から戻した
-    ものを含む)のどれか。始めたら丈数は変えさせない ── 丈数を変えると条番号を配り直す
-    ので、積んだ副番・出力済みの紙と食い違う。変えるときは全クリアしてから。
+    ものを含む)のどれか。始めたら丈数・前工程実績数(VER 0.13.25)は変えさせない ──
+    どちらも条番号の配り直しにつながり、積んだ副番・出力済みの紙と食い違う。
+    変えるときは全クリアしてから。
     """
     if any(board.slots) or board.restored_used:
         return True
@@ -332,6 +336,16 @@ def set_zen_kotei():
     if board is None:
         return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
 
+    refused = _editing_refusal(board, "前工程実績数の変更")
+    if refused:
+        return refused
+    # 積み上げを始めたら断る(VER 0.13.25・現場の求め)。前工程実績数を変えて条番号表示を
+    # 押すと条番号が配り直され、積んだ副番・出力済みの紙と食い違う。変えるときは全クリア
+    if _stacking_started(conn, board):
+        return jsonify(error_body(
+            "zen_kotei_locked",
+            "積み上げを始めたロットは前工程実績数を変えられません。"
+            "変えるときは「全クリア」してからにしてください。", "value")), 409
     raw = str((request.get_json(silent=True) or {}).get("value", "")).strip()
     if not (raw.isascii() and raw.isdigit()):
         return jsonify(error_body(

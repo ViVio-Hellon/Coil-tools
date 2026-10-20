@@ -973,6 +973,63 @@ class JouSuLockTest(unittest.TestCase):
         self.assertTrue(self._jou().get_json()["ok"])
 
 
+class ZenKoteiLockTest(unittest.TestCase):
+    """積み上げを始めたロットは前工程実績数を変えられない(VER 0.13.25・現場の求め)。"""
+
+    def setUp(self):
+        self.client, self.conn = _client(self)
+        _seed(self.conn)
+        _post(self.client, "/api/lot", {"lot_no": "L5160Z0"})
+        _post(self.client, "/api/weights", {"weights": ["250", "248"]})
+        _post(self.client, "/api/strands", {})
+        _post(self.client, "/api/stack-max", {"value": "2"})
+
+    def _zen(self, value="30"):
+        return _post(self.client, "/api/zen-kotei", {"value": value})
+
+    def test_積む前なら変えられる(self):
+        body = self._zen().get_json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["state"]["zen_kotei"], 30)
+        self.assertFalse(body["state"]["zen_kotei_locked"])
+
+    def test_1本でも積んだら断る(self):
+        state = _post(self.client, "/api/stack", {"key": "1-12"}).get_json()["state"]
+        self.assertTrue(state["zen_kotei_locked"])
+        res = self._zen()
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"]["code"], "zen_kotei_locked")
+        self.assertIn("全クリア", res.get_json()["error"]["message"])
+        self.assertEqual(session.current().zen_kotei, 24)
+
+    def test_出力済みがあれば_開き直しても断る(self):
+        _post(self.client, "/api/stack", {"key": "1-12"})
+        _post(self.client, "/api/stack", {"key": "2-12"})
+        _post(self.client, "/api/output", {"confirm": True})
+        self.assertEqual(self._zen().status_code, 409)
+        session.clear()
+        state = _post(self.client, "/api/lot", {"lot_no": "L5160Z0"}).get_json()["state"]
+        self.assertTrue(state["zen_kotei_locked"])
+        self.assertEqual(self._zen().status_code, 409)
+
+    def test_修正中も断る(self):
+        _post(self.client, "/api/stack", {"key": "1-12"})
+        _post(self.client, "/api/stack", {"key": "2-12"})
+        _post(self.client, "/api/output", {"confirm": True})
+        _post(self.client, "/api/edit-output", {"no": 1})
+        res = self._zen()
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"]["code"], "editing")
+
+    def test_全クリアすれば変えられる(self):
+        _post(self.client, "/api/stack", {"key": "1-12"})
+        _post(self.client, "/api/stack", {"key": "2-12"})
+        _post(self.client, "/api/output", {"confirm": True})
+        state = _post(self.client, "/api/clear-all", {"confirm": True}).get_json()["state"]
+        self.assertFalse(state["zen_kotei_locked"])
+        self.assertTrue(self._zen().get_json()["ok"])
+
+
 class SettingsTest(unittest.TestCase):
     """設定。"""
 

@@ -76,6 +76,8 @@
         <label for="zenKotei">前工程実績数</label>
         <input type="text" id="zenKotei" readonly style="width:70px;text-align:center">
         <button type="button" id="btnEditZen">修正する</button>
+        {# 積み上げを始めたら前工程実績数は変えられない(VER 0.13.25) #}
+        <span class="stamp" id="zenLockNote" hidden>積み上げを始めたので変えられません(変えるときは「全クリア」)</span>
         <span class="stamp" id="warisu"></span>
       </div>
       <div class="row" id="orderRow" hidden>
@@ -115,7 +117,7 @@
       <button type="button" id="btnHaiki">廃棄選択</button>
     </div>
     {# 積み上げを始めたら丈数は変えられない(VER 0.13.24) #}
-    <div class="stamp" id="jouLockNote" hidden style="margin:-2px 0 8px">積み上げを始めたので丈数は変えられません。変えるときは「全クリア」してから。</div>
+    <div class="stamp" id="jouLockNote" hidden style="margin:-2px 0 8px">積み上げを始めたので丈数・前工程実績数は変えられません。変えるときは「全クリア」してから。</div>
     <div class="weights" id="weights"></div>
   </section>
 
