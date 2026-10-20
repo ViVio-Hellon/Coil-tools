@@ -314,8 +314,11 @@ function renderEdit(state) {
   $("editBanner").hidden = !edit;
   $("btnOutput").textContent = edit ? "修正して出力" : "出力";
   $("btnStrands").disabled = Boolean(edit);
-  $("jouSu").disabled = Boolean(edit);
-  document.querySelectorAll("[data-jou]").forEach((b) => { b.disabled = Boolean(edit); });
+  // 丈数は、修正中か、積み上げを始めたら変えられない(VER 0.13.24。変えるときは全クリア)
+  const jouLocked = Boolean(edit) || Boolean(state.jou_su_locked);
+  $("jouSu").disabled = jouLocked;
+  document.querySelectorAll("[data-jou]").forEach((b) => { b.disabled = jouLocked; });
+  $("jouLockNote").hidden = !(state.jou_su_locked && !edit);
   if (!edit) return;
   $("editTitle").textContent = `No${edit.no}を修正中`;
   $("editBefore").textContent = `修正前: ${edit.keys.join(" ")}`;

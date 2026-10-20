@@ -800,6 +800,179 @@ class ClearAllTest(unittest.TestCase):
         self.assertEqual(_post(self.client, "/api/clear-all", {"confirm": True}).status_code, 409)
 
 
+class IrregularClearTest(unittest.TestCase):
+    """全クリア → 出し直し → 出力済み修正 → もう一度全クリア の残り方(VER 0.13.24・現場の求め)。
+
+    決まり: 全クリアは**その時点で効いている紙**(出力済みの一覧にある紙)だけを「取り消し」にする。
+    すでに作り直された紙は「作り直し」のまま(そのときに起きたことがそれだから)。前の回で
+    取り消した紙には触らない(二重に印を付けない)。
+    """
+
+    def setUp(self):
+        self.client, self.conn = _client(self)
+        _seed(self.conn)
+        _post(self.client, "/api/lot", {"lot_no": "L5160Z0"})
+        _post(self.client, "/api/weights", {"weights": ["250", "248"]})
+        _post(self.client, "/api/strands", {})
+
+    def _out(self, keys):
+        _post(self.client, "/api/stack-max", {"value": str(len(keys))})
+        for key in keys:
+            _post(self.client, "/api/stack", {"key": key})
+        body = _post(self.client, "/api/output", {"confirm": True}).get_json()
+        self.assertTrue(body.get("ok"), body)
+        return body["seq_no"]
+
+    def _edit(self, no, drop_slot, add_key):
+        _post(self.client, "/api/edit-output", {"no": no})
+        _post(self.client, "/api/unstack", {"slot_no": drop_slot})
+        _post(self.client, "/api/stack", {"key": add_key})
+        body = _post(self.client, "/api/output", {"confirm": True}).get_json()
+        self.assertTrue(body.get("ok"), body)
+
+    def _clear(self):
+        body = _post(self.client, "/api/clear-all", {"confirm": True}).get_json()
+        self.assertTrue(body.get("ok"), body)
+        _post(self.client, "/api/weights", {"weights": ["250", "248"]})
+        _post(self.client, "/api/strands", {})
+
+    def _papers(self):
+        rows = self.conn.execute(
+            "SELECT 送信ID, No, 状態, 変更回数, 本数 FROM 明細履歴 ORDER BY 出力日時, rowid").fetchall()
+        coils = {}
+        for r in self.conn.execute("SELECT 送信ID, 副番 FROM 明細履歴_副番 ORDER BY 順"):
+            coils.setdefault(r[0], []).append(r[1])
+        return [(r["No"], r["状態"], " ".join(coils.get(r["送信ID"], [])), r["変更回数"],
+                 r["送信ID"]) for r in rows]
+
+    def test_全クリアして直したものを修正し_もう一度全クリア(self):
+        # 1回目: No1〜No3 を出して全クリア
+        for keys in (("1-12", "2-12"), ("1-11", "2-11"), ("1-10", "2-10")):
+            self._out(keys)
+        self._clear()
+        round1 = {p[4]: p[3] for p in self._papers()}
+        # 2回目: No1・No2 を出し、No1 を2回修正して、もう一度全クリア
+        self.assertEqual(self._out(("1-12", "2-12")), 1)      # 1回目のコイルも使える・No1から
+        self.assertEqual(self._out(("1-11", "2-11")), 2)
+        self._edit(1, 2, "2-9")                                 # 1-12 2-9
+        self._edit(1, 1, "1-9")                                 # 1-9 2-9
+        self._clear()
+        # 3回目: No1 を出す
+        self.assertEqual(self._out(("1-12", "2-12")), 1)
+
+        papers = self._papers()
+        self.assertEqual([(no, st, c) for no, st, c, _, _ in papers], [
+            (1, "取り消し", "1-12 2-12"), (2, "取り消し", "1-11 2-11"), (3, "取り消し", "1-10 2-10"),
+            (1, "作り直し", "1-12 2-12"), (2, "取り消し", "1-11 2-11"),
+            (1, "作り直し", "1-12 2-9"), (1, "取り消し", "1-9 2-9"),
+            (1, "有効", "1-12 2-12"),
+        ])
+        # 前の回で取り消した紙には、2回目の全クリアで触らない(変更回数が増えない)
+        for sid, count in round1.items():
+            self.assertEqual([p[3] for p in papers if p[4] == sid], [count])
+        # 画面: 3回目の No1 だけが出力済み。連番は1
+        self.assertEqual(history_repo.current_seq(self.conn), 1)
+        self.assertEqual([o.seq_no for o in meisai_service.list_outputs(self.conn, "L5160Z0")], [1])
+
+        # 集計(CSV): 数えるのは有効の1枚だけ。作り直し2・取り消し5
+        from modules.packing_details.meisai import slip_history
+        counts = {"有効": 0, "作り直し": 0, "取り消し": 0}
+        for _, st, _, _, _ in papers:
+            counts[st] += 1
+        self.assertEqual(counts, {"有効": 1, "作り直し": 2, "取り消し": 5})
+        self.assertEqual(slip_history.STATE_CANCELLED, "取り消し")
+
+    def test_呼び出した紙面の断り書き(self):
+        self._out(("1-12", "2-12"))
+        self._edit(1, 2, "2-9")
+        self._clear()
+        ids = ",".join(p[4] for p in self._papers())
+        res = self.client.get(f"/report/history?ids={ids}&t={TOKEN}", headers=HEADERS)
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True)[:300])
+        html = res.get_data(as_text=True)
+        self.assertIn("このあと作り直されています（同じNoの新しい紙が履歴にあります）", html)
+        self.assertIn("このあと全クリアで取り消されています", html)
+
+    def test_ロットを切り替えて戻った紙は全クリアで取り消さない(self):
+        """ロット切替で片付いた紙は、刷って使った紙(有効のまま)。戻って全クリアしても触らない。"""
+        self._out(("1-12", "2-12"))
+        _seed(self.conn, lot="L7110P0")
+        _post(self.client, "/api/lot", {"lot_no": "L7110P0", "confirm": True})
+        _post(self.client, "/api/lot", {"lot_no": "L5160Z0", "confirm": True})
+        _post(self.client, "/api/weights", {"weights": ["250", "248"]})
+        _post(self.client, "/api/strands", {})
+        self._out(("1-11", "2-11"))
+        self._clear()
+        self.assertEqual([(no, st) for no, st, _, _, _ in self._papers()],
+                         [(1, "有効"), (1, "取り消し")])
+
+    def test_修正中に全クリア(self):
+        self._out(("1-12", "2-12"))
+        _post(self.client, "/api/edit-output", {"no": 1})
+        _post(self.client, "/api/unstack", {"slot_no": 1})
+        self._clear()
+        self.assertEqual([(no, st) for no, st, _, _, _ in self._papers()], [(1, "取り消し")])
+        state = _post(self.client, "/api/stack-max", {"value": "1"}).get_json()["state"]
+        self.assertIsNone(state["edit"])
+
+
+class JouSuLockTest(unittest.TestCase):
+    """積み上げを始めたロットは丈数を変えられない(VER 0.13.24・現場の求め)。変えるときは全クリア。"""
+
+    def setUp(self):
+        self.client, self.conn = _client(self)
+        _seed(self.conn)
+        _post(self.client, "/api/lot", {"lot_no": "L5160Z0"})
+        _post(self.client, "/api/weights", {"weights": ["250", "248"]})
+        _post(self.client, "/api/strands", {})
+        _post(self.client, "/api/stack-max", {"value": "2"})
+
+    def _jou(self, value="3"):
+        return _post(self.client, "/api/jou-su", {"value": value})
+
+    def test_積む前なら変えられる(self):
+        body = self._jou().get_json()
+        self.assertTrue(body["ok"])
+        self.assertFalse(body["state"]["jou_su_locked"])
+        self.assertEqual(body["state"]["jou_su"], 3)
+
+    def test_1本でも積んだら断る(self):
+        state = _post(self.client, "/api/stack", {"key": "1-12"}).get_json()["state"]
+        self.assertTrue(state["jou_su_locked"])
+        res = self._jou()
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"]["code"], "jou_su_locked")
+        self.assertIn("全クリア", res.get_json()["error"]["message"])
+        self.assertEqual(session.current().jou_su, 2)
+
+    def test_積んだものを外しても_出力済みがあれば断る(self):
+        _post(self.client, "/api/stack", {"key": "1-12"})
+        _post(self.client, "/api/stack", {"key": "2-12"})
+        _post(self.client, "/api/output", {"confirm": True})
+        self.assertEqual(self._jou().status_code, 409)
+
+    def test_開き直して途中経過から戻しても断る(self):
+        _post(self.client, "/api/stack", {"key": "1-12"})
+        _post(self.client, "/api/stack", {"key": "2-12"})
+        _post(self.client, "/api/output", {"confirm": True})
+        session.clear()
+        state = _post(self.client, "/api/lot", {"lot_no": "L5160Z0"}).get_json()["state"]
+        self.assertTrue(state["jou_su_locked"])
+        self.assertEqual(self._jou().status_code, 409)
+
+    def test_全クリアすれば変えられる(self):
+        _post(self.client, "/api/stack", {"key": "1-12"})
+        _post(self.client, "/api/stack", {"key": "2-12"})
+        _post(self.client, "/api/output", {"confirm": True})
+        state = _post(self.client, "/api/clear-all", {"confirm": True}).get_json()["state"]
+        self.assertFalse(state["jou_su_locked"])
+        self.assertTrue(self._jou().get_json()["ok"])
+
+    def test_廃棄だけなら変えられる(self):
+        _post(self.client, "/api/discard", {"key": "1-1"})
+        self.assertTrue(self._jou().get_json()["ok"])
+
+
 class SettingsTest(unittest.TestCase):
     """設定。"""
 

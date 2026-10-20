@@ -175,6 +175,8 @@ def _state(conn) -> dict:
         "slots": list(board.slots) if board else [],
         "reversed": board.reversed_view if board else False,
         "complete": board.is_complete if board else False,
+        # 積み上げを始めたら丈数は変えられない(VER 0.13.24)。変えるときは全クリア
+        "jou_su_locked": bool(board and _stacking_started(conn, board)),
         # 出力済みの修正中なら、そのNoと修正前の積み順(VER 0.13.23)
         "edit": ({"no": board.edit_no, "keys": list(board.edit_keys)}
                  if board is not None and board.editing else None),
@@ -218,6 +220,18 @@ def _state(conn) -> dict:
             for o in meisai_service.list_outputs(conn, board.lot_no)]
 
     return state
+
+
+def _stacking_started(conn, board) -> bool:
+    """そのロットで積み上げを始めたか(VER 0.13.24・現場の求め)。
+
+    出力済みがある・積み上げにコイルがある・使用済みのコイルがある(途中経過から戻した
+    ものを含む)のどれか。始めたら丈数は変えさせない ── 丈数を変えると条番号を配り直す
+    ので、積んだ副番・出力済みの紙と食い違う。変えるときは全クリアしてから。
+    """
+    if any(board.slots) or board.restored_used:
+        return True
+    return bool(board.lot_no and meisai_service.list_outputs(conn, board.lot_no))
 
 
 def _jou_su_note(lot) -> str:
@@ -336,6 +350,9 @@ def set_jou_su():
 
     VBA は丈数が変わると**重量欄・条番号・積み上げ・廃棄をすべて
     作り直す**。同じことをする。
+
+    **積み上げを始めたら断る(VER 0.13.24)。** 作り直すと、積んだ副番・出力済みの紙と
+    条番号が食い違う。変えるときは全クリアしてから。
     """
     conn = get_db()
     board = session.current()
@@ -345,6 +362,11 @@ def set_jou_su():
     refused = _editing_refusal(board, "丈数の変更")
     if refused:
         return refused
+    if _stacking_started(conn, board):
+        return jsonify(error_body(
+            "jou_su_locked",
+            "積み上げを始めたロットは丈数を変えられません。"
+            "丈数を変えるときは「全クリア」してからにしてください。", "value")), 409
     raw = str((request.get_json(silent=True) or {}).get("value", "")).strip()
     if not (raw.isascii() and raw.isdigit()):
         return jsonify(error_body("bad_number", "丈数を入力してください。",

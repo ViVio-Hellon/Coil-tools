@@ -439,6 +439,11 @@ def details_edit_output(fr):
           and fr.locator("#outputs .output").count() == 2 and not visible(fr, "#editBanner"),
           text(fr, "#notice"))
     fr.uncheck("#pick2")
+    # 積み上げを始めたロットは丈数を変えられない(VER 0.13.24)
+    check("梱包明細: 積み上げを始めたら丈数は変えられない(全クリアの案内が出る)",
+          fr.evaluate("document.querySelector('#jouSu').disabled")
+          and visible(fr, "#jouLockNote") and "全クリア" in text(fr, "#jouLockNote"),
+          text(fr, "#jouLockNote"))
 
 
 # ---- ペナラベル ------------------------------------------------------

@@ -423,7 +423,9 @@ def render_history(slips: list[dict], *, current_qa: str, source: str = "shared"
              "mixed": "全ラインの履歴(一部はこの PC の履歴)"}.get(source, "履歴")
     notes = [f"{where}から作り直した紙面です（{len(outputs)}枚）。記録のとおりに組んでいます。"]
     if replaced:
-        notes.append(f"{'・'.join(replaced)} は、このあと作り直されています（新しい紙があります）。")
+        # 新しい紙も、そのあと全クリアで取り消されていることがある(VER 0.13.24 で文言を直した)
+        notes.append(f"{'・'.join(replaced)} は、このあと作り直されています"
+                     "（同じNoの新しい紙が履歴にあります）。")
     if cancelled:
         notes.append(f"{'・'.join(cancelled)} は、このあと全クリアで取り消されています"
                      "（この紙は使いません）。")
