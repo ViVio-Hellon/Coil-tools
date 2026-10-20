@@ -151,7 +151,7 @@ def _restore(conn: sqlite3.Connection, board: Board) -> bool:
     board.jou_su = snap.jou_su
     board.strands = list(snap.strands)
     board.weights = list(snap.weights) + [0] * (snap.jou_su - len(snap.weights))
-    board.discarded = [k for k in snap.discarded if board.knows(k)]
+    board.discarded = [k for k in snap.discarded if board.knows(k) and k not in snap.used]
 
     # 使用済みをスロットへ戻す。VBA は使用済みフラグだけを復元し、
     # 積み上げスロットは空のまま出していた(積み条数は入力し直す)。

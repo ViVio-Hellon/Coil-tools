@@ -183,6 +183,9 @@ def _state(conn) -> dict:
         # 出力済みの修正中なら、そのNoと修正前の積み順(VER 0.13.23)
         "edit": ({"no": board.edit_no, "keys": list(board.edit_keys)}
                  if board is not None and board.editing else None),
+        # いま断る操作(画面はここを見て止める。文言はルートが断るときと同じ)
+        "locks": {a: {"code": c, "message": m}
+                  for a, (c, m, _) in _locks(conn, board, started).items()},
         "rows": [],
         "outputs": [],
     }
@@ -225,6 +228,13 @@ def _state(conn) -> dict:
     return state
 
 
+def _weights_note(board) -> str:
+    """修正を終えると重量は入る前の値に戻る(仕様 §4.8)。違っていれば、黙って戻さず知らせる。"""
+    if board.edit_weights_before and board.weights != board.edit_weights_before:
+        return "重量は修正に入る前の値に戻しました。"
+    return ""
+
+
 def _stacking_started(conn, board) -> bool:
     """そのロットで積み上げを始めたか(VER 0.13.24・現場の求め)。
 
@@ -259,14 +269,49 @@ def _refused(exc: RefusedError, status: int = 400) -> Response:
     return jsonify(error_body(exc.reason, exc.message)), status
 
 
-def _editing_refusal(board, what: str):
-    """出力済みの修正中は、盤面を作り直す操作を断る(修正前の紙と食い違うため)。"""
-    if board is not None and board.editing:
-        return jsonify(error_body(
-            strand_service.REFUSE_EDITING,
-            f"No{board.edit_no}を修正中です。{what}は、修正して出力するか"
-            "「修正をやめる」を押してからにしてください。")), 409
-    return None
+# 修正中に断る操作 -> その名前。ここに無い操作は修正中もできる(仕様 §4.8)
+_EDIT_LOCKED = {
+    "lot": "ロットの開き直し", "clear_lot": "ロットを閉じること",
+    "zen_kotei": "前工程実績数の変更", "jou_su": "丈数の変更",
+    "strands": "条番号の再表示", "edit_output": "もう1枚の修正",
+}
+# 積み上げを始めたら断る操作 -> (コード, 文言, 欄)
+_STARTED_LOCKED = {
+    "zen_kotei": ("zen_kotei_locked", "積み上げを始めたロットは前工程実績数を変えられません。"
+                  "変えるときは「全クリア」してからにしてください。", "value"),
+    "jou_su": ("jou_su_locked", "積み上げを始めたロットは丈数を変えられません。"
+               "丈数を変えるときは「全クリア」してからにしてください。", "value"),
+    "strands": ("strands_locked", "前工程実績数・丈数が条番号を配ったときと違うため、積み上げを始めた"
+                "ロットでは配り直せません。「全クリア」してからにしてください。", ""),
+}
+
+
+def _locks(conn, board, started=None) -> dict:
+    """いま断る操作 -> (コード, 文言, 欄)。**ルートの断りも画面の止め方もここから。**"""
+    if board is None:
+        return {}
+    out = {}
+    if board.editing:
+        for action, what in _EDIT_LOCKED.items():
+            out[action] = (strand_service.REFUSE_EDITING,
+                           f"No{board.edit_no}を修正中です。{what}は、修正して出力するか"
+                           "「修正をやめる」を押してからにしてください。", "")
+    if started is None:
+        started = _stacking_started(conn, board)
+    if started:
+        for action, refusal in _STARTED_LOCKED.items():
+            if action == "strands" and not board.redeal_differs():
+                continue        # 配分が変わらない再表示は通す(開き直したあとの作り直し)
+            out.setdefault(action, refusal)
+    return out
+
+
+def _guard(conn, board, action: str):
+    found = _locks(conn, board).get(action)
+    if found is None:
+        return None
+    code, message, field_name = found
+    return jsonify(error_body(code, message, field_name)), 409
 
 
 # ==================================================================
@@ -290,6 +335,13 @@ def open_lot():
             "bad_lot_no",
             f"ロット番号は{config.LOT_NO_LENGTH}桁です。", "lot_no")), 400
 
+    board = session.current()
+    cancel_edit = bool(body.get("cancel_edit"))
+    if not cancel_edit:
+        refused = _guard(conn, board, "lot")
+        if refused:
+            return refused
+
     previous = history_repo.current_lot(conn)
     if previous and previous != lot_no:
         # VBA: 未印刷のまま切り替えると出力が消える。先に尋ねる
@@ -302,6 +354,8 @@ def open_lot():
             })
         session.close_lot(conn, previous)
 
+    if board is not None and board.editing:
+        board.end_edit(committed=False)     # 了解済み(cancel_edit)。紙は前のまま
     result = session.open_lot(conn, lot_no)
     if not result.found:
         return jsonify(error_body("not_found", result.message, "lot_no")), 404
@@ -317,6 +371,9 @@ def open_lot():
 @bp.post("/api/clear-lot")
 def clear_lot():
     """ロットを閉じる(画面を空に戻す)。"""
+    refused = _guard(get_db(), session.current(), "clear_lot")
+    if refused:
+        return refused
     session.clear()
     return _ok(get_db())
 
@@ -336,21 +393,16 @@ def set_zen_kotei():
     if board is None:
         return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
 
-    refused = _editing_refusal(board, "前工程実績数の変更")
+    refused = _guard(conn, board, "zen_kotei")
     if refused:
         return refused
-    # 積み上げを始めたら断る(VER 0.13.25・現場の求め)。前工程実績数を変えて条番号表示を
-    # 押すと条番号が配り直され、積んだ副番・出力済みの紙と食い違う。変えるときは全クリア
-    if _stacking_started(conn, board):
-        return jsonify(error_body(
-            "zen_kotei_locked",
-            "積み上げを始めたロットは前工程実績数を変えられません。"
-            "変えるときは「全クリア」してからにしてください。", "value")), 409
     raw = str((request.get_json(silent=True) or {}).get("value", "")).strip()
     if not (raw.isascii() and raw.isdigit()):
         return jsonify(error_body(
             "bad_number", "前工程実績数は数値で入力してください。", "value")), 400
     board.zen_kotei = int(raw)
+    if board.redeal_differs():
+        board.strands = []      # 配分が変わる。古い条番号に積ませない(丈数と同じ)
     log.info("set_zen_kotei: %s -> %s", board.lot_no, board.zen_kotei)
     return _ok(conn)
 
@@ -373,14 +425,9 @@ def set_jou_su():
     if board is None:
         return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
 
-    refused = _editing_refusal(board, "丈数の変更")
+    refused = _guard(conn, board, "jou_su")
     if refused:
         return refused
-    if _stacking_started(conn, board):
-        return jsonify(error_body(
-            "jou_su_locked",
-            "積み上げを始めたロットは丈数を変えられません。"
-            "丈数を変えるときは「全クリア」してからにしてください。", "value")), 409
     raw = str((request.get_json(silent=True) or {}).get("value", "")).strip()
     if not (raw.isascii() and raw.isdigit()):
         return jsonify(error_body("bad_number", "丈数を入力してください。",
@@ -442,7 +489,7 @@ def build_strands():
     board = session.current()
     if board is None:
         return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
-    refused = _editing_refusal(board, "条番号の再表示")
+    refused = _guard(conn, board, "strands")
     if refused:
         return refused
 
@@ -599,13 +646,15 @@ def output():
     # **紙はもう書けている。** 盤面を先に「出したあと」へ進めてから途中経過を書く。
     # 以前は途中経過の保存で失敗すると「書き込めませんでした」と返し、積み上げも残ったので、
     # もう一度押すと同じコイルで次の No が出た(統合 1.2.26・構造点検で見つかった)
+    note = ""
     if editing:
         # 積み直した並びが紙になった。積み上げを空にして、重量を修正前へ戻す
+        note = _weights_note(board)
         board.end_edit(committed=True)
     else:
         # VBA: 保存 → 積み上げだけリセット(使用済みはそのまま。保存の中身は同じ)
         meisai_service.reset_stack(board)
-    message = result.message
+    message = result.message + note
     try:
         session.save(conn)
     except db.WriteError as exc:
@@ -637,6 +686,9 @@ def edit_output():
         seq_no = int(raw)
     except (TypeError, ValueError):
         return jsonify(error_body("bad_no", "修正する出力済みを1つ選んでください。")), 400
+    refused = _guard(conn, board, "edit_output")
+    if refused:
+        return refused
     try:
         meisai_service.begin_edit(conn, board, seq_no)
     except RefusedError as exc:
@@ -653,8 +705,9 @@ def edit_cancel():
     if board is None:
         return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
     no = board.edit_no
+    note = _weights_note(board) if no else ""
     board.end_edit(committed=False)
-    return _ok(conn, message=f"No{no}の修正をやめました。" if no else "")
+    return _ok(conn, message=f"No{no}の修正をやめました。{note}" if no else "")
 
 
 @bp.post("/api/printed")

@@ -313,16 +313,23 @@ function renderEdit(state) {
   const edit = state.edit;
   $("editBanner").hidden = !edit;
   $("btnOutput").textContent = edit ? "修正して出力" : "出力";
-  $("btnStrands").disabled = Boolean(edit);
+  // いま断られる操作は**サーバが決めて渡す**(`state.locks`。統合 1.2.26)。画面で決め直さない ──
+  // 以前は画面とサーバに別々に書いていて、条番号表示がサーバの一覧から漏れた
+  const locks = state.locks || {};
+  const lockedBy = (action, code) => Boolean(locks[action]) && locks[action].code === code;
+  $("btnStrands").disabled = Boolean(locks.strands);
+  $("btnStrands").title = locks.strands ? locks.strands.message : "";
+  $("strandsLockNote").hidden = !lockedBy("strands", "strands_locked");
+  $("strandsLockNote").textContent = locks.strands ? locks.strands.message : "";
   // 丈数は、修正中か、積み上げを始めたら変えられない(VER 0.13.24。変えるときは全クリア)
-  const jouLocked = Boolean(edit) || Boolean(state.jou_su_locked);
+  const jouLocked = Boolean(locks.jou_su);
   $("jouSu").disabled = jouLocked;
   document.querySelectorAll("[data-jou]").forEach((b) => { b.disabled = jouLocked; });
-  $("jouLockNote").hidden = !(state.jou_su_locked && !edit);
+  $("jouLockNote").hidden = !lockedBy("jou_su", "jou_su_locked");
   // 前工程実績数も、修正中か積み上げを始めたら変えられない(VER 0.13.25)
-  const zenLocked = Boolean(edit) || Boolean(state.zen_kotei_locked);
+  const zenLocked = Boolean(locks.zen_kotei);
   $("btnEditZen").disabled = zenLocked;
-  $("zenLockNote").hidden = !(state.zen_kotei_locked && !edit);
+  $("zenLockNote").hidden = !lockedBy("zen_kotei", "zen_kotei_locked");
   if (zenLocked && editingZen) {
     // 打ちかけの「確定する」は取りやめる(サーバも断る)
     editingZen = false;
@@ -483,16 +490,19 @@ async function send(path, data, onDone) {
   }
 }
 
-async function openLot(lotNo, confirm = false) {
+async function openLot(lotNo, confirm = false, cancelEdit = false) {
   const edit = (window.APP.state || {}).edit;
-  if (edit && !confirm && !await confirmAsk(
-      `No${edit.no}を修正中です。修正をやめてロットを開き直しますか？（紙は前のままです）`)) {
-    $("lotNo").value = window.APP.state.lot_no || "";
-    return;
+  if (edit && !cancelEdit) {
+    if (!await confirmAsk(
+        `No${edit.no}を修正中です。修正をやめてロットを開き直しますか？（紙は前のままです）`)) {
+      $("lotNo").value = window.APP.state.lot_no || "";
+      return;
+    }
+    cancelEdit = true;      // サーバは了解(cancel_edit)が無いと修正中のロット切替を断る
   }
-  const body = await send("/api/lot", { lot_no: lotNo, confirm });
+  const body = await send("/api/lot", { lot_no: lotNo, confirm, cancel_edit: cancelEdit });
   if (body && body.confirm === "unprinted") {
-    if (await confirmAsk(body.message)) openLot(lotNo, true);
+    if (await confirmAsk(body.message)) openLot(lotNo, true, cancelEdit);
     else $("lotNo").value = window.APP.state.lot_no || "";
   }
 }

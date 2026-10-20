@@ -156,6 +156,7 @@ class Board:
     edit_no: int = 0
     edit_keys: list[str] = field(default_factory=list)      # 修正前の積み順
     edit_weights_before: list[int] = field(default_factory=list)  # 修正に入る前の重量
+    edit_stack_max_before: int = 0                                # 修正に入る前の積み条数
 
     # --- 見え方 ---------------------------------------------------
     @property
@@ -313,7 +314,7 @@ class Board:
             self.discarded.remove(key)
             log.debug("toggle_discard: 廃棄解除 %s", key)
             return False
-        if key in self.used:
+        if key in self.committed_used:
             raise RefusedError(REFUSE_USED,
                                f"{key} は積み上げ済みなので廃棄にできません。")
         self.discarded.append(key)
@@ -376,6 +377,8 @@ class Board:
         if len(weights) == self.jou_su and all(w > 0 for w in weights):
             self.weights = list(weights)
         self.restored_used = [k for k in self.restored_used if k not in keys]
+        self.discarded = [k for k in self.discarded if k not in keys]
+        self.edit_stack_max_before = self.stack_max
         self.stack_max = len(keys)
         self.slots = list(keys)
         log.info("begin_edit: No%s を修正します (%s本)", seq_no, len(keys))
@@ -392,6 +395,8 @@ class Board:
         for key in keep:
             if key not in self.restored_used:
                 self.restored_used.append(key)
+        if self.edit_stack_max_before > 0:
+            self.stack_max = self.edit_stack_max_before
         self.clear_slots()
         if self.edit_weights_before:
             self.weights = list(self.edit_weights_before)
@@ -399,3 +404,9 @@ class Board:
         self.edit_no = 0
         self.edit_keys = []
         self.edit_weights_before = []
+        self.edit_stack_max_before = 0
+
+    def redeal_differs(self) -> bool:
+        """いま条番号表示を押すと配分が変わるか(配ったあとで前工程実績数・丈数が変わった)。"""
+        return (bool(self.strands) and self.jou_su >= 1 and self.zen_kotei >= 0
+                and distribute(self.zen_kotei, self.jou_su) != self.strands)
