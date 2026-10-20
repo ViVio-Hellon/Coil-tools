@@ -39,7 +39,7 @@
 | 指定サイズ（メイン） | `/` | `テスラ指定サイズ` UserForm |
 | 全サイズ | `/all-size` | `テスラ全サイズ` UserForm |
 | 風袋計算 | `/tare` | `風袋計算` シート |
-| 羅列計算（50まで） | `/list` | `50まで` シート |
+| 羅列計算（50まで） | `/list` | `50まで` シート(画面からの入口は外してある。URL で開く) |
 | 計算内容 | `/breakdown` | `表記用` UserForm |
 | ラベル台紙 | `/labels` | 14 枚のラベル台紙シート |
 | 設定 | `/settings` | （新規。参照先パスなどの変更） |
@@ -79,7 +79,7 @@
 | CommandButton1（重量反映） | 「重量反映」 |
 | CommandButton16（重量計算_DB） | 「重量計算_DB」 |
 | CommandButton2（小ラベル印刷） | 「小ラベル印刷」 |
-| CommandButton9/11（羅列計算） | 「羅列計算」 |
+| CommandButton9/11（羅列計算） | (現場の指示でボタンを外した。`/api/calc-list` は残す) |
 | CommandButton10/12（風袋印刷） | 「風袋計算内容印刷」 |
 | CommandButton7（計算内容表示） | 「計算内訳（表記用）」 |
 | CommandButton13（積み高さ） | 「積み高さ計算」 |

@@ -159,6 +159,12 @@ def _restore(conn: sqlite3.Connection, board: Board) -> bool:
     board.stack_max = 0
     board.slots = []
     board.restored_used = [k for k in snap.used if board.knows(k)]
+    # 紙に載っているコイルは、途中経過が古くても(保存に失敗した・書く前に落ちた)使用済みに
+    # 戻す。**正は明細出力**(統合 1.2.26)
+    from .meisai_service import output_keys
+    for key in sorted(output_keys(conn, board.lot_no)):
+        if board.knows(key) and key not in board.restored_used:
+            board.restored_used.append(key)
 
     _restored = True
     log.info("_restore: 復元 %s 丈数=%s 合計=%s条 使用済=%s 廃棄=%s",

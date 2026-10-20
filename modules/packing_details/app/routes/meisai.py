@@ -596,16 +596,26 @@ def output():
     if not result.ok:
         return jsonify(error_body(result.refuse, result.message)), 400
 
+    # **紙はもう書けている。** 盤面を先に「出したあと」へ進めてから途中経過を書く。
+    # 以前は途中経過の保存で失敗すると「書き込めませんでした」と返し、積み上げも残ったので、
+    # もう一度押すと同じコイルで次の No が出た(統合 1.2.26・構造点検で見つかった)
     if editing:
         # 積み直した並びが紙になった。積み上げを空にして、重量を修正前へ戻す
         board.end_edit(committed=True)
-        session.save(conn)
     else:
-        # VBA: 保存 → 積み上げだけリセット → 一覧を作り直す
-        session.save(conn)
+        # VBA: 保存 → 積み上げだけリセット(使用済みはそのまま。保存の中身は同じ)
         meisai_service.reset_stack(board)
+    message = result.message
+    try:
+        session.save(conn)
+    except db.WriteError as exc:
+        # 途中経過は開き直したときの控え。次の保存の契機で書き直す。出したコイルは
+        # 開き直しても明細出力から使用済みに戻す(`session._restore`)ので、二重には積めない
+        log.warning("output: No%s は出力しましたが、途中経過を保存できませんでした: %s",
+                    result.seq_no, exc)
+        message += "(途中経過の保存に失敗しました。次の操作で保存し直します)"
     slip_history.kick()                 # 履歴を共有へ(裏で)
-    return _ok(conn, seq_no=result.seq_no, message=result.message)
+    return _ok(conn, seq_no=result.seq_no, message=message)
 
 
 # ==================================================================

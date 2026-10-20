@@ -33,6 +33,23 @@ class _Base(unittest.TestCase):
         return _post(self.client, "/api/reverse", {}).get_json()["state"]
 
 
+class StaleSnapshotRestoreTest(_Base):
+    """途中経過が古くても(出力のあとの保存に失敗した)、開き直せば紙のコイルは使用済み。"""
+
+    def test_出したあとの保存に失敗しても_開き直せば紙のコイルは使用済み(self):
+        _post(self.client, "/api/stack-max", {"value": "2"})
+        for key in ("1-12", "2-12"):
+            _post(self.client, "/api/stack", {"key": key})
+        with mock.patch.object(session, "save", side_effect=db.WriteError("試験の失敗")):
+            body = _post(self.client, "/api/output", {"confirm": True}).get_json()
+        self.assertTrue(body["ok"])
+        self.assertIn("途中経過の保存に失敗しました", body["message"])
+        session.clear()                                   # 落ちた想定
+        state = _post(self.client, "/api/lot", {"lot_no": "L5160Z0"}).get_json()["state"]
+        states = _coil_states(state)
+        self.assertEqual((states["1-12"], states["2-12"]), ("used", "used"))
+
+
 class ZenKoteiBypassTest(_Base):
     """前工程実績数のロック(0.13.25)の抜け道: 積む前に変えておき、出力したあとで条番号表示を押す。"""
 
@@ -81,7 +98,6 @@ class EditGuardTest(_Base):
 class OutputThenSaveFailsTest(_Base):
     """出力は書けたのに、そのあとの途中経過の保存で失敗したとき。"""
 
-    @unittest.expectedFailure
     def test_書けていない_と言わず_同じコイルで次のNoを出させない(self):
         _post(self.client, "/api/stack-max", {"value": "2"})
         for key in ("1-12", "2-12"):

@@ -37,7 +37,6 @@ class AddedSizeWeightCheckTest(unittest.TestCase):
 class ScreenGuardListTest(unittest.TestCase):
     """2枚目のタブを断る仕組みが、設定を書き換える口を全部守っている。"""
 
-    @unittest.expectedFailure
     def test_サイズの表示切替とサイズ追加も守る(self):
         for path in ("/api/settings/visible-sizes", "/api/settings/size-add"):
             self.assertIn(path, ApiRoutes._STATE_WRITING, path)
@@ -66,7 +65,6 @@ class TarePrintStaleTest(HttpTestCase):
         _, html = self.get("/tare/print")
         self.assertTrue(_printable(html))
 
-    @unittest.expectedFailure
     def test_入力を変えて計算し直していなければ_新しい検番で前の結果を刷れない(self):
         self.post("/api/apply-weight", {"current": self._cur()})
         self.post("/api/calc-tare", {"current": self._cur()})
@@ -75,6 +73,31 @@ class TarePrintStaleTest(HttpTestCase):
         _, html = self.get("/tare/print")
         self.assertFalse(_printable(html) and "検査番号: <b>Z111111" in html,
                          "新しい検番の見出しで、前の計算の風袋・GW を刷れてしまう")
+        self.assertIn("入力が変わっています。印刷を止めています", html)
+        self.assertNotIn("window.print();", html, "開いたとたんに刷る仕掛けが残っている")
+        # 画面の風袋計算でも「このまま印刷」を止める
+        _, screen = self.get("/tare")
+        self.assertIn("このまま印刷（停止中）", screen)
+
+    def test_クリアしてから別の検番を反映しても_前の結果は刷れない(self):
+        """ラベル側の控えはクリアで消えるが、風袋計算の結果はクリアでも残る。"""
+        self.post("/api/apply-weight", {"current": self._cur()})
+        self.post("/api/calc-tare", {"current": self._cur()})
+        self.post("/api/clear", {"current": self._cur()})
+        new = self._cur("Z222222", "44.0", "9")
+        self.post("/api/apply-weight", {"current": new})
+        _, html = self.get("/tare/print")
+        self.assertFalse(_printable(html), "クリアのあと、新しい検番で前の結果を刷れてしまう")
+
+    def test_計算し直せば刷れる(self):
+        self.post("/api/apply-weight", {"current": self._cur()})
+        self.post("/api/calc-tare", {"current": self._cur()})
+        new = self._cur("Z111111", "33.0", "20")
+        self.post("/api/apply-weight", {"current": new})
+        self.post("/api/calc-tare", {"current": new})
+        _, html = self.get("/tare/print")
+        self.assertTrue(_printable(html))
+        self.assertIn("検査番号: <b>Z111111", html)
 
 
 if __name__ == "__main__":

@@ -137,6 +137,8 @@ class ApiRoutes:
         "/api/settings/distribution/remove", "/api/settings/distribution/build",
         "/api/reload-materials",
         "/api/master/save", "/api/master/delete",
+        # 設定を書き換える口(統合 1.2.16 で足した)。2枚目のタブからも書けていた(統合 1.2.26)
+        "/api/settings/visible-sizes", "/api/settings/size-add",
     })
 
     def _progress(self, body):

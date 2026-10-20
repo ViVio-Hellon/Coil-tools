@@ -75,6 +75,15 @@ def _has_value(text: str) -> bool:
 # ==================================================================
 # 5段の優先順位
 # ==================================================================
+def count_stack(text) -> float:
+    """枚数の指定(オーダー・包装仕様)から積数を出す。**小数点第1位で切り捨て**(統合 1.2.12)。
+
+    本計算とバリ揃え梱包(`burr_split`)の両方が使う。以前はバリ揃えだけ切り捨てておらず、
+    枚数 2.5 で台数がずれた(統合 1.2.26・構造点検。片方だけ直った写しだった)。
+    """
+    return float(vba.round_down(vba.val(text)))
+
+
 def _decide_stack(state: CalcState, spec: PackagingSpec) -> tuple[float, bool, bool]:
     """積数を決める。戻り値は `(積数, 1本積み不可か, 重量で決めたか)`。
 
@@ -103,7 +112,7 @@ def _decide_stack(state: CalcState, spec: PackagingSpec) -> tuple[float, bool, b
         # 2. オーダーの枚数指定。**積数はここで1度だけ切り捨てる**(小数点第1位で切り捨て。
         # 統合 1.2.12)。以前は 2.5 のまま台数を出し、画面・リプラは 2 にしていて、台数と
         # 積数が食い違った(2 × 4台 = 8本 で 10本)
-        stack = float(vba.round_down(vba.val(order.梱包単位_枚数)))
+        stack = count_stack(order.梱包単位_枚数)
         state.mark(FLAG_COUNT)
         if spec.枚数範囲 == COUNT_RANGE_NO_SINGLE:
             # ﾌﾟﾛｽﾁ-ﾙ_LVS。1本だけ積むことが許されない
@@ -125,14 +134,14 @@ def _decide_stack(state: CalcState, spec: PackagingSpec) -> tuple[float, bool, b
     elif _has_value(spec.梱包単位_枚数):
         # 4. 包装仕様の枚数指定
         if spec.枚数範囲 in COUNT_RANGE_OK:
-            stack = float(vba.round_down(vba.val(spec.梱包単位_枚数)))
+            stack = count_stack(spec.梱包単位_枚数)
             state.mark(FLAG_COUNT)
         if spec.枚数範囲 == COUNT_RANGE_NO_SINGLE:
             impossible = True
             state.mark(FLAG_NO_SINGLE)
             # ここへ来る時点でオーダーの枚数指定は無い(`c_flag` は False)
             # ので、包装仕様の枚数を採る ── 吉川工業 1C1252
-            stack = float(vba.round_down(vba.val(spec.梱包単位_枚数)))
+            stack = count_stack(spec.梱包単位_枚数)
 
     else:
         # 5. どれも無い。重いものは1本積みにしておく (2022.10.14)
@@ -158,6 +167,12 @@ def _split_for_no_single(state: CalcState, stack: float, ins: float) -> tuple[in
     if not (ins - (x * stack) == 1 and FLAG_NO_SINGLE in state.flags):
         # ふつうの場合。切り上げて台数を出す
         return vba.round_up(ins / stack), stack, False
+
+    if x < 1:
+        # 検入数が1本だけ(積数2以上)。1本積み不可なのに1本しか無く、分けようがない。
+        # VBA は仮の台数 0 から1台戻して **台数 -1** を出していた(統合 1.2.26・構造点検)。
+        # 呼び手が「振り分けられない」と断る(負の台数を出さない。不明点 Q24 と同じ考え)
+        return 0, stack, False
 
     if x == 1:
         # もともと2台ぶんしかない状況で1本積みが出るとき (2026.1.16)
@@ -357,6 +372,11 @@ def calculate(conn: sqlite3.Connection, state: CalcState) -> StackResult:
 
     # ---- 1本積み不可の端数処理 ----
     count, stack_for_split, split_equal = _split_for_no_single(state, stack, ins)
+    if count <= 0:
+        state.note("検入数が1本のため、1本積み不可の振り分けができません。積数を手で入れてください")
+        state.積数 = ""
+        state.台数 = ""
+        return StackResult(ok=False, reason="no_single_one_coil")
 
     # ---- 高さ制限 ----
     c_flag = vba.is_numeric(order.梱包単位_枚数)

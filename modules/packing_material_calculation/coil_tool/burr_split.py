@@ -27,7 +27,7 @@ from .logging_utils import get_logger
 from .models import CalcState, OrderInfo, PackagingSpec
 from .pallet_service import get_spec
 from .stack_service import (COUNT_RANGE_OK, ONE_COIL_WEIGHT, TOLERANCE_PERCENT,
-                            _has_value)
+                            _has_value, count_stack)
 
 log = get_logger("burr_split")
 
@@ -74,7 +74,8 @@ def _decide_stack(order: OrderInfo, spec: PackagingSpec) -> float:
         return float(vba.round_up(gross / weight)) if weight else 0.0
 
     if c_flag:
-        return vba.val(order.梱包単位_枚数)
+        # 枚数の指定は小数点第1位で切り捨て(本計算と同じ部品。統合 1.2.26)
+        return count_stack(order.梱包単位_枚数)
 
     if _has_value(spec.梱包単位_重量):
         base = vba.val(spec.梱包単位_重量)
@@ -87,7 +88,7 @@ def _decide_stack(order: OrderInfo, spec: PackagingSpec) -> float:
 
     if _has_value(spec.梱包単位_枚数):
         if spec.枚数範囲 in COUNT_RANGE_OK:
-            return vba.val(spec.梱包単位_枚数)
+            return count_stack(spec.梱包単位_枚数)
         return 0.0
 
     if weight > ONE_COIL_WEIGHT:
@@ -105,7 +106,7 @@ def calculate(conn: sqlite3.Connection, state: CalcState, *,
     order = state.order
     if not str(order.製品単重).strip():
         return BurrSplit(ok=False, reason="no_unit_weight")
-    if not str(state.検入数).strip():
+    if not str(state.検入数).strip() or state.検入数値 < 1:
         return BurrSplit(ok=False, reason="no_inspection_count")
 
     spec = get_spec(conn, order.包装仕様NO)

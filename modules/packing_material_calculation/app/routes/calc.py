@@ -210,6 +210,12 @@ def set_input():
 
     if "検入数" in payload:
         raw = str(payload["検入数"]).strip()
+        # 0 や負の検入数は断る(前の値のまま。統合 1.2.26・構造点検)。以前は台数 0・-2 を
+        # 出して、そのままチェックリストへ積めた
+        if vba.is_numeric(raw) and vba.val(raw) < 1:
+            return jsonify(ok=False, reason="not_positive",
+                           message=f"検入数には1以上を入れてください: {raw}",
+                           view=view_of(state)), 422
         state.検入数 = vba.int_text(raw) if vba.is_numeric(raw) else ""
 
     if "外径" in payload:

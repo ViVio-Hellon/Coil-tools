@@ -49,26 +49,37 @@ def test_1本積み不可で分けたあと積数を直すと_別枠は消える
 # ==================================================================
 # 検入数が小さい・0・負
 # ==================================================================
-@pytest.mark.xfail(strict=True, reason="1本積み不可で検入数1のとき台数が -1 になる")
 @pytest.mark.parametrize("枚数", [2, 3, 4])
 def test_1本積み不可で検入数1でも台数は負にならない(conn, 枚数):
     s, r = run(conn, 検入数=1, 枚数=枚数)
-    assert not (r.ok and int(float(s.台数 or 0)) < 1), (r, s.台数)
-    if r.ok:
-        assert int(float(s.台数)) >= 1
+    assert not r.ok and r.reason == "no_single_one_coil"
+    assert s.台数 == "" and s.積数 == ""
+    assert any("振り分けができません" in m for m in s.messages)
 
 
-@pytest.mark.xfail(strict=True, reason="検入数0・負を断らずに計算する")
 @pytest.mark.parametrize("検入数", [0, -5])
 def test_検入数が0や負なら計算しない(conn, 検入数):
     s, r = run(conn, 検入数=検入数, 枚数=4, 枚数範囲="以下")
-    assert not r.ok
+    assert not r.ok and r.reason == "bad_inspection_count"
+
+
+@pytest.mark.parametrize("検入数", ["0", "-5"])
+def test_検入数の欄に0や負を入れると断って前の値のまま(ready, 検入数):
+    r = ready.post("/api/calc/input", json={"検入数": 検入数})
+    assert r.status_code == 422
+    assert r.get_json()["reason"] == "not_positive"
+    assert r.get_json()["view"]["input"]["検入数"] == "10"
+
+
+def test_バリ揃えも検入数0なら断る(conn):
+    s = CalcState(検入数="0")
+    s.order = OrderInfo(包装仕様NO="1C0001", 製品単重="100.00")
+    assert burr_split.calculate(conn, s, upper=0, lower=0).reason == "no_inspection_count"
 
 
 # ==================================================================
 # バリ揃え梱包
 # ==================================================================
-@pytest.mark.xfail(strict=True, reason="バリ揃えでは積数(受注の梱包単位_枚数)を整数に切り捨てていない")
 def test_バリ揃えの積数も整数に切り捨てる():
     order = OrderInfo(包装仕様NO="X", 製品単重="100.00", 梱包単位_重量=OrderInfo.NO_DATA,
                       梱包単位_枚数="2.5")

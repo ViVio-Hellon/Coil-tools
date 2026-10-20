@@ -37,6 +37,17 @@ class CalcResult:
             self.shape = ripla_service.ShapeView()
 
 
+def refuse_inspection_count(state: CalcState) -> Optional[CalcResult]:
+    """検入数が1未満なら断る(統合 1.2.26・構造点検)。
+
+    VBA は 0 や負の検入数でもそのまま計算し、台数 0・-2 などをチェックリストへ積めた。
+    """
+    if state.検入数値 < 1:
+        state.note("検入数には1以上を入れてください")
+        return CalcResult(ok=False, reason="bad_inspection_count")
+    return None
+
+
 def calculate(conn: sqlite3.Connection, state: CalcState) -> CalcResult:
     """計算Start (VBA `CommandButton5_Click`)。
 
@@ -45,6 +56,9 @@ def calculate(conn: sqlite3.Connection, state: CalcState) -> CalcResult:
     if not str(state.検入数).strip():
         state.note("検入数を入力してください")
         return CalcResult(ok=False, reason="no_inspection_count")
+    refused = refuse_inspection_count(state)
+    if refused:
+        return refused
 
     state.soft_clear()
 

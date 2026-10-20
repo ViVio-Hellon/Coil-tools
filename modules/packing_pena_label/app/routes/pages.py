@@ -32,6 +32,39 @@ from ..view import Renderer, esc, nl2br
 NO_AUTOPRINT_ENV = "COIL_PACKING_TOOLS_E2E_NO_AUTOPRINT"
 
 
+#: 入力が変わったまま刷らせないときの、印刷ボタンの説明
+_STALE_BLOCKED = "入力が変わっています。メイン画面で「計算」を実行してください"
+
+
+def _stale_print_note(why_html: str, hide_selector: str) -> str:
+    """入力が変わったまま(計算し直していない)の印刷を止める知らせ(ラベル・風袋計算で共通)。
+
+    本数・高さ・NW・GW・風袋は「計算」でしか書き換わらない(VBA と同じ)。検番・重量だけ
+    「重量反映」で変わるので、そのまま刷ると**別々のコイルの値が混ざった紙**になる
+    (2026.09 決定でラベルを止めた。統合 1.2.26 で風袋計算の印刷も同じ決まりにした)。
+
+    ボタンを消すだけでは Ctrl+P / メニューから刷れてしまうので、印刷では
+    `hide_selector` を消して理由を紙に出す。
+    """
+    return ('<div class="card no-print stalebox">'
+            '<b>入力が変わっています。印刷を止めています。</b><br>'
+            + why_html +
+            'このまま刷ると<b>別々のコイルの値が混ざった紙</b>になります。'
+            '<b>メイン画面で「計算」を実行してください。</b>'
+            '<div class="btn-row">'
+            '<button type="button" class="btn primary" data-close-tab>'
+            'このタブを閉じる(本ツールのタブへ戻る)</button>'
+            '</div></div>'
+            '<style>@media print{'
+            f'{hide_selector}{{display:none !important}}'
+            '.stopprint{display:block !important}'
+            '}</style>'
+            '<div class="stopprint">'
+            '入力が変わっているため、印刷できません。<br>'
+            'メイン画面で「計算」を実行してから印刷してください。'
+            '</div>')
+
+
 def _autoprint_script() -> str:
     """印刷ビューを開いたら、そのまま印刷の画面を出す(VBA の印刷ボタンと同じ流れ)。"""
     if os.environ.get(NO_AUTOPRINT_ENV) == "1":
@@ -360,18 +393,29 @@ class PageRoutes:
         today = datetime.date.today().strftime("%Y.%m.%d")
         foot = (f'<div class="printfoot"><span></span>'
                 f'<span>{esc(today)}印刷</span></div>')
+        # 入力を変えて計算し直していないなら刷らせない(ラベルと同じ決まり。統合 1.2.26)。
+        # 見出しはいまの検番、中身は前の計算 ── 別々のコイルの値が混ざった紙になる
+        stale = self.wf.tare_is_stale(state)
+        stale_note = _stale_print_note(
+            "検査番号・サイズの見出しはいまの入力ですが、<b>風袋・NW・GW は前に「計算」を"
+            "押したときのもの</b>です。",
+            ".blocks") if stale else ""
         tools = ('' if print_view else
                  '<div class="btn-row no-print" style="margin-bottom:10px">'
                  f'<a class="btn" href="{self.base}/tare/print" target="_blank" rel="noopener">'
                  '印刷ビューを開く</a>'
-                 '<button class="btn" onclick="window.print()">このまま印刷</button>'
-                 '</div>')
+                 + ('<button class="btn" disabled title="入力が変わっています。'
+                    'メイン画面で「計算」を実行してください">このまま印刷（停止中）</button>'
+                    if stale else
+                    '<button class="btn" onclick="window.print()">このまま印刷</button>')
+                 + '</div>')
         # 画面では梱包ごとに図(断面図・重さの内訳)を出すので、1 列に並べて図を大きく見せる
         grid = "blocks" if print_view else "blocks blocks--fig"
-        body = head + warn + tools + f'<div class="{grid}">' + "".join(blocks) + '</div>' + foot
-        script = _autoprint_script() \
-            if print_view else ""
-        return self._shell("風袋計算", body, "tare", script, print_only=print_view)
+        body = (stale_note + head + warn + tools + f'<div class="{grid}">' + "".join(blocks)
+                + '</div>' + foot)
+        script = _autoprint_script() if print_view and not stale else ""
+        return self._shell("風袋計算", body, "tare", script, print_only=print_view,
+                           print_blocked=(_STALE_BLOCKED if stale and print_view else ""))
 
     def _report_head(self, title: str, state) -> str:
         sizes = " / ".join([s for s in (state.lbl_size1, state.lbl_size2) if s])
@@ -387,7 +431,9 @@ class PageRoutes:
         if not data:
             body = ('<div class="card"><h2>羅列計算（50まで）</h2>'
                     '<div class="empty">計算結果がありません。'
-                    'メイン画面の「羅列計算」を実行してください。</div></div>')
+                    # 羅列計算のボタンは現場の指示で外した(VBA 解析時の判断。`/api/calc-list` は残す)。
+                    # 無いボタンを押すよう案内していたのを直した(統合 1.2.26)
+                    '羅列計算はメイン画面のボタンを外しています(計算の口だけ残しています)。</div></div>')
             return self._shell("羅列計算", body, "list", print_only=print_view)
 
         heads = "".join("<th>%s</th>" % esc(h) for h in data["headers"])
@@ -713,29 +759,10 @@ class PageRoutes:
         # 値は VBA どおりのままにし、刷る前に気付けるようにする。
         # 食い違っている間は **印刷させない**（2026.09 決定）。
         # 出荷ラベルなので、気付かずに刷れてしまう余地を残さない。
-        stale_note = ""
-        if stale:
-            stale_note = (
-                '<div class="card no-print stalebox">'
-                '<b>入力が変わっています。印刷を止めています。</b><br>'
-                'ヘッダー帯の <b>本数・高さ・NW・GW</b> は「計算」を押したときの'
-                'ものです。検番・重量だけが新しくなっているため、'
-                'このまま刷ると<b>別々のコイルの値が混ざったラベル</b>になります。'
-                '<b>メイン画面で「計算」を実行してください。</b>'
-                '<div class="btn-row">'
-                '<button type="button" class="btn primary" data-close-tab>'
-                'このタブを閉じる(本ツールのタブへ戻る)</button>'
-                '</div></div>'
-                # ボタンを消すだけでは Ctrl+P / メニューから刷れてしまう。
-                # 印刷そのものを空にして、理由を紙に出す。
-                '<style>@media print{'
-                '.sheet{display:none !important}'
-                '.stopprint{display:block !important}'
-                '}</style>'
-                '<div class="stopprint">'
-                '入力が変わっているため、このラベルは印刷できません。<br>'
-                'メイン画面で「計算」を実行してから印刷してください。'
-                '</div>')
+        stale_note = _stale_print_note(
+            'ヘッダー帯の <b>本数・高さ・NW・GW</b> は「計算」を押したときの'
+            'ものです。検番・重量だけが新しくなっています。',
+            ".sheet") if stale else ""
 
         font_css = self._barcode_font_css()
         pages = LS.render_blocks(
@@ -766,8 +793,7 @@ class PageRoutes:
                 '</div></div>')
         return self._shell("ラベル印刷",
                            stale_note + note + font_css + pages, "labels", print_only=True,
-                           print_blocked=("入力が変わっています。メイン画面で「計算」を"
-                                          "実行してください" if stale else ""))
+                           print_blocked=_STALE_BLOCKED if stale else "")
 
     def label_calibration(self) -> str:
         """試し刷りで位置を合わせる画面。

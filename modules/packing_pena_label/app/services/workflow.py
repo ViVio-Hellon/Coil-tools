@@ -436,6 +436,10 @@ class Workflow:
         # この計算に使った入力を控えておく（印刷時の食い違い検出用）
         self.progress.step("保存しています")
         self.store.set_kv(self._CALC_INPUT_KEY, self._calc_fingerprint(state))
+        # 風袋計算の結果(画面・印刷ビュー)がどの入力のものか。**クリアでは消さない** ──
+        # 風袋計算の結果はクリアでも残るので、クリアのあと別の検番を反映して刷ると
+        # 新しい見出しに前の結果が並ぶ(統合 1.2.26・構造点検で見つかった)
+        self.store.set_kv(self._TARE_INPUT_KEY, self._calc_fingerprint(state))
 
         self.save_state(state)
 
@@ -663,6 +667,8 @@ class Workflow:
 
     #: 本数・高さ・NW・GW に影響する入力（これが変わったら再計算が必要）
     _CALC_INPUT_KEY = "tare_inputs"
+    #: 風袋計算の結果を出したときの入力(クリアでは消さない。`tare_is_stale` が使う)
+    _TARE_INPUT_KEY = "tare_result_inputs"
 
     @staticmethod
     def _calc_fingerprint(state: FormState) -> dict:
@@ -694,6 +700,23 @@ class Workflow:
         saved = self.store.get_kv(self._CALC_INPUT_KEY, None)
         if not saved:
             return False
+        st = state if state is not None else self.load_state()
+        return self._calc_fingerprint(st) != saved
+
+    def tare_is_stale(self, state: Optional[FormState] = None) -> bool:
+        """風袋計算の結果が、いまの入力のものでないか(統合 1.2.26)。
+
+        風袋計算の画面・印刷ビューは、見出し(検番・サイズ)をいまの入力から、中身を前の
+        計算から出す。入力を変えて重量反映だけすると、**新しい検番に前の風袋・GW が並ぶ**。
+        ラベルの印刷(`calc_is_stale`)と同じ決まりで止める。
+
+        ラベル側の控えはクリアで消えるが、風袋計算の結果はクリアでも残るので、
+        こちらは消さない控え(`_TARE_INPUT_KEY`)と比べる。控えが無い(この版より前に
+        計算した)ときはラベル側の控えで判断する。
+        """
+        saved = self.store.get_kv(self._TARE_INPUT_KEY, None)
+        if not saved:
+            return self.calc_is_stale(state)
         st = state if state is not None else self.load_state()
         return self._calc_fingerprint(st) != saved
 

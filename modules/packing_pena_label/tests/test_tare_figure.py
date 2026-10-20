@@ -120,10 +120,13 @@ class TarePageTest(unittest.TestCase):
                 from modules.packing_pena_label.app.models import FormState as WorkState
                 return WorkState()
 
+            def tare_is_stale(self, state=None):
+                return False
+
         pages = Pages.__new__(Pages)
         pages.wf = WF()
         pages.cfg = type("Cfg", (), {"url_prefix": ""})()
-        pages._shell = lambda title, body, active, script="", print_only=False: body
+        pages._shell = lambda title, body, active, script="", print_only=False, **kw: body
         screen = pages.tare(print_view=False)
         printed = pages.tare(print_view=True)
         self.assertIn('class="tfig no-print"', screen)
