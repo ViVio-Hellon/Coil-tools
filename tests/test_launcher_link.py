@@ -24,6 +24,7 @@ import time
 import unittest
 from unittest import mock
 
+import launch_guard
 import process_manager
 from common import close_ask
 from tests.test_app import TOKEN, _make_app
@@ -207,7 +208,7 @@ class ProcessManagerTest(unittest.TestCase):
 
     def run_main(self, asked, *, gone=True):
         with mock.patch.object(process_manager, "_request_shutdown", return_value=asked), \
-                mock.patch.object(process_manager, "_wait_gone", return_value=gone), \
+                mock.patch.object(launch_guard, "wait_port_closed", return_value=gone), \
                 mock.patch.object(process_manager, "ASKING_WAIT_SEC", 0.1):
             return process_manager.main([])
 
@@ -236,7 +237,7 @@ class ProcessManagerTest(unittest.TestCase):
     def test_old_launcher_stop_bat_still_stops(self):
         """1.2.4 の launcher_stop.bat(`--any` を付ける)が残っていても、断らずに止める。"""
         with mock.patch.object(process_manager, "_request_shutdown", return_value={"ok": True}), \
-                mock.patch.object(process_manager, "_wait_gone", return_value=True):
+                mock.patch.object(launch_guard, "wait_port_closed", return_value=True):
             self.assertEqual(process_manager.main(["--any"]), 0)
 
     def test_desktop_is_not_stopped_and_is_1(self):

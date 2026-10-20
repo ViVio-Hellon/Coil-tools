@@ -493,7 +493,8 @@ def start(mode: str, *, open_browser: bool = True) -> int:
         return 0
     finally:
         _close_modules()
-        launch_guard.remove_lock(mode)
+        # 自分のロックだけ消す(入れ替えで新しい版が書いたロックを消さない。統合 1.2.26)
+        launch_guard.remove_lock(mode, pid=os.getpid())
         log().info("終了しました: mode=%s", mode)
 
 
@@ -719,8 +720,8 @@ def _initialize(srv, *, watch_idle: bool = True) -> None:
     # 処理中(資材計算の取り込み)は落とさない。スリープから戻ったら、
     # 梱包明細の画面の空きの猶予も数え直す
     if watch_idle:
-        on_wake = getattr(app_module.all_modules()[0], "on_wake", None)
-        idle_exit.install(srv.stop, app_module.busy, on_wake=on_wake)
+        # 3機能すべての後始末を呼ぶ(以前は並びの先頭だけ。統合 1.2.26)
+        idle_exit.install(srv.stop, app_module.busy, on_wake=app_module.on_wake)
 
     run_initializers(srv, app_module.all_modules())
 

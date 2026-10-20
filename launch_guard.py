@@ -307,7 +307,18 @@ def read_lock(mode: str) -> Optional[LockInfo]:
         return None
 
 
-def remove_lock(mode: str) -> None:
+def remove_lock(mode: str, *, pid: Optional[int] = None) -> None:
+    """ロックを消す。`pid` を渡すと、**そのプロセスのロックのときだけ**消す。
+
+    終わるプロセスが自分のロックを片付けるときは `pid` を渡す(統合 1.2.26)。版の入れ替えでは
+    古いほうが終わりきる前に新しいほうがロックを書くことがあり、古いほうが終わりぎわに
+    新しいほうのロックを消していた(次の起動が2つ目を立て、stop.bat は「起動していません」)。
+    """
+    if pid is not None:
+        current = read_lock(mode)
+        if current is not None and int(current.pid) != int(pid):
+            log.info("ロックは別のプロセス(pid %s)のものなので残します", current.pid)
+            return
     try:
         lock_path(mode).unlink()
         log.info("ロックを消しました: %s", mode)
@@ -550,6 +561,19 @@ def check_existing(mode: str) -> GuardResult:
         return GuardResult(True, reason=f"ロックは残っていたがpid {info.pid} は不在")
 
     health = probe_health(info.port)
+    if health is None:
+        # 答えない。**別物と決めつけない**(統合 1.2.26)。以前はここでロックを消して2つ目を
+        # 立て、同じ手元の DB を2つで開くことがあった(1.5秒で答えられないほど重い処理の途中、
+        # または終わりぎわで待ち受けを閉じたあと片付けている最中)
+        if not is_port_free(info.port):
+            log.warning("pid=%s は生きていて %s を待ち受けているが答えない。合流します",
+                        info.pid, info.port)
+            return GuardResult(False, url=info.url, existing=info,
+                               reason="同じアプリが応答しません(処理の途中かもしれません)")
+        if wait_pid_gone(info.pid, REPLACE_WAIT_SEC) is not False:
+            log.info("終わりぎわのプロセス(pid=%s)が終わるのを待ちました", info.pid)
+        remove_lock(mode)
+        return GuardResult(True, reason="ロックのプロセスは終わった(または別物だった)")
     if not is_our_app(health, mode):
         # プロセスは居るがアプリではない(PIDの使い回し、または
         # 起動途中で落ちた)。ロックを消して新しく起動する
@@ -561,7 +585,7 @@ def check_existing(mode: str) -> GuardResult:
     running = str((health or {}).get("version", ""))
     stale = _stale_versions(health or {})
     if stale:
-        return _replace_stale(mode, info, running or "(不明)", " / ".join(stale))
+        return _replace_stale(mode, info, running or "(不明)", " / ".join(stale), health)
 
     log.info("すでに起動しています: %s (pid=%s port=%s 版=%s)",
              mode, info.pid, info.port,
@@ -598,7 +622,7 @@ def _stale_versions(health: dict) -> list:
 
 
 def _replace_stale(mode: str, info: "LockInfo",
-                   running: str, changes: str) -> GuardResult:
+                   running: str, changes: str, health: Optional[dict] = None) -> GuardResult:
     """動いているのが違う版。**終わらせてから立て直す。**
 
     `running` は動いているプロセスの統合ツールの版、`changes` は違いの説明
@@ -608,25 +632,28 @@ def _replace_stale(mode: str, info: "LockInfo",
     残すほうが害が大きいので、そのときは合流して、次の起動に任せます。
     """
     log.warning("動いているのは別の版です(%s)。古いほうを終わらせます", changes)
-    if not request_shutdown(info.port, info.token):
+    pid = owner_pid(info, health)
+    # force は付けない: 取り込みの途中・画面で確かめ中なら断られ、そのときは止めずに合流する
+    # (中途半端なデータを残すほうが害が大きい。次の起動に任せる)
+    if not ask_shutdown(info.port, info.token, timeout=5).get("ok"):
         log.warning("古い版を終わらせられませんでした。合流します")
         return GuardResult(False, url=info.url, existing=info,
                            stale_version=running,
                            reason=f"別の版が動いていますが止められません({changes})")
 
-    deadline = time.monotonic() + REPLACE_WAIT_SEC
-    while time.monotonic() < deadline:
-        if probe_health(info.port, timeout=0.3) is None:
-            remove_lock(mode)
-            log.info("古い版を終わらせました(%s)。新しい版で立て直します", changes)
-            return GuardResult(True, stale_version=running,
-                               reason=f"別の版を終わらせました({changes})")
-        time.sleep(0.2)
+    # **待ち受けが閉じただけでは「終わった」としない**(統合 1.2.26)。閉じたあとも古い版は
+    # 機能の片付け(手元の DB を閉じる)を続ける。終わる前に立て直すと、同じ DB を2つで開く
+    gone = confirm_gone(pid, info.port, REPLACE_WAIT_SEC)
+    if gone is False:
+        log.warning("古い版(pid %s)が %.0f秒 で終わりませんでした。合流します", pid, REPLACE_WAIT_SEC)
+        return GuardResult(False, url=info.url, existing=info,
+                           stale_version=running,
+                           reason=f"別の版が動いています({changes})")
 
-    log.warning("古い版が %.0f秒 で終わりませんでした。合流します", REPLACE_WAIT_SEC)
-    return GuardResult(False, url=info.url, existing=info,
-                       stale_version=running,
-                       reason=f"別の版が動いています({changes})")
+    remove_lock(mode)
+    log.info("古い版を終わらせました(%s)。新しい版で立て直します", changes)
+    return GuardResult(True, stale_version=running,
+                       reason=f"別の版を終わらせました({changes})")
 
 
 # ------------------------------------------------------------------
@@ -724,34 +751,93 @@ def find_legacy_instances() -> list:
     return found
 
 
-def request_shutdown(port: int, token: str) -> bool:
-    """`POST /api/shutdown` を送る。受け付けられたら `True`。
+# ------------------------------------------------------------------
+# 止める頼みと、止まったかの確かめ(停止 `process_manager` と版の入れ替え `_replace_stale` で共通)
+# ------------------------------------------------------------------
+# 統合 1.2.26: 以前は停止と版の入れ替えで別々に書いてあり、1.2.19 の「待ち受けが閉じた
+# だけでは終わったとみなさない」修正が停止の側にしか入っていなかった(構造点検で見つかった)。
+def ask_shutdown(port: int, token: str, *, force: bool = False, timeout: float = 10.0) -> dict:
+    """`POST /api/shutdown` で正常終了を頼む(基盤仕様書 2.8 の1段目)。
 
-    **`force` は付けません。** 取り込みの途中なら 409 が返り、
-    そのときは止めません(中途半端なデータを残さない)。
-    `process_manager` にも同じ処理がありますが、あちらは停止そのものが
-    仕事で、こちらは**起動の途中で古い版をどけるだけ**です。
-    こちらから `process_manager` を読むと、起動の入口が停止側の
-    モジュールに依存します(待機画面より前なので import を増やさない)。
+    戻り値: ``{"ok": 受け付けられた}``。断られた(409)ときは ``busy`` / ``reason``(busy・
+    asking・refused)/ ``message`` / ``running`` も返す。届かない・その他の断りは ``{"ok": False}``。
+
+    トークンはロックファイルから読む。ロックは利用者ごとのローカル領域にあるので、
+    読める相手はそもそもプロセスを直接落とせる。プロキシを経由しない送信口
+    (`local_request`)を使う ── 社内PCのプロキシ設定に 127.0.0.1 の除外が無いと、
+    自分自身への停止要求までプロキシへ送られて届かない。
     """
-    body = json.dumps({"force": False}).encode("utf-8")
+    url = f"http://127.0.0.1:{port}/api/shutdown"
+    body = json.dumps({"force": force}).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if token:
         headers["X-Tool-Token"] = token
     try:
-        with local_request(f"http://{app_config.host()}:{port}/api/shutdown",
-                           timeout=5, data=body, method="POST",
+        with local_request(url, timeout=timeout, data=body, method="POST",
                            headers=headers) as res:
-            return bool(json.loads(res.read().decode("utf-8")).get("stopped"))
+            payload = json.loads(res.read().decode("utf-8"))
+            return {"ok": bool(payload.get("stopped"))}
     except urllib.error.HTTPError as exc:
-        if exc.code == 409:
-            log.info("古い版は処理の途中なので止めません")
-        else:
-            log.info("古い版の停止要求が %s で断られました", exc.code)
-        return False
+        if exc.code == 409:                        # 実行中の処理・画面で確かめ中・「閉じない」
+            try:
+                payload = json.loads(exc.read().decode("utf-8"))
+            except Exception:                      # noqa: BLE001
+                payload = {}
+            reason = str(payload.get("reason") or "busy")
+            return {"ok": False, "busy": reason == "busy", "reason": reason,
+                    "message": payload.get("message", ""),
+                    "running": payload.get("running", ["(不明)"])}
+        log.info("停止要求は %s で断られました", exc.code)
+        return {"ok": False}
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        log.info("古い版へ停止要求を送れませんでした: %s", exc)
-        return False
+        log.info("停止要求を送れませんでした (%s)", exc)
+        return {"ok": False}
+
+
+def wait_port_closed(port: int, timeout: float) -> bool:
+    """そのポートが応答しなくなるまで待つ。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if probe_health(port, timeout=0.3) is None:
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def wait_pid_gone(pid: int, timeout: float) -> Optional[bool]:
+    """居なくなるまで待つ。True: 居なくなった / False: まだ居る / None: 確かめられない。"""
+    deadline = time.monotonic() + timeout
+    while True:
+        state = process_alive_state(pid)
+        if state is False:
+            return True
+        if state is None:
+            return None
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+
+
+def confirm_gone(pid: int, port: int, timeout: float) -> Optional[bool]:
+    """止めたあと、本当に居なくなったか(統合 1.2.19 の決まり)。
+
+    True: 居なくなった / False: まだ居る / None: プロセスの有無は確かめられないが、
+    待ち受けは閉じている(tasklist を実行できない PC)。待ち受けも残っていれば False。
+    **待ち受けが閉じただけでは「終わった」としない** ── 閉じたあとも機能の片付け
+    (手元の DB を閉じるなど)が数秒続く。
+    """
+    gone = wait_pid_gone(pid, timeout)
+    if gone is None:
+        return None if wait_port_closed(port, timeout) else False
+    return gone
+
+
+def owner_pid(info: "LockInfo", health: Optional[dict]) -> int:
+    """そのポートで実際に答えたプロセスの pid(答えに無ければロックの pid)。"""
+    try:
+        return int((health or {}).get("pid") or 0) or int(info.pid)
+    except (TypeError, ValueError):
+        return int(info.pid)
 
 
 # ------------------------------------------------------------------

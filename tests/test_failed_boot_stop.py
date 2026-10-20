@@ -198,7 +198,7 @@ def _answers(monkeypatch, info, **extra):
 def test_待ち受けが閉じてもプロセスが残っていれば終わったと言わない(monkeypatch, lock):
     _answers(monkeypatch, lock)
     monkeypatch.setattr(process_manager, "_request_shutdown", lambda *a, **k: {"ok": True})
-    monkeypatch.setattr(process_manager, "_wait_gone", lambda port, t: True)
+    monkeypatch.setattr(launch_guard, "wait_port_closed", lambda port, t: True)
     _alive(monkeypatch, lambda pid: True)  # 残り続ける
     monkeypatch.setattr(process_manager, "_looks_like_our_process", lambda info: False)
     kills = []
@@ -215,7 +215,7 @@ def test_待ち受けが閉じてもプロセスが残っていれば終わっ�
 def test_起動できなかった画面から止まれば理由つきで済と言う(monkeypatch, lock):
     _answers(monkeypatch, lock)
     monkeypatch.setattr(process_manager, "_request_shutdown", lambda *a, **k: {"ok": True})
-    monkeypatch.setattr(process_manager, "_wait_gone", lambda port, t: True)
+    monkeypatch.setattr(launch_guard, "wait_port_closed", lambda port, t: True)
     _alive(monkeypatch, lambda pid: False)
 
     result = process_manager.stop("main")
@@ -234,10 +234,27 @@ def test_コマンドラインを読めなくてもアプリ自身の答えで�
     _alive(monkeypatch, lambda pid: alive["v"])
     monkeypatch.setattr(os, "kill", lambda pid, sig: alive.update(v=False))
 
-    result = process_manager.stop("main")
+    result = process_manager.stop("main", force=True)
 
     assert result.stopped, result.message
     assert lock.removed == ["main"]
+
+
+def test_forceが無ければ_答えないだけで落とさない(monkeypatch, lock):
+    """--force が無いときは PID で落とさない(統合 1.2.26)。Windows の SIGTERM はその場で落とす。"""
+    _answers(monkeypatch, lock)
+    monkeypatch.setattr(process_manager, "_request_shutdown", lambda *a, **k: {"ok": False})
+    monkeypatch.setattr(process_manager, "_looks_like_our_process", lambda info: True)
+    _alive(monkeypatch, lambda pid: True)
+    kills = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: kills.append(sig))
+
+    result = process_manager.stop("main")
+
+    assert not result.stopped
+    assert "--force" in result.message
+    assert kills == []
+    assert lock.removed == []
 
 
 def test_pidが違う答えでは本人と見なさない(monkeypatch, lock):
@@ -280,7 +297,7 @@ def test_プロセスの有無を確かめられないPCでは確かめられな
     # tasklist を実行できない PC。「まだ動いています」と嘘をつかず、「済」とも言い切らない
     _answers(monkeypatch, lock)
     monkeypatch.setattr(process_manager, "_request_shutdown", lambda *a, **k: {"ok": True})
-    monkeypatch.setattr(process_manager, "_wait_gone", lambda port, t: True)
+    monkeypatch.setattr(launch_guard, "wait_port_closed", lambda port, t: True)
     _alive(monkeypatch, lambda pid: None)
 
     result = process_manager.stop("main")
@@ -293,7 +310,7 @@ def test_プロセスの有無を確かめられないPCでは確かめられな
 def test_確かめられず待ち受けも残っていれば止まったと言わない(monkeypatch, lock):
     _answers(monkeypatch, lock)
     monkeypatch.setattr(process_manager, "_request_shutdown", lambda *a, **k: {"ok": False})
-    monkeypatch.setattr(process_manager, "_wait_gone", lambda port, t: False)
+    monkeypatch.setattr(launch_guard, "wait_port_closed", lambda port, t: False)
     monkeypatch.setattr(process_manager, "_looks_like_our_process", lambda info: True)
     _alive(monkeypatch, lambda pid: None)
     monkeypatch.setattr(os, "kill", lambda pid, sig: None)

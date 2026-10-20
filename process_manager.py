@@ -65,6 +65,9 @@ log = get_logger("coil_packing_tools", "process_manager")
 GRACEFUL_WAIT_SEC = 8.0
 # PIDで落としたあと、消えるのを待つ上限(秒)
 FORCE_WAIT_SEC = 5.0
+#: 止める頼みに答えない(処理の途中かもしれない)とき。**--force が無ければ落とさない**(統合 1.2.26)
+NO_ANSWER_MESSAGE = ("終了要求に応じません(処理の途中かもしれません)。少し待ってからもう一度、"
+                     "強制的に止めるには --force を付けてください")
 #: 止めたあと、プロセスの有無を確かめられなかったときに添える(待ち受けが閉じたのは確かめた)
 UNSURE_NOTE = "(待ち受けは閉じました。プロセスが居なくなったかは確かめられませんでした)"
 # 画面で確かめてもらうのを待つ上限(秒)。ランチャーは stop.bat を 20 秒で見切る
@@ -188,42 +191,13 @@ def stop(mode: str, *, force: bool = False) -> StopResult:
 
 
 def _request_shutdown(port: int, token: str, *, force: bool) -> dict:
-    """`POST /api/shutdown` で正常終了を要求する(基盤仕様書 2.8 の1段目)。
+    """`POST /api/shutdown` で正常終了を頼む(中身は `launch_guard.ask_shutdown`。版の入れ替えと共通)。
 
-    トークンはロックファイルから読む。ロックは利用者ごとのローカル領域に
-    あるので、読める相手はそもそもプロセスを直接落とせる。
+    入口が画面へ頼んで返事を待つ(3秒)ぶん、待ち時間を長めにとる。
     """
     import launch_guard
 
-    url = f"http://127.0.0.1:{port}/api/shutdown"
-    # 入口が画面へ頼んで返事を待つ(3秒)ぶん、待ち時間を長めにとる
-    body = json.dumps({"force": force}).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["X-Tool-Token"] = token
-    try:
-        # プロキシを経由しない送信口を使う(`launch_guard` の注釈を参照)。
-        # 社内PCのプロキシ設定に 127.0.0.1 の除外が無いと、自分自身への
-        # 停止要求までプロキシへ送られて届かない
-        with launch_guard.local_request(url, timeout=10, data=body,
-                                        method="POST", headers=headers) as res:
-            payload = json.loads(res.read().decode("utf-8"))
-            return {"ok": bool(payload.get("stopped"))}
-    except urllib.error.HTTPError as exc:
-        if exc.code == 409:                        # 実行中の処理・画面で確かめ中・「閉じない」
-            try:
-                payload = json.loads(exc.read().decode("utf-8"))
-            except Exception:                      # noqa: BLE001
-                payload = {}
-            reason = str(payload.get("reason") or "busy")
-            return {"ok": False, "busy": reason == "busy", "reason": reason,
-                    "message": payload.get("message", ""),
-                    "running": payload.get("running", ["(不明)"])}
-        log.info("停止要求は %s で拒否されました。PIDで止めます", exc.code)
-        return {"ok": False}
-    except (urllib.error.URLError, OSError) as exc:
-        log.info("停止要求を送れませんでした (%s)。PIDで止めます", exc)
-        return {"ok": False}
+    return launch_guard.ask_shutdown(port, token, force=force, timeout=10)
 
 
 def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool,
@@ -249,6 +223,14 @@ def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool,
         log.warning("pid=%s の照合に失敗したため停止しません", info.pid)
         return result
 
+    # **--force が無ければ PID では落とさない**(統合 1.2.26)。Windows の `os.kill(SIGTERM)` は
+    # その場で落とす(TerminateProcess)ので、止める頼みに答えなかった・時間切れのときに、
+    # 取り込みの途中かどうかも確かめずに落としていた
+    if not force:
+        result.message = NO_ANSWER_MESSAGE
+        log.warning("pid=%s が止める頼みに答えないので、--force が無いため止めません", info.pid)
+        return result
+
     log.info("pid=%s を停止します", info.pid)
     try:
         os.kill(info.pid, signal.SIGTERM)
@@ -262,11 +244,6 @@ def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool,
         result.stopped = True
         result.method = "sigterm"
         result.message = "終了しました" + ("" if gone else UNSURE_NOTE)
-        return result
-
-    if not force:
-        result.message = ("終了要求に応じません。"
-                          "強制的に止めるには --force を付けてください")
         return result
 
     try:
@@ -324,43 +301,17 @@ def _looks_like_our_process(info) -> bool:
 
 
 def _wait_gone(port: int, timeout: float) -> bool:
-    """そのポートが応答しなくなるまで待つ。"""
+    """そのポートが応答しなくなるまで待つ(`launch_guard.wait_port_closed`)。"""
     import launch_guard
 
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if launch_guard.probe_health(port, timeout=0.3) is None:
-            return True
-        time.sleep(0.2)
-    return False
-
-
-def _wait_pid_gone(pid: int, timeout: float) -> Optional[bool]:
-    """居なくなるまで待つ。True: 居なくなった / False: まだ居る / None: 確かめられない。"""
-    import launch_guard
-
-    deadline = time.monotonic() + timeout
-    while True:
-        state = launch_guard.process_alive_state(pid)
-        if state is False:
-            return True
-        if state is None:
-            return None
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(0.2)
+    return launch_guard.wait_port_closed(port, timeout)
 
 
 def _confirm_gone(info, timeout: float) -> Optional[bool]:
-    """止めたあと、本当に居なくなったか。
+    """止めたあと、本当に居なくなったか(`launch_guard.confirm_gone`。版の入れ替えと共通)。"""
+    import launch_guard
 
-    True: 居なくなった / False: まだ居る / None: プロセスの有無は確かめられないが、
-    待ち受けは閉じている(tasklist を実行できない PC)。待ち受けも残っていれば False。
-    """
-    gone = _wait_pid_gone(info.pid, timeout)
-    if gone is None:
-        return None if _wait_gone(info.port, timeout) else False
-    return gone
+    return launch_guard.confirm_gone(info.pid, info.port, timeout)
 
 
 # ------------------------------------------------------------------

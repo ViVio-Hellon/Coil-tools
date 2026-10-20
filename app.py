@@ -490,13 +490,12 @@ def _install_shutdown_guard(app: Flask, modules: list) -> None:
         if not security.token_ok(current_app.config["TOKEN"]):
             return None
         body = request.get_json(silent=True) or {}
-        running = _busy_labels()
-        if running and not body.get("force"):
-            log.info("機能の停止口を断りました(実行中: %s)", ", ".join(running))
-            return jsonify({"ok": False, "stopped": False, "reason": "busy", "running": running,
-                            "message": "実行中の処理があります: " + "、".join(running)
-                                       + "。終わってから終了してください"}), 409
-        return None
+        # 統合の停止口と同じ決まり(途中の処理 → 開いている画面に確かめる。統合 1.2.26)。
+        # 断らなければ、機能の停止口がそのまま止める(機能ごとに差し込まれた止め方)
+        refused = _shutdown_refusal(body)
+        if refused is not None:
+            log.info("機能の停止口を断りました(%s)", request.path)
+        return refused
 
 
 # ------------------------------------------------------------------
@@ -674,29 +673,10 @@ def _shell_blueprint() -> Blueprint:
         if not security.token_ok(current_app.config["TOKEN"]):
             return security.error_json("bad_token", "この画面は無効になりました", 401)
         body = request.get_json(silent=True) or {}
-        force = bool(body.get("force"))
-        running = _busy_labels()
-        if running and not force:
-            return _busy_reply(running)
-        if _shutdown_hook is None:
-            return jsonify({"stopped": False, "reason": "no_hook",
-                            "message": "このプロセスは停止操作に対応していません"}), 501
-        asks = current_app.config["CLOSE_ASK"]
-        if not force and not body.get("screens_ready"):
-            pages = asks.live()
-            if pages:
-                asks.ask()
-                log.info("外からの停止の頼み: 統合画面(%d枚)に確かめてもらいます", len(pages))
-                verdict = asks.wait(pages, close_ask.CloseAsk.WAIT_SEC)
-                if verdict == "refused":
-                    return jsonify({"stopped": False, "reason": "refused",
-                                    "running": [close_ask.REFUSED_MESSAGE],
-                                    "message": close_ask.REFUSED_MESSAGE}), 409
-                if verdict != "ok":
-                    return jsonify({"stopped": False, "reason": "asking",
-                                    "running": [close_ask.ASKING_MESSAGE],
-                                    "message": close_ask.ASKING_MESSAGE}), 409
-        return _stop_now(force=force, why="停止要求")
+        refused = _shutdown_refusal(body, hook_ready=_shutdown_hook is not None)
+        if refused is not None:
+            return refused
+        return _stop_now(force=bool(body.get("force")), why="停止要求")
 
     _log_routes(bp)
     _manual_routes(bp)
@@ -984,8 +964,47 @@ def _tail(path: Path, max_bytes: int) -> list:
 
 
 def _busy_reply(running: list[str]):
-    return jsonify({"stopped": False, "stopping": False, "reason": "busy", "running": running,
+    return jsonify({"ok": False, "stopped": False, "stopping": False, "reason": "busy",
+                    "running": running,
                     "message": "実行中の処理があります: " + ", ".join(running)}), 409
+
+
+def _shutdown_refusal(body: dict, *, hook_ready: bool = True):
+    """止める頼みを断るなら、その返事。断らないなら None。
+
+    **統合の停止口(`/api/shutdown`)と機能の停止口(`/material/api/shutdown` など)で共通**
+    (統合 1.2.26)。どちらもプロセスごと(3機能とも)止まるので、同じ順で確かめる:
+
+        1. 途中の処理(取り込みなど)があれば断る(`force` 以外) … 409 busy
+        2. 開いている統合画面に、保存していない入力を確かめる(`force`・`screens_ready` 以外)
+           … 「閉じない」なら 409 refused、まだ確かめ中なら 409 asking(済めば入口が自分で止まる)
+
+    以前は機能の停止口が 1 しか見ておらず、ほかの機能の打ちかけを訊かずに止めていた。
+    返事にはどれも `"ok": false` を付ける(資材計算の「終了」は ok だけを見ている)。
+    """
+    force = bool(body.get("force"))
+    running = _busy_labels()
+    if running and not force:
+        return _busy_reply(running)
+    if not hook_ready:
+        return jsonify({"ok": False, "stopped": False, "reason": "no_hook",
+                        "message": "このプロセスは停止操作に対応していません"}), 501
+    asks = current_app.config["CLOSE_ASK"]
+    if not force and not body.get("screens_ready"):
+        pages = asks.live()
+        if pages:
+            asks.ask()
+            log.info("外からの停止の頼み: 統合画面(%d枚)に確かめてもらいます", len(pages))
+            verdict = asks.wait(pages, close_ask.CloseAsk.WAIT_SEC)
+            if verdict == "refused":
+                return jsonify({"ok": False, "stopped": False, "reason": "refused",
+                                "running": [close_ask.REFUSED_MESSAGE],
+                                "message": close_ask.REFUSED_MESSAGE}), 409
+            if verdict != "ok":
+                return jsonify({"ok": False, "stopped": False, "reason": "asking",
+                                "running": [close_ask.ASKING_MESSAGE],
+                                "message": close_ask.ASKING_MESSAGE}), 409
+    return None
 
 
 def _stop_now(*, force: bool, why: str):
@@ -996,7 +1015,7 @@ def _stop_now(*, force: bool, why: str):
             log.info("%s: 実行中の処理があるので止めません (%s)", why, ", ".join(running))
             return _busy_reply(running)
     if _shutdown_hook is None:
-        return jsonify({"stopped": False, "reason": "no_hook",
+        return jsonify({"ok": False, "stopped": False, "reason": "no_hook",
                         "message": "このプロセスは停止操作に対応していません"}), 501
     log.info("%sを受け付けました (force=%s)", why, force)
     current_app.config["CLOSE_ASK"].done()
@@ -1015,6 +1034,24 @@ def _busy_labels() -> list[str]:
         except Exception:                         # noqa: BLE001 - 判定で止めない
             labels.append(module.LABEL)
     return labels
+
+
+def on_wake(gap_sec: float) -> None:
+    """スリープから戻った。**3機能すべて**の `on_wake` を呼ぶ(持っているものだけ)。
+
+    以前は並びの先頭(梱包明細)のものしか呼んでいなかった(統合 1.2.26・構造点検)。いまは
+    梱包明細しか持っていないので動きは同じだが、タブの並びを変えたり機能に足したりすると
+    黙って効かなくなっていた。1つが失敗してもほかは呼ぶ。
+    """
+    for module in all_modules():
+        hook = getattr(module, "on_wake", None)
+        if hook is None:
+            continue
+        try:
+            hook(gap_sec)
+        except Exception:                         # noqa: BLE001 - 1つの失敗でほかを止めない
+            log.exception("スリープからの戻りの後始末に失敗しました: %s",
+                          getattr(module, "LABEL", None) or getattr(module, "__name__", "?"))
 
 
 def busy() -> bool:
