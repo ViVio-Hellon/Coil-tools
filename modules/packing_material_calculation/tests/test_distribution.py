@@ -165,7 +165,7 @@ def test_既存データがある項目は読み込まない(terminals):
     user_settings.save(config.KEY_LOT_DB_DIR, r"\\この端末\台帳")
     result = distribution.apply_on_start()
     assert user_settings.get(config.KEY_LOT_DB_DIR) == r"\\この端末\台帳"
-    assert "仕掛台帳のフォルダ" in result.kept
+    assert "第1パス: 仕掛台帳のフォルダ" in result.kept
     # 無い項目は埋める
     assert user_settings.get(config.KEY_MASTER_DB_DIR) == r"\\srv\共有\マスタ"
 
@@ -272,8 +272,8 @@ def test_書き出すと状態に出る(client):
     assert r.status_code == 200, r.get_json()
     dist = r.get_json()["view"]["distribution"]
     assert dist["exists"]
-    assert dist["contents"] == [{"label": "仕掛台帳のフォルダ", "value": r"\\srv\台帳"}]
-    assert "仕掛台帳(2つ目)のフォルダ" in r.get_json()["message"]   # 既定のままで入れなかった
+    assert dist["contents"] == [{"label": "第1パス: 仕掛台帳のフォルダ", "value": r"\\srv\台帳"}]
+    assert "第2パス: 仕掛台帳のフォルダ" in r.get_json()["message"]   # 既定のままで入れなかった
 
 
 def test_形が違えば400(client):

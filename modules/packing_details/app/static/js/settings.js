@@ -33,9 +33,10 @@ let lastTab = "place";
 
 const FOLDERS = {
   lot: { key: "lot_db_dir", input: "setLotDir", note: "setLotResult", button: "btnLotSave",
-         label: "仕掛台帳" },
+         label: "仕掛台帳(第1パス)" },
+  // 第1パスの LS4LOT は名前も一緒に送る(統合 1.2.28)
   konpo: { key: "konpo_db_dir", input: "setKonpoDir", note: "setKonpoResult",
-           button: "btnKonpoSave", label: "梱包課共有の仕掛（LS4LOT）" },
+           button: "btnKonpoSave", label: "梱包課共有の仕掛（LS4LOT・第1パス）", file: "setKonpoFile" },
 };
 
 // ------------------------------------------------------------------
@@ -184,7 +185,7 @@ function renderStamps(stamps, tables, boxId, problem = "") {
 
 /** 置き場所の入力欄と、この端末の設定の鍵 */
 const PLACE_FIELDS = [["setLotDir", "lot_db_dir_setting"], ["setLot2Dir", "lot_db_dir2_setting"],
-                      ["setKonpoDir", "konpo_db_dir_setting"],
+                      ["setKonpoDir", "konpo_db_dir_setting"], ["setKonpoFile", "konpo_file_setting"],
                       ["setShareDir", "share_setting"], ["setHistoryDir", "history_setting"],
                       ["setJsonDir", "json_setting"], ["setExportDir", "export_dir_setting"]];
 
@@ -205,7 +206,7 @@ export function unsaved() {
   for (const f of local.lot_files2 || []) {
     const box = document.querySelector(`[data-lot-file2="${f.table}"]`);
     if (box && (box.value || "").trim() !== (f.name || "").trim()) {
-      out.push(`設定: 仕掛台帳(2つ目)の名前(${f.first} の代わり)`);
+      out.push(`設定: 第2パスの名前(${f.first} の代わり)`);
     }
   }
   if (($("setQaValue").value || "").trim()) out.push("設定: QAマークの新しい文字");
@@ -223,6 +224,7 @@ function renderLocal(body, { fill = false } = {}) {
       if (box) box.value = f.name || "";
     }
     $("setKonpoDir").value = body.konpo_db_dir_setting || "";
+    $("setKonpoFile").value = body.konpo_file_setting || "";
     $("setShareDir").value = body.share_setting || "";
     $("setHistoryDir").value = body.history_setting || "";
     $("setJsonDir").value = body.json_setting || "";
@@ -247,12 +249,13 @@ function renderLocal(body, { fill = false } = {}) {
   $("setLotNote").textContent = `いま見ている場所: ${body.lot_db_dir}`;
   for (const f of body.lot_files2 || []) {
     const box = document.querySelector(`[data-lot-file2="${f.table}"]`);
-    if (box) box.placeholder = `空なら ${f.first}(1つ目と同じ名前)`;
+    if (box) box.placeholder = `空なら ${f.first}(第1パスと同じ名前)`;
   }
+  $("setKonpoFile").placeholder = `空なら ${body.konpo_file_default}`;
   $("setLot2Note").textContent = body.lot_db_dir2
-    ? `いま見ている場所: ${body.lot_db_dir2}` : "いまは2つ目を使っていません";
-  // 1つ目のフォルダを変えると2つ目が使われ始めることもある(同じフォルダなら使わない)。
-  // 描くたびに2つ目の様子を取り直す(開き直さなくても出る。統合 1.2.11)
+    ? `いま見ている場所: ${body.lot_db_dir2}` : "いまは第2パスを使っていません";
+  // 第1パスを変えると、第2パスの同じファイルが数えられなくなる・数え始めることがある。
+  // 描くたびに第2パスの様子を取り直す(開き直さなくても出る。統合 1.2.11)
   if (body.lot_db_dir2) {
     api.get("/api/settings/lot2").then(renderSecond).catch(() => { /* 開き直せば分かる */ });
   } else if (!body.lot_db_dir2) {
@@ -285,7 +288,7 @@ function renderLocal(body, { fill = false } = {}) {
 }
 
 /**
- * 仕掛台帳の2つ目の「いまの状態」: 表ごとに、見つかった場所・足りない列。
+ * 第2パスの「いまの状態」: 表ごと(4ファイル)に、見つかった場所・足りない列。
  * 現場の約束「名前は変えても、中身の要る列は必ずそろえる」をここで見る。
  */
 function renderSecond(body) {
@@ -293,9 +296,12 @@ function renderSecond(body) {
   box.textContent = "";
   for (const s of body.lot_second || []) {
     const line = document.createElement("div");
-    if (!s.found) {
+    if (!s.found && s.same_as_first) {
+      line.className = "ok";
+      line.textContent = `${s.table}  ${s.name}  第1パスと同じファイルです(2度は読みません)`;
+    } else if (!s.found) {
       line.className = "miss";
-      line.textContent = `${s.table}  ${s.name} が見つかりません(1つ目にあれば1つ目だけを使います)`;
+      line.textContent = `${s.table}  ${s.name} が見つかりません(第1パスにあれば第1パスだけを使います)`;
     } else if (s.missing_columns.length) {
       line.className = "miss";
       line.textContent = `${s.table}  ${s.name}  足りない列: ${s.missing_columns.join("・")}`;
@@ -307,7 +313,7 @@ function renderSecond(body) {
   }
 }
 
-/** 仕掛台帳の2つ目を保存して、仕掛台帳を取り込み直す(1つ目のあとで2つ目にだけある分を足す) */
+/** 第2パスを保存して、4ファイルとも取り込み直す(第1パスのあとで第2パスにだけある分を足す) */
 async function saveSecondLot() {
   const button = $("btnLot2Save");
   button.disabled = true;
@@ -317,7 +323,7 @@ async function saveSecondLot() {
     for (const box of document.querySelectorAll("[data-lot-file2]")) files[box.dataset.lotFile2] = box.value;
     const saved = await api.post("/api/settings/lot2", { dir: $("setLot2Dir").value, files });
     renderSecond(saved);
-    const body = await importWithProgress({ force: true, only: "lot" }, "仕掛台帳 を取り込み中");
+    const body = await importWithProgress({ force: true }, "仕掛(第2パスを含む) を取り込み中");
     showNote("setLot2Result", [saved.note, body.summary, ...(body.notes || []), body.note, ...body.errors]
       .filter(Boolean).join("\n"), !body.ok);
     hooks.afterImport(body);
@@ -325,6 +331,7 @@ async function saveSecondLot() {
     // 打ちかけのほかの欄は消さない(以前は fill で全部の欄をサーバの値に戻していた)
     renderLocal(next);
     renderStamps(body.stamps, next.lot_tables, "setLotStamps");
+    renderStamps(body.stamps, next.konpo_tables, "setKonpoStamps");
   } catch (err) {
     refused(err, "setLot2Result");
   } finally {
@@ -443,7 +450,9 @@ async function saveFolder(kind) {
   button.disabled = true;
   showNote(f.note, "");
   try {
-    const saved = await api.post("/api/settings", { key: f.key, value: $(f.input).value });
+    const data = { key: f.key, value: $(f.input).value };
+    if (f.file) data.file = $(f.file).value;
+    const saved = await api.post("/api/settings", data);
     // **保存したら、その欄の分だけ取り込む。** 置き場所を変えただけでは何も起きない
     const body = await importWithProgress({ force: true, only: kind },
                                           `${f.label} を取り込み中`);
@@ -456,7 +465,10 @@ async function saveFolder(kind) {
     renderStamps(body.stamps, next.lot_tables, "setLotStamps");
     renderStamps(body.stamps, next.konpo_tables, "setKonpoStamps");
   } catch (err) {
-    if (refused(err, f.note) && err.field === "value") $(f.input).focus();
+    if (refused(err, f.note)) {
+      if (err.field === "value") $(f.input).focus();
+      else if (err.field === "file" && f.file) $(f.file).focus();
+    }
   } finally {
     button.disabled = false;
   }

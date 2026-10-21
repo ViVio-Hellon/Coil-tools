@@ -108,7 +108,7 @@ class SecondDirTest(unittest.TestCase):
         self.assertEqual(_lots(self.conn), ["A000001", "D000001"])
         specs = dict(self.conn.execute('SELECT "受注番号", "包装仕様NO" FROM "仕掛受注"').fetchall())
         self.assertEqual(specs, {"O1": "1C0001", "O2": "1C0002"}, "O1 は1つ目の値")
-        self.assertTrue(any("2つ目" in n for n in result.notes), result.notes)
+        self.assertTrue(any("第2パス" in n for n in result.notes), result.notes)
 
     def test_2つ目だけ変わっても取り込み直す(self):
         self.use_second(仕掛ロット="LOT2")
@@ -133,9 +133,17 @@ class SecondDirTest(unittest.TestCase):
         self.assertEqual(data_sync.second_missing_columns(self.second / "LOT2.sqlite3", "仕掛ロット")[:1],
                          ["ﾛｯﾄ番号"])
 
-    def test_1つ目と同じフォルダなら2つ目としては使わない(self):
+    def test_第1パスと同じファイルは第2パスとして2度読まない_名前が違えば読む(self):
+        """統合 1.2.28 から第2パスは4ファイル共通。第1パスと同じフォルダでもよい(名前を変えた分だけ使う)。"""
+        _lot(self.first / "SIKALOT.sqlite3", "A000001")
+        _lot(self.first / "LOT2.sqlite3", "A000001", "F000001")
         user_settings.save(config.KEY_LOT_DB_DIR2, str(self.first))
-        self.assertIsNone(config.lot_db_dir2())
+        self.assertEqual(config.lot_db_dir2(), self.first)
+        self.assertEqual(data_sync.find_second_lots(), {})
+        user_settings.save(config.KEY_LOT_DB2_FILES["仕掛ロット"], "LOT2")
+        self.assertEqual(data_sync.find_second_lots(), {"仕掛ロット": self.first / "LOT2.sqlite3"})
+        self.import_lot()
+        self.assertEqual(_lots(self.conn), ["A000001", "F000001"])
 
     def test_見つからない文は2つ目の名前で言う(self):
         self.use_second(仕掛ロット="LOT2")
@@ -170,7 +178,7 @@ class SecondDirScreenTest(unittest.TestCase):
         self.assertFalse(rows["仕掛引当"]["found"])
         self.assertEqual(body["lot_db_dir2_setting"], str(self.second))
         names = {f["table"]: f["name"] for f in body["lot_files2"]}
-        self.assertEqual(names, {"仕掛ロット": "LOT2", "仕掛引当": "", "仕掛受注": ""})
+        self.assertEqual(names, {"仕掛ロット": "LOT2", "仕掛引当": "", "仕掛受注": "", "仕掛当工程": ""})
         self.assertEqual(self.client.get("/api/settings/lot2", headers=HEADERS)
                          .get_json()["lot_second"][0]["name"], "LOT2")
 

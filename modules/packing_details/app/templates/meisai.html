@@ -213,7 +213,7 @@
     <!-- ============ 置き場所・取り込み ============ -->
     <div class="set-panel" role="tabpanel" id="panelPlace" aria-labelledby="tabPlace">
       <section class="set-box" aria-labelledby="setLotHead">
-        <div class="set-box-head"><span id="setLotHead">仕掛台帳のフォルダ</span><span class="where where-local">このPCに保存</span></div>
+        <div class="set-box-head"><span id="setLotHead">第1パス: 仕掛台帳のフォルダ</span><span class="where where-local">このPCに保存</span></div>
         {#- **探しているファイル名を出す。** 道だけ出しても、そこに何を
             置けばよいかが分からない -#}
         <span class="stamp files" id="setLotFiles"></span>
@@ -226,20 +226,39 @@
         <p class="set-note" id="setLotResult" role="status" hidden></p>
       </section>
 
-      {#- 仕掛台帳の2つ目(統合 1.2.7。python-web-tools と同じ決まり)。1つ目のファイル名は決まったまま、
-          2つ目はファイル名も変えられる。名前は変えてよいが、中身の要る列はそろえる約束(現場) -#}
-      <section class="set-box" aria-labelledby="setLot2Head">
-        <div class="set-box-head"><span id="setLot2Head">仕掛台帳(2つ目)のフォルダ</span><span class="where where-local">このPCに保存</span></div>
-        <span class="stamp">1つ目で見つからないときに見ます。1つ目に無いファイルは2つ目から読み、1つ目に無いロット・受注は2つ目から足します(両方にあれば1つ目)。空なら使いません。</span>
-        <input type="text" id="setLot2Dir" spellcheck="false" autocomplete="off" aria-labelledby="setLot2Head"
-               placeholder="空なら2つ目は使いません">
+      {#- 第1パスの LS4LOT。仕掛台帳とは別のフォルダ。ファイル名も変えられる(統合 1.2.28・現場の指示) -#}
+      <section class="set-box" aria-labelledby="setKonpoHead">
+        <div class="set-box-head"><span id="setKonpoHead">第1パス: 梱包課共有の仕掛フォルダ(LS4LOT)</span><span class="where where-local">このPCに保存</span></div>
+        <span class="stamp files" id="setKonpoFiles"></span>
+        <input type="text" id="setKonpoDir" spellcheck="false" autocomplete="off" aria-labelledby="setKonpoHead">
         <div class="set-lot2-files">
-          <label for="setLot2FileLot">2つ目の名前(SIKALOT の代わり)</label>
+          <label for="setKonpoFile" id="setKonpoFileHead">LS4LOT の名前</label>
+          <input type="text" id="setKonpoFile" spellcheck="false" autocomplete="off" aria-labelledby="setKonpoFileHead">
+        </div>
+        <span class="stamp" id="setKonpoNote"></span>
+        <div class="set-stamps" id="setKonpoStamps"></div>
+        <div class="set-qa-buttons">
+          <button type="button" class="primary" id="btnKonpoSave">保存して取り込み</button>
+        </div>
+        <p class="set-note" id="setKonpoResult" role="status" hidden></p>
+      </section>
+
+      {#- 第2パス(統合 1.2.7。1.2.28 から4ファイル)。4ファイルとも名前を変えられる。
+          名前は変えてよいが、中身の要る列はそろえる約束(現場) -#}
+      <section class="set-box" aria-labelledby="setLot2Head">
+        <div class="set-box-head"><span id="setLot2Head">第2パス: 仕掛4ファイルのフォルダ</span><span class="where where-local">このPCに保存</span></div>
+        <span class="stamp">第1パスで見つからないときに見ます(SIKALOT・SIKAHIKI・SIKAODR・LS4LOT の4つ)。第1パスに無いファイルは第2パスから読み、第1パスに無いロット・受注は第2パスから足します(両方にあれば第1パス)。空なら使いません。</span>
+        <input type="text" id="setLot2Dir" spellcheck="false" autocomplete="off" aria-labelledby="setLot2Head"
+               placeholder="空なら第2パスは使いません">
+        <div class="set-lot2-files">
+          <label for="setLot2FileLot">第2パスの名前(SIKALOT の代わり)</label>
           <input type="text" id="setLot2FileLot" data-lot-file2="仕掛ロット" spellcheck="false" autocomplete="off">
-          <label for="setLot2FileHiki">2つ目の名前(SIKAHIKI の代わり)</label>
+          <label for="setLot2FileHiki">第2パスの名前(SIKAHIKI の代わり)</label>
           <input type="text" id="setLot2FileHiki" data-lot-file2="仕掛引当" spellcheck="false" autocomplete="off">
-          <label for="setLot2FileOdr">2つ目の名前(SIKAODR の代わり)</label>
+          <label for="setLot2FileOdr">第2パスの名前(SIKAODR の代わり)</label>
           <input type="text" id="setLot2FileOdr" data-lot-file2="仕掛受注" spellcheck="false" autocomplete="off">
+          <label for="setLot2FileLs4">第2パスの名前(LS4LOT の代わり)</label>
+          <input type="text" id="setLot2FileLs4" data-lot-file2="仕掛当工程" spellcheck="false" autocomplete="off">
         </div>
         <span class="stamp" id="setLot2Note"></span>
         <div class="set-stamps" id="setLot2State"></div>
@@ -247,18 +266,6 @@
           <button type="button" class="primary" id="btnLot2Save">保存して取り込み</button>
         </div>
         <p class="set-note" id="setLot2Result" role="status" hidden></p>
-      </section>
-
-      <section class="set-box" aria-labelledby="setKonpoHead">
-        <div class="set-box-head"><span id="setKonpoHead">梱包課共有の仕掛フォルダ</span><span class="where where-local">このPCに保存</span></div>
-        <span class="stamp files" id="setKonpoFiles"></span>
-        <input type="text" id="setKonpoDir" spellcheck="false" autocomplete="off" aria-labelledby="setKonpoHead">
-        <span class="stamp" id="setKonpoNote"></span>
-        <div class="set-stamps" id="setKonpoStamps"></div>
-        <div class="set-qa-buttons">
-          <button type="button" class="primary" id="btnKonpoSave">保存して取り込み</button>
-        </div>
-        <p class="set-note" id="setKonpoResult" role="status" hidden></p>
       </section>
 
       {#- CSV の出力先(マスタ管理・明細の履歴の「CSV」)。**書く場所**なので、保存するときに

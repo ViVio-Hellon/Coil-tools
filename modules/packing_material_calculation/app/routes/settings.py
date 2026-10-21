@@ -45,7 +45,7 @@ FIELDS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": config.KEY_LOT_DB_DIR,
-        "label": "仕掛台帳のフォルダ",
+        "label": "第1パス: 仕掛台帳のフォルダ",
         "detail": "ロット検索と受注情報を読む先",
         "vba": "PATH_仕掛_参照",
         "expect": ", ".join(config.LOT_DB_FILES.values()),
@@ -54,20 +54,20 @@ FIELDS: tuple[dict[str, Any], ...] = (
     {
         # 仕掛台帳の2つ目(統合 1.2.7 で名前も設定できるようにした。python-web-tools と同じ決まり)
         "key": config.KEY_LOT_DB_DIR_2,
-        "label": "仕掛台帳(2つ目)のフォルダ",
-        "detail": ("1つ目で見つからないときに見る先。1つ目に無いファイルは2つ目から読み、"
-                   "1つ目に無いロット・受注は2つ目から足す(両方にあれば1つ目)。空でよい"),
+        "label": "第2パス: 仕掛台帳のフォルダ",
+        "detail": ("第1パスで見つからないときに見る先。第1パスに無いファイルは第2パスから読み、"
+                   "第1パスに無いロット・受注は第2パスから足す(両方にあれば第1パス)。空でよい"),
         "vba": "PATH_梱包_仕掛",
-        "expect": "下の「2つ目の名前」(空なら 1つ目と同じ "
+        "expect": "下の「第2パスの名前」(空なら 第1パスと同じ "
                   + ", ".join(config.LOT_DB_FILES[t] for t in config.KEY_LOT_DB2_FILES) + ")",
         "default": "",
         "optional": True,
     },
     *({
         "key": key,
-        "label": f"仕掛台帳(2つ目)の名前: {Path(config.LOT_DB_FILES[table]).stem} の代わり",
-        "detail": ("2つ目のフォルダで探すファイル名(ファイル名だけ。拡張子を省けば .sqlite3 / .db)。"
-                   "空なら1つ目と同じ名前。名前は変えてよいが、中身の要る列はそろえる約束"),
+        "label": f"第2パスの名前: {Path(config.LOT_DB_FILES[table]).stem} の代わり",
+        "detail": ("第2パスのフォルダで探すファイル名(ファイル名だけ。拡張子を省けば .sqlite3 / .db)。"
+                   "空なら第1パスと同じ名前。名前は変えてよいが、中身の要る列はそろえる約束"),
         "vba": "",
         "expect": "",
         "default": config.LOT_DB_FILES[table],
@@ -112,12 +112,12 @@ _RESOLVERS = {
 
 
 def _second_file_place(table: str) -> str:
-    """2つ目のファイル名の欄の「いま見に行く場所」。"""
+    """第2パスのファイル名の欄の「いま見に行く場所」。"""
     if len(config.lot_db_dirs()) < 2:
-        return "(2つ目のフォルダが空なので使いません)"
+        return "(第2パスのフォルダが空なので使いません)"
     found = data_sync.find_second_lot(table)
     if found is None:
-        return f"{config.lot_db2_files()[table]}(2つ目のフォルダに見つかりません)"
+        return f"{config.lot_db2_files()[table]}(第2パスのフォルダに見つかりません)"
     return str(found)
 
 
@@ -346,7 +346,7 @@ def _probe_dir(field: dict[str, Any], text: str) -> dict[str, Any]:
 
 
 def _probe_file(field: dict[str, Any], text: str, out: dict[str, Any]) -> dict[str, Any]:
-    """仕掛台帳の2つ目のファイル名を確かめる: 使える名前か・2つ目のフォルダにあるか・要る列がそろっているか。"""
+    """仕掛台帳の第2パスのファイル名を確かめる: 使える名前か・第2パスのフォルダにあるか・要る列がそろっているか。"""
     name = text or field["default"]
     problem = config.file_name_problem(name)
     if problem:
@@ -354,11 +354,11 @@ def _probe_file(field: dict[str, Any], text: str, out: dict[str, Any]) -> dict[s
         return out
     dirs = config.lot_db_dirs()
     if len(dirs) < 2:
-        out.update(ok=True, message="2つ目のフォルダが空なので、この名前は使いません")
+        out.update(ok=True, message="第2パスのフォルダが空なので、この名前は使いません")
         return out
     path = source_db.find_named(dirs[1], name)
     if path is None:
-        out["message"] = f"2つ目のフォルダ({dirs[1]})に {name} が見つかりません"
+        out["message"] = f"第2パスのフォルダ({dirs[1]})に {name} が見つかりません"
         return out
     out["resolved"] = str(path)
     missing = data_sync.second_missing_columns(path, field["table"])
@@ -476,7 +476,7 @@ def run_import():
             "source": t.source, "error": t.error, "filled": t.filled,
             # 鍵が重なっていて飛ばした行。**黙って捨てない**
             "duplicates": t.duplicates,
-            # 仕掛台帳の2つ目から足した件数など(統合 1.2.7)
+            # 仕掛台帳の第2パスから足した件数など(統合 1.2.7)
             "note": t.note,
         } for t in result.tables],
         view=_view(conn),

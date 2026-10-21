@@ -72,12 +72,14 @@ KEY_APPLIED = "distribution_applied"
 
 # 入れられるもの: (鍵, 画面の名前, 既定で入れるか)。鍵は `user_config.json` の鍵そのもの
 ITEMS: tuple[tuple[str, str, bool], ...] = (
-    (config.KEY_LOT_DB_DIR, "仕掛台帳のフォルダ", True),
-    (config.KEY_LOT_DB_DIR2, "仕掛台帳(2つ目)のフォルダ", True),
-    (config.KEY_LOT_DB2_FILES["仕掛ロット"], "仕掛台帳(2つ目)の名前: SIKALOT の代わり", True),
-    (config.KEY_LOT_DB2_FILES["仕掛引当"], "仕掛台帳(2つ目)の名前: SIKAHIKI の代わり", True),
-    (config.KEY_LOT_DB2_FILES["仕掛受注"], "仕掛台帳(2つ目)の名前: SIKAODR の代わり", True),
-    (config.KEY_KONPO_DB_DIR, "梱包課共有の仕掛フォルダ", True),
+    (config.KEY_LOT_DB_DIR, "第1パス: 仕掛台帳のフォルダ(SIKALOT・SIKAHIKI・SIKAODR)", True),
+    (config.KEY_KONPO_DB_DIR, "第1パス: 梱包課共有の仕掛フォルダ(LS4LOT)", True),
+    (config.KEY_KONPO_DB_FILE, "第1パス: LS4LOT の名前", True),
+    (config.KEY_LOT_DB_DIR2, "第2パス: 仕掛4ファイルのフォルダ", True),
+    (config.KEY_LOT_DB2_FILES["仕掛ロット"], "第2パスの名前: SIKALOT の代わり", True),
+    (config.KEY_LOT_DB2_FILES["仕掛引当"], "第2パスの名前: SIKAHIKI の代わり", True),
+    (config.KEY_LOT_DB2_FILES["仕掛受注"], "第2パスの名前: SIKAODR の代わり", True),
+    (config.KEY_LOT_DB2_FILES["仕掛当工程"], "第2パスの名前: LS4LOT の代わり", True),
     (config.KEY_SHARED_DIR, "梱包資材マスタのフォルダ（共有）", True),
     (config.KEY_HISTORY_DIR, "明細の履歴のフォルダ", True),
     (config.KEY_SHARED_JSON_DIR, "管理者パスワード・控えのフォルダ", True),
@@ -99,8 +101,8 @@ NOT_INCLUDED: tuple[tuple[str, str], ...] = (
 _PATH_KEYS = frozenset({config.KEY_LOT_DB_DIR, config.KEY_KONPO_DB_DIR, config.KEY_SHARED_DIR,
                         config.KEY_EXPORT_DIR, config.KEY_HISTORY_DIR,
                         config.KEY_SHARED_JSON_DIR, config.KEY_LOT_DB_DIR2})
-# 仕掛台帳の2つ目のファイル名(文字。フォルダの区切りなど使えない文字は断る)
-_NAME_KEYS = frozenset(config.KEY_LOT_DB2_FILES.values())
+# 仕掛のファイル名(第2パスの4つ・第1パスの LS4LOT。文字。フォルダの区切りなど使えない文字は断る)
+_NAME_KEYS = frozenset(config.KEY_LOT_DB2_FILES.values()) | {config.KEY_KONPO_DB_FILE}
 _BOOL_KEYS = frozenset({config.KEY_AUTO_IMPORT})
 
 REFUSE_NEED_PASSWORD = "need_password"

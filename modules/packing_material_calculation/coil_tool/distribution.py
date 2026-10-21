@@ -78,10 +78,10 @@ KEY_APPLIED = "distribution_applied"
 # 選べるようにもしない)。
 ITEMS: tuple[tuple[str, str, bool], ...] = (
     (config.KEY_MASTER_DB_DIR, "梱包資材マスタのフォルダ", True),
-    (config.KEY_LOT_DB_DIR, "仕掛台帳のフォルダ", True),
-    (config.KEY_LOT_DB_DIR_2, "仕掛台帳(2つ目)のフォルダ", True),
-    (config.KEY_LOT_DB2_FILES["仕掛引当"], "仕掛台帳(2つ目)の名前: SIKAHIKI の代わり", True),
-    (config.KEY_LOT_DB2_FILES["仕掛受注"], "仕掛台帳(2つ目)の名前: SIKAODR の代わり", True),
+    (config.KEY_LOT_DB_DIR, "第1パス: 仕掛台帳のフォルダ", True),
+    (config.KEY_LOT_DB_DIR_2, "第2パス: 仕掛台帳のフォルダ", True),
+    (config.KEY_LOT_DB2_FILES["仕掛引当"], "第2パスの名前: SIKAHIKI の代わり", True),
+    (config.KEY_LOT_DB2_FILES["仕掛受注"], "第2パスの名前: SIKAODR の代わり", True),
     (config.KEY_AUTO_IMPORT, "起動時の自動取り込み", True),
     (config.KEY_STOCK_LENGTHS, "発注票の定尺", True),
     (admin_password.KEY, "管理者パスワード", True),

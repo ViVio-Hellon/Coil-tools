@@ -1,13 +1,13 @@
 """仕掛台帳の2つ目(統合 1.2.7。python-web-tools VER4.4.0・VER4.8.15 と同じ決まり)
 
     1つ目のフォルダ … 決まった名前(SIKAHIKI / SIKAODR)で探す
-    2つ目のフォルダ … 2つ目の名前(表ごとに設定。空なら1つ目と同じ名前)だけを探す
+    第2パスのフォルダ … 第2パスの名前(表ごとに設定。空なら第1パスと同じ名前)だけを探す
 
-    ファイルが1つ目に無い      → そのファイルは2つ目から読む
+    ファイルが第1パスに無い      → そのファイルは第2パスから読む
     1つ目にロット・受注が無い  → 1つ目を取り込んだあと、2つ目にだけあるものを足す
     両方にある                 → 1つ目を正とする
 
-2つ目のフォルダは以前の「仕掛台帳の予備フォルダ」(lot_db_dir_2)をそのまま使う。
+第2パスのフォルダは以前の「仕掛台帳の予備フォルダ」(lot_db_dir_2)をそのまま使う。
 """
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def _conn():
     return conn
 
 
-def test_1つ目に無いファイルは2つ目の名前で読む(dirs):
+def test_第1パスに無いファイルは第2パスの名前で読む(dirs):
     first, second = dirs
     use_second(second, 仕掛受注="ODR2")
     _odr(second / "ODR2.sqlite3", ("O1", "1C0001"))
@@ -84,7 +84,7 @@ def test_名前を変えたら2つ目の同じ名前のファイルは読まな�
     assert data_sync.find_lot_db("仕掛受注") is None
 
 
-def test_名前が空なら1つ目と同じ名前(dirs):
+def test_名前が空なら第1パスと同じ名前(dirs):
     first, second = dirs
     use_second(second)
     _odr(second / "SIKAODR.db", ("O1", "1C0001"))
@@ -92,7 +92,7 @@ def test_名前が空なら1つ目と同じ名前(dirs):
     assert config.lot_db2_files()["仕掛引当"] == "SIKAHIKI.sqlite3"
 
 
-def test_1つ目に無い受注ロットを2つ目から足す_両方にあれば1つ目(dirs):
+def test_第1パスに無い受注ロットを第2パスから足す_両方にあれば第1パス(dirs):
     first, second = dirs
     use_second(second, 仕掛受注="ODR2", 仕掛引当="HIKI2")
     _odr(first / "SIKAODR.sqlite3", ("O1", "1C0001"))
@@ -106,7 +106,7 @@ def test_1つ目に無い受注ロットを2つ目から足す_両方にあれ�
     assert specs == {"O1": "1C0001", "O2": "1C0002"}
     pairs = sorted(tuple(r) for r in conn.execute('SELECT "ロット番号", "受注番号" FROM "仕掛引当"'))
     assert pairs == [("A000001", "O1"), ("B000001", "O2")], "A000001 は1つ目の引当だけ"
-    assert "2つ目" in results["仕掛受注"].note
+    assert "第2パス" in results["仕掛受注"].note
 
 
 def test_2つ目だけ変わっても自動取り込みで取り込み直す(dirs):
@@ -124,7 +124,7 @@ def test_2つ目だけ変わっても自動取り込みで取り込み直す(dir
     assert sorted(r[0] for r in conn.execute('SELECT "受注番号" FROM "仕掛受注"')) == ["O1", "O3"]
 
 
-def test_列の足りない2つ目からは足さない(dirs):
+def test_列の足りない第2パスからは足さない(dirs):
     first, second = dirs
     use_second(second, 仕掛受注="ODR2")
     _odr(first / "SIKAODR.sqlite3", ("O1", "1C0001"))

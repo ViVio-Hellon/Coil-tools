@@ -21,7 +21,7 @@ from common import app_config as _common_app_config
 from common import logging_utils as _common_logging
 from common import storage_places
 from modules.packing_details.meisai import (admin_password, config, data_sync, distribution, printing,
-                    qa_mark, shared_settings, user_settings)
+                    qa_mark, shared_settings, source_db, user_settings)
 from modules.packing_details.meisai.logging_utils import get_logger
 
 from .. import error_body, get_db
@@ -33,8 +33,8 @@ bp = Blueprint("settings", __name__)
 # 画面から変えられる設定。**一覧に無いものは変えられない。**
 # 経路ごとに書き分けると、増やすたびに検証を書き足すことになる
 EDITABLE = {
-    config.KEY_LOT_DB_DIR: "仕掛台帳のフォルダ",
-    config.KEY_KONPO_DB_DIR: "梱包課共有の仕掛フォルダ",
+    config.KEY_LOT_DB_DIR: "第1パス: 仕掛台帳のフォルダ",
+    config.KEY_KONPO_DB_DIR: "第1パス: 梱包課共有の仕掛フォルダ",
     config.KEY_EXPORT_DIR: "CSVの出力先",
 }
 
@@ -71,16 +71,19 @@ def _local_state() -> dict:
         # まとめて1つの表で渡すと、画面側が「どちらの欄の話か」を
         # 名前から推し量ることになる
         "lot_files": list(config.LOT_DB_FILES.values()),
-        # 仕掛台帳の2つ目(統合 1.2.7)。フォルダと、表ごとの2つ目のファイル名(空なら1つ目と同じ)
+        # 第2パス(統合 1.2.7。1.2.28 から4ファイル)。フォルダと、表ごとの名前(空なら第1パスと同じ)
         "lot_db_dir2": str(config.lot_db_dir2() or ""),
         "lot_db_dir2_setting": user_settings.get(config.KEY_LOT_DB_DIR2, "") or "",
-        "lot_files2": [{"table": t, "first": config.LOT_DB_FILES[t],
+        "lot_files2": [{"table": t, "first": config.source_files()[t],
                         "name": user_settings.get(k, "") or ""}
                        for t, k in config.KEY_LOT_DB2_FILES.items()],
-        "konpo_files": list(config.KONPO_DB_FILES.values()),
+        # 第1パスの LS4LOT は名前も変えられる(統合 1.2.28)
+        "konpo_files": list(config.konpo_db_files().values()),
+        "konpo_file_setting": user_settings.get(config.KEY_KONPO_DB_FILE, "") or "",
+        "konpo_file_default": config.KONPO_DB_FILES["仕掛当工程"],
         "lot_tables": list(config.LOT_DB_FILES),
         "konpo_tables": list(config.KONPO_DB_FILES),
-        "files": config.ALL_SOURCE_FILES,
+        "files": config.source_files(),
         "stamps": [s.to_dict() for s in data_sync.stamps(conn, check=False)],
         "qa_mark_default": qa_mark.DEFAULT,
         "qa_mark_max": qa_mark.MAX_LEN,
@@ -133,11 +136,11 @@ def _storage() -> dict:
               "管理者パスワード（撹拌した値）と右上の文字の控え。「管理者パスワード」の面で変える"),
             P("明細の履歴", str(hdir / config.HISTORY_DB_NAME),
               "出力した明細の履歴（全ライン・3年）。出力するたびにこのPCから送る"),
-            P("仕掛台帳", str(config.lot_db_dir()),
+            P("仕掛台帳(第1パス)", str(config.lot_db_dir()),
               "取り込み元（" + " / ".join(config.LOT_DB_FILES.values()) + "）",
               "読むだけ（このツールは書き換えません）"),
-            P("梱包課共有の仕掛", str(config.konpo_db_dir()),
-              "取り込み元（" + " / ".join(config.KONPO_DB_FILES.values()) + "）",
+            P("梱包課共有の仕掛(第1パス)", str(config.konpo_db_dir()),
+              "取り込み元（" + " / ".join(config.konpo_db_files().values()) + "）",
               "読むだけ（このツールは書き換えません）"),
         ],
         dist=[
@@ -387,7 +390,18 @@ def write_settings():
                         + f"CSV はここに書き出します: {target}",
                         "resolved": str(target)})
 
+    # 第1パスの LS4LOT は名前も一緒に受ける(統合 1.2.28。空なら LS4LOT.sqlite3)
+    file_name = None
+    if key == config.KEY_KONPO_DB_DIR and "file" in body:
+        file_name = str(body.get("file") or "").strip()
+        problem = config.file_name_problem(file_name)
+        if problem:
+            return jsonify(error_body("bad_name", problem, "file")), 400
+
     if not user_settings.save(key, value):
+        return jsonify(error_body(
+            "write_failed", "設定ファイルに書けませんでした。")), 500
+    if file_name is not None and not user_settings.save(config.KEY_KONPO_DB_FILE, file_name):
         return jsonify(error_body(
             "write_failed", "設定ファイルに書けませんでした。")), 500
 
@@ -404,7 +418,7 @@ def write_settings():
 
 
 def _second_state() -> dict:
-    """仕掛台帳の2つ目の「いまの状態」: 表ごとに、見つかった場所と足りない列。
+    """第2パスの「いまの状態」: 表ごと(4ファイル)に、見つかった場所と足りない列。
 
     現場の約束「名前は変えても、中身の要る列は必ずそろえる」を、ここで確かめる。
     """
@@ -415,16 +429,19 @@ def _second_state() -> dict:
     rows = []
     for table, name in config.lot_db2_files().items():
         path = found.get(table)
+        # 置いてあるが第1パスと同じファイル(同じフォルダ・同じ名前)なので数えないもの
+        same = path is None and source_db.find_named(folder, name) is not None
         rows.append({"table": table, "name": name, "found": str(path) if path else "",
+                     "same_as_first": same,
                      "missing_columns": data_sync.second_missing_columns(path, table) if path else []})
     return {"lot_db_dir2": str(folder), "lot_second": rows}
 
 
 @bp.post("/api/settings/lot2")
 def write_second_lot():
-    """仕掛台帳の2つ目(フォルダと、表ごとのファイル名)を書き換える。
+    """第2パス(フォルダと、表ごとのファイル名。4ファイル)を書き換える。
 
-    フォルダが空なら2つ目を使わない。ファイル名が空ならその表は1つ目と同じ名前。
+    フォルダが空なら第2パスを使わない。ファイル名が空ならその表は第1パスと同じ名前。
     ほかの置き場所の欄と同じく、この端末の設定(管理者パスワードは要らない)。
     """
     body = request.get_json(silent=True) or {}
@@ -450,9 +467,7 @@ def write_second_lot():
     if not ok:
         return jsonify(error_body("write_failed", "設定ファイルに書けませんでした。")), 500
     if not folder:
-        note = "2つ目は使いません(1つ目だけを見ます)。"
-    elif config.lot_db_dir2() is None:
-        note = "1つ目と同じフォルダなので、2つ目としては使いません。"
+        note = "第2パスは使いません(第1パスだけを見ます)。"
     else:
         note = ("アプリのフォルダからの相対として読みました: "
                 f"{config.lot_db_dir2()}") if config.is_relative_setting(folder) else ""
@@ -461,7 +476,7 @@ def write_second_lot():
 
 @bp.get("/api/settings/lot2")
 def read_second_lot():
-    """仕掛台帳の2つ目のいまの状態(見つかった場所・足りない列)。設定画面が後から読む。"""
+    """第2パスのいまの状態(見つかった場所・足りない列)。設定画面が後から読む。"""
     return jsonify(_second_state())
 
 

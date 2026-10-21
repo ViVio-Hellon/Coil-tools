@@ -50,7 +50,8 @@ def find_sources(lot_dir: Optional[Path] = None,
                  konpo_dir: Optional[Path] = None) -> dict[str, Path]:
     """4ファイルを探す。**見つかったものだけ**返す。
 
-    仕掛台帳(3ファイル)と梱包課共有(1ファイル)は別のフォルダにある。
+    第1パスは、仕掛台帳(3ファイル。名前は固定)と梱包課共有(LS4LOT。名前も設定できる)の
+    2つのフォルダ。第1パスに無いファイルは第2パス(4ファイル共通のフォルダ)から読む。
     共有に届かない端末もあるので、どちらもアプリの起動フォルダに
     置かれた写しを次点で探す。
 
@@ -59,16 +60,20 @@ def find_sources(lot_dir: Optional[Path] = None,
     (前工程実績数を手で入れれば作業は進む)。
     """
     found: dict[str, Path] = {}
+    konpo_names = config.konpo_db_files()
     pairs = (
         (config.LOT_DB_FILES, lot_dir if lot_dir is not None else config.lot_db_dir()),
-        (config.KONPO_DB_FILES, konpo_dir if konpo_dir is not None else config.konpo_db_dir()),
+        (konpo_names, konpo_dir if konpo_dir is not None else config.konpo_db_dir()),
     )
-    # 仕掛台帳の2つ目(設定していれば)。1つ目に無いファイルだけ、2つ目の名前で読む。
-    # フォルダを明示されたとき(試験・設定画面の確かめ)は1つ目だけ
-    second = find_second_lots() if lot_dir is None else {}
+    # 第2パス(設定していれば)。第1パスに無いファイルだけ、第2パスの名前で読む。
+    # フォルダを明示されたとき(試験・設定画面の確かめ)は第1パスだけ
+    second = find_second_lots() if lot_dir is None and konpo_dir is None else {}
     for files, primary in pairs:
         for table, filename in files.items():
-            path = source_db.find(primary, filename) or second.get(table)
+            # LS4LOT は名前を変えられる(拡張子まで書けばその名前そのもの)
+            first = (source_db.find_named(primary, filename) if files is konpo_names
+                     else source_db.find(primary, filename))
+            path = first or second.get(table)
             # 次点はアプリのフォルダ(統合アプリの根)。共有に届かない端末は
             # そこに写しを置く(統合版で直した: 機能のフォルダを見ていた)
             path = path or source_db.find(config.APP_DIR, filename)
@@ -78,20 +83,34 @@ def find_sources(lot_dir: Optional[Path] = None,
 
 
 def find_second_lots() -> dict[str, Path]:
-    """仕掛台帳の**2つ目**のファイル(手元の表名 → 場所)。2つ目を設定していなければ空。
+    """**第2パス**のファイル(手元の表名 → 場所。4ファイル)。第2パスを設定していなければ空。
 
-    2つ目のフォルダでは**2つ目のファイル名だけ**を探す(`config.lot_db2_files`)。名前を変えて
-    いれば、2つ目に SIKALOT.sqlite3 があっても読まない(取り違えを防ぐ)。
+    第2パスのフォルダでは**第2パスのファイル名だけ**を探す(`config.lot_db2_files`)。名前を変えて
+    いれば、第2パスに SIKALOT.sqlite3 があっても読まない(取り違えを防ぐ)。
+    **第1パスと同じファイル**(同じフォルダ・同じ名前)は第2パスとしては数えない(2度読まない)。
     """
     second = config.lot_db_dir2()
     if second is None:
         return {}
+    firsts = {
+        **{t: source_db.find(config.lot_db_dir(), n) for t, n in config.LOT_DB_FILES.items()},
+        **{t: source_db.find_named(config.konpo_db_dir(), n)
+           for t, n in config.konpo_db_files().items()},
+    }
     found: dict[str, Path] = {}
     for table, name in config.lot_db2_files().items():
         path = source_db.find_named(second, name)
-        if path is not None:
-            found[table] = path
+        if path is None or _same_file(path, firsts.get(table)):
+            continue
+        found[table] = path
     return found
+
+
+def _same_file(a: Optional[Path], b: Optional[Path]) -> bool:
+    if a is None or b is None:
+        return False
+    import os
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 
 
 def second_missing_columns(path: Path, table: str) -> list[str]:
@@ -108,7 +127,7 @@ def second_missing_columns(path: Path, table: str) -> list[str]:
 
 def missing_sources(found: dict[str, Path]) -> dict[str, str]:
     """見つからなかったファイル。`{手元の表名: ファイル名}`。"""
-    return {table: name for table, name in config.ALL_SOURCE_FILES.items()
+    return {table: name for table, name in config.source_files().items()
             if table not in found}
 
 
@@ -275,7 +294,7 @@ def import_all(conn: sqlite3.Connection, *,
     """
     result = ImportResult()
     notify = progress or _noop_progress
-    wanted = set(only) if only is not None else set(config.ALL_SOURCE_FILES)
+    wanted = set(only) if only is not None else set(config.source_files())
     found = {t: p for t, p in find_sources(lot_dir, konpo_dir).items() if t in wanted}
 
     if not found:
@@ -283,20 +302,21 @@ def import_all(conn: sqlite3.Connection, *,
         if wanted & set(config.LOT_DB_FILES):
             places.append(f"{config.lot_db_dir()} に "
                           f"{', '.join(n for t, n in config.LOT_DB_FILES.items() if t in wanted)} を")
-            second_dir = config.lot_db_dir2()
-            if second_dir is not None and lot_dir is None:
-                # 2つ目は2つ目の名前で探した(見つからない文もその名前で言う)
-                places.append(f"(2つ目は {second_dir} に "
-                              f"{', '.join(n for t, n in config.lot_db2_files().items() if t in wanted)})")
-        if wanted & set(config.KONPO_DB_FILES):
+        konpo_names = config.konpo_db_files()
+        if wanted & set(konpo_names):
             places.append(f"{config.konpo_db_dir()} に "
-                          f"{', '.join(n for t, n in config.KONPO_DB_FILES.items() if t in wanted)} を")
+                          f"{', '.join(n for t, n in konpo_names.items() if t in wanted)} を")
+        second_dir = config.lot_db_dir2()
+        if second_dir is not None and lot_dir is None and konpo_dir is None:
+            # 第2パスは第2パスの名前で探した(見つからない文もその名前で言う)
+            places.append(f"(第2パスは {second_dir} に "
+                          f"{', '.join(n for t, n in config.lot_db2_files().items() if t in wanted)})")
         result.errors.append(f"取り込み元が見つかりません。{'、'.join(places)}置いてください。")
         notify(100, "取り込み元が見つかりません", False)
         return result
 
     items = list(found.items())
-    second = find_second_lots() if lot_dir is None else {}
+    second = find_second_lots() if lot_dir is None and konpo_dir is None else {}
     for index, (table, path) in enumerate(items):
         pct = 100 * index // len(items)
         notify(pct, f"{table} を読み込み中...（{index + 1}/{len(items)}）")
@@ -322,14 +342,15 @@ def import_all(conn: sqlite3.Connection, *,
 
 
 # 2つ目から足すときの「同じもの」の決め方。この鍵が1つ目に無いものだけ足す
-LOT_MERGE_KEYS = {"仕掛ロット": "ロット番号", "仕掛引当": "ロット番号", "仕掛受注": "受注番号"}
+LOT_MERGE_KEYS = {"仕掛ロット": "ロット番号", "仕掛引当": "ロット番号", "仕掛受注": "受注番号",
+                  "仕掛当工程": "ロット番号"}
 #: 2つ目の取り込みを覚える名前(取り込み記録。表の記録とは別に持つ)
 SECOND_NOTE = "{table}(2つ目)"
 
 
 def merge_second(conn: sqlite3.Connection, table: str, path: Path,
                  result: ImportResult) -> int:
-    """仕掛台帳の2つ目のファイルから、**1つ目に無いもの**だけを手元に足す。足した行数。
+    """**第2パス**のファイルから、**第1パスに無いもの**だけを手元に足す。足した行数(4ファイルとも)。
 
     1つ目にファイルはあるが、目当てのロット(受注)が入っていないとき、2つ目にあれば
     それを使う(python-web-tools と同じ)。同じロット・受注が両方にあれば1つ目を正とする
@@ -340,15 +361,15 @@ def merge_second(conn: sqlite3.Connection, table: str, path: Path,
     try:
         rows = read_table(path)
     except SyncError as exc:
-        result.errors.append(f"{table}: 2つ目のファイルを読めませんでした({exc})")
+        result.errors.append(f"{table}: 第2パスのファイルを読めませんでした({exc})")
         log.warning("%s: 2つ目 %s を読めません: %s", table, path, exc)
         return 0
     missing = second_missing_columns(path, table)
     lost = [src for col, src, _conv in spec
             if col in import_specs.REQUIRED_KEY_COLUMNS.get(table, ()) and src in missing]
     if lost:
-        result.errors.append(f"{table}: 2つ目のファイル {path.name} に鍵の列がありません"
-                             f"({', '.join(lost)})。2つ目からは足していません")
+        result.errors.append(f"{table}: 第2パスのファイル {path.name} に鍵の列がありません"
+                             f"({', '.join(lost)})。第2パスからは足していません")
         return 0
     columns = [c[0] for c in spec]
     col_list = ", ".join(f'"{c}"' for c in columns)
@@ -378,14 +399,14 @@ def merge_second(conn: sqlite3.Connection, table: str, path: Path,
                 keys.add(str(value))
     except sqlite3.Error as exc:
         log.exception("%s: 2つ目から足す途中でエラー", table)
-        result.errors.append(f"{table}: 2つ目から足せませんでした({exc})")
+        result.errors.append(f"{table}: 第2パスから足せませんでした({exc})")
         return 0
     _note_imported(conn, SECOND_NOTE.format(table=table), path, added)
     if added:
         result.imported[table] = result.imported.get(table, 0) + added
         what = "受注" if key == "受注番号" else "ロット"
-        result.notes.append(f"{table}: 1つ目に無い{what} {len(keys):,}件"
-                            f"({added:,}行)を2つ目({path.name})から足しました")
+        result.notes.append(f"{table}: 第1パスに無い{what} {len(keys):,}件"
+                            f"({added:,}行)を第2パス({path.name})から足しました")
     log.info("%s: 2つ目(%s)から %s行 足しました", table, path, added)
     return added
 
@@ -495,7 +516,7 @@ def stamps(conn: sqlite3.Connection, *, check: bool = True,
     if found is None and check:
         found = find_sources()
     out: list[SourceStamp] = []
-    for table, filename in config.ALL_SOURCE_FILES.items():
+    for table, filename in config.source_files().items():
         # **取り込んだ実績はテーブル名で引く。** 置き場所(パス)で引くと、
         # 共有に届かない端末では「取り込んであるのに未取込と出る」。
         # いま元が届くか(`found`)と、いつ時点のものが入っているか

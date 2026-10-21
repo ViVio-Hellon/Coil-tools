@@ -7,10 +7,13 @@
     取り込み元(外)  … このモジュール。読むのが主で、書き戻しだけ書く
     作業用DB(手元)  … `db.py`。アプリが自由に読み書きする
 
-【読むときは読み取り専用で開く】
-`file:...?mode=ro` で開きます。共有フォルダのファイルを、取り込みの
-つもりで**うっかり書き換えない**ためです。読み取り専用なら、上流の
-仕組みが書いている最中でも壊しません。
+【読むときは、必ず手元へ写してから読む】(統合 1.2.28・現場の指示)
+読み取り専用で開くときは、共有の上のファイルを直接開かず、いつも手元(この PC の
+一時フォルダ)へ写してから写しを開きます(`common/source_copy.py`)。上流を待たせない・
+共有の上で開けない作り(WAL など)でも読める・読んでいる途中で書き換わっても中身が
+そろう、のためです。写しも読み取り専用(`query_only`)で開きます。
+
+書き戻し(マスタ管理)だけは共有のファイルをそのまま開きます。
 
 【以前は Access(.accdb)でした】
 ODBCドライバの有無で動いたり動かなかったりし、Linux では mdbtools が
@@ -19,16 +22,15 @@ ODBCドライバの有無で動いたり動かなかったりし、Linux では 
 """
 from __future__ import annotations
 
-import atexit
 import os
-import shutil
 import sqlite3
-import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
 from typing import Any, Callable, Iterable, Optional
+
+from common import source_copy
 
 from .logging_utils import get_logger
 
@@ -323,12 +325,14 @@ def _open(path: Path, *, read_only: bool,
     resolved = Path(os.path.abspath(path))
     log_to = attempts if attempts is not None else []
 
-    ways = [(WAY_URI, lambda: _try_uri(resolved, read_only=read_only)),
-            (WAY_PLAIN, lambda: _try_plain(resolved, read_only=read_only))]
     if read_only:
-        # 写しは**読むときだけ**。書き戻しを写しへ向けたら、書いたものが
-        # どこにも残らない ── 開けないなら開けないと言うほうがまし
-        ways.append((WAY_COPY, lambda: _try_copy(resolved)))
+        # **読むときは必ず手元へ写してから**(統合 1.2.28・現場の指示)。共有の上の
+        # ファイルを直接は開かない ── 写せなければ読めないと言う
+        ways = [(WAY_COPY, lambda: _try_copy(resolved))]
+    else:
+        # 書き戻しは写しへ向けない。書いたものがどこにも残らなくなる
+        ways = [(WAY_URI, lambda: _try_uri(resolved, read_only=False)),
+                (WAY_PLAIN, lambda: _try_plain(resolved, read_only=False))]
 
     for name, attempt in ways:
         try:
@@ -337,7 +341,7 @@ def _open(path: Path, *, read_only: bool,
             log_to.append((name, str(exc)))
             continue
         log_to.append((name, ""))
-        if name != WAY_URI:
+        if name != ways[0][0]:
             log.warning("%s は %s で開きました(%s)", path.name, name,
                         log_to[0][1] if log_to else "")
         return conn, name
@@ -388,19 +392,19 @@ def _try_plain(resolved: Path, *, read_only: bool) -> sqlite3.Connection:
 
 
 def _try_copy(resolved: Path) -> sqlite3.Connection:
-    """手元に写してから開く。**共有の上で開けないときの最後の手。**
+    """手元に写してから開く。**読むときはいつもこれ**(統合 1.2.28)。
 
-    WAL のファイルは共有フォルダの上では開けません(共有メモリが
-    要るため)。手元のディスクなら開けるので、写して読みます。
-    `-wal` / `-shm` も一緒に写します ── 本体だけ写すと、直前に
-    書かれた分が抜けた中身を読むことになります。
-
+    写し方(付属ファイルも一緒・写している間の書き換えは写し直す・中身が同じなら
+    写し直さない)は `common/source_copy.local_copy` の1か所。
     **読み取り専用で開きます。** 写しを書き換えても誰にも届きません。
     """
     if not _looks_like_sqlite(resolved):
         # 中身が別物なら写しても開けない。**共有を無駄に往復させない**
         raise sqlite3.DatabaseError("sqlite3 のファイルではありません")
-    copy = _copy_of(resolved)
+    try:
+        copy = source_copy.local_copy(resolved)
+    except source_copy.CopyError as exc:
+        raise OSError(str(exc)) from exc
     conn = sqlite3.connect(str(copy), timeout=BUSY_TIMEOUT_MS / 1000)
     try:
         conn.execute("PRAGMA query_only = 1")
@@ -410,37 +414,8 @@ def _try_copy(resolved: Path) -> sqlite3.Connection:
         raise
 
 
-# 写しの置き場。**同じファイルを何度も写さない** ── 取り込みは
-# テーブルごとに開き直すので、19回写すと共有の往復だけで待たされる
-_COPY_DIR: Optional[Path] = None
-_COPIES: dict[str, tuple[tuple[int, int], Path]] = {}
+# 付属ファイル(診断で「どれが置かれているか」を出す)
 _SIDECARS = ("-wal", "-shm", "-journal")
-
-
-def _copy_of(resolved: Path) -> Path:
-    """手元に写した実体。中身が変わっていなければ写し直さない。"""
-    global _COPY_DIR
-    stat = resolved.stat()
-    stamp = (stat.st_size, stat.st_mtime_ns)
-    key = str(resolved)
-    known = _COPIES.get(key)
-    if known is not None and known[0] == stamp and known[1].exists():
-        return known[1]
-
-    if _COPY_DIR is None:
-        _COPY_DIR = Path(tempfile.mkdtemp(prefix="pkgsrc_"))
-        atexit.register(shutil.rmtree, _COPY_DIR, True)
-    copy = _COPY_DIR / f"{abs(hash(key)):x}{resolved.suffix}"
-    for extra in _SIDECARS:
-        side = Path(str(resolved) + extra)
-        target = Path(str(copy) + extra)
-        target.unlink(missing_ok=True)
-        if side.exists():
-            shutil.copyfile(side, target)
-    shutil.copyfile(resolved, copy)
-    _COPIES[key] = (stamp, copy)
-    log.info("共有の上で開けないので手元へ写しました: %s → %s", resolved, copy)
-    return copy
 
 
 def is_readable(path: Path) -> bool:
@@ -670,6 +645,8 @@ class SourceConnection:
             self._conn.close()
         except sqlite3.Error:                    # pragma: no cover - 閉じ損ね
             pass
+        # 書き戻したので、次に読むときは写し直す(古い写しを読まない)
+        source_copy.forget(self.path)
 
     def __enter__(self) -> "SourceConnection":
         return self

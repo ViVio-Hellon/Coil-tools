@@ -100,18 +100,21 @@ USER_CONFIG_PATH = Path(os.environ.get(
 LOT_DB_DIR = Path(os.environ.get(
     "PACKING_DETAILS_LOT_DB_DIR", r"\\nlmsrvngy03\Read\【New】仕掛\台帳"))
 
-# 仕掛台帳の**2つ目**の置き場所(統合 1.2.7。python-web-tools VER4.4.0・VER4.8.15 と同じ決まり)。
-# 既定は無い(設定画面か環境変数で入れたときだけ見る)。1つ目で見つからないときに見る:
-#   ファイルが無い        … そのファイルは2つ目から読む
-#   ファイルに対象が無い  … 1つ目を取り込んだあと、2つ目にだけあるロット・受注を足す
-#                           (両方にあれば1つ目を正とする)
-# 2つ目は**ファイル名も設定できる**(1つ目は SIKALOT / SIKAHIKI / SIKAODR のまま)。
-# 名前は変えてよいが、中身の要る列はそろえる約束(現場)
+# **第2パス**(仕掛の2つ目の置き場所。統合 1.2.7。python-web-tools VER4.4.0・VER4.8.15 と同じ決まり)。
+# 統合 1.2.28 から **4ファイル(SIKALOT / SIKAHIKI / SIKAODR / LS4LOT)を1つのフォルダ**で見る
+# (それまでは仕掛台帳の3つだけ)。既定は無い(設定画面か環境変数で入れたときだけ見る)。
+# 第1パスで見つからないときに見る:
+#   ファイルが無い        … そのファイルは第2パスから読む
+#   ファイルに対象が無い  … 第1パスを取り込んだあと、第2パスにだけあるロット・受注を足す
+#                           (両方にあれば第1パスを正とする)
+# 第2パスは**4つともファイル名を設定できる**。
+# 第1パスは 仕掛台帳(SIKALOT / SIKAHIKI / SIKAODR。名前は固定)と梱包課共有(LS4LOT。名前も設定できる)の
+# 2つのフォルダ。名前は変えてよいが、中身の要る列はそろえる約束(現場)
 LOT_DB_DIR2 = (Path(os.environ["PACKING_DETAILS_LOT_DB_DIR_2"])
                if os.environ.get("PACKING_DETAILS_LOT_DB_DIR_2") else None)
 
-# 梱包課共有の仕掛。VBA `mDB.PATH_梱包課共有仕掛` と同じ場所。
-# **仕掛台帳とは別フォルダ**なので設定キーも分ける
+# 梱包課共有の仕掛(第1パスの LS4LOT)。VBA `mDB.PATH_梱包課共有仕掛` と同じ場所。
+# **仕掛台帳とは別フォルダ**なので設定キーも分ける。ファイル名も設定できる(`KEY_KONPO_DB_FILE`。統合 1.2.28)
 KONPO_DB_DIR = Path(os.environ.get(
     "PACKING_DETAILS_KONPO_DB_DIR",
     r"\\nlmfangyshrd\各課共有\0130_日軽稲沢\梱包課\梱包課共有\仕掛"))
@@ -170,7 +173,7 @@ KONPO_DB_FILES = {
     "仕掛当工程": "LS4LOT.sqlite3",
 }
 
-# 取り込み元すべて(表示・診断用)
+# 取り込み元すべての**既定の**名前。いま探す名前は `source_files()`(LS4LOT は名前を変えられる)
 ALL_SOURCE_FILES = {**LOT_DB_FILES, **KONPO_DB_FILES}
 
 # ------------------------------------------------------------------
@@ -185,16 +188,20 @@ URL_HOSO_SHIYOSHO = os.environ.get(
 
 # `user_settings` に入れるキー
 KEY_LOT_DB_DIR = "lot_db_dir"
-# 仕掛台帳の2つ目の置き場所と、2つ目のファイル名(表ごと。空なら1つ目と同じ名前)
+# 第2パスのフォルダと、第2パスのファイル名(表ごと。空なら第1パスと同じ名前)。
+# キーの名前は前の版のまま(配った設定を読み続ける)。LS4LOT は統合 1.2.28 で足した
 KEY_LOT_DB_DIR2 = "lot_db_dir_2"
 KEY_LOT_DB2_FILES = {
     "仕掛ロット": "lot_db2_file_lot",
     "仕掛引当": "lot_db2_file_hiki",
     "仕掛受注": "lot_db2_file_odr",
+    "仕掛当工程": "lot_db2_file_ls4",
 }
 # ファイル名に使えない文字(Windows)。2つ目のファイル名の欄で断る
 BAD_FILE_CHARS = '\\/:*?"<>|'
 KEY_KONPO_DB_DIR = "konpo_db_dir"
+# 第1パスの LS4LOT のファイル名(空なら LS4LOT.sqlite3。統合 1.2.28)
+KEY_KONPO_DB_FILE = "konpo_db_file"
 KEY_AUTO_IMPORT = "auto_import_on_start"
 # VER 0.7.0 で端末ごとに持っていた値。**いまは使わない**(全ラインで共有。
 # `shared_settings`)。残っていたらログで1度だけ知らせる
@@ -294,29 +301,41 @@ def lot_db_dir() -> Path:
 
 
 def lot_db_dir2() -> Optional[Path]:
-    """仕掛台帳の**2つ目の**フォルダ。設定していなければ None(既定は無い)。
+    """**第2パス**のフォルダ(4ファイル共通)。設定していなければ None(既定は無い)。
 
-    1つ目と同じフォルダなら None(同じ場所を2度見ない)。
+    第1パスと同じフォルダでもよい(名前を変えたファイルを置くなど)。**第1パスと同じファイル**は
+    2度読まない(`data_sync.find_second_lots`)。
     """
     from . import user_settings
     configured = user_settings.get(KEY_LOT_DB_DIR2)
     if isinstance(configured, str) and configured.strip():
-        second = resolve_dir(configured)
-    else:
-        second = LOT_DB_DIR2
-    if second is None or second == lot_db_dir():
-        return None
-    return second
+        return resolve_dir(configured)
+    return LOT_DB_DIR2
+
+
+def konpo_db_files() -> dict[str, str]:
+    """第1パスの梱包課共有のファイル名(手元の表名 → ファイル名)。空なら LS4LOT.sqlite3。"""
+    from . import user_settings
+    names = dict(KONPO_DB_FILES)
+    value = user_settings.get(KEY_KONPO_DB_FILE)
+    if isinstance(value, str) and value.strip():
+        names["仕掛当工程"] = value.strip()
+    return names
+
+
+def source_files() -> dict[str, str]:
+    """第1パスで**いま探す**名前(手元の表名 → ファイル名)。表示・見つからない文にも使う。"""
+    return {**LOT_DB_FILES, **konpo_db_files()}
 
 
 def lot_db2_files() -> dict[str, str]:
-    """仕掛台帳の**2つ目の**ファイル名(手元の表名 → ファイル名)。
+    """**第2パス**のファイル名(手元の表名 → ファイル名。4ファイル)。
 
-    設定していない表は1つ目と同じ名前(`LOT_DB_FILES`)。拡張子まで書けばその名前そのもの、
+    設定していない表は第1パスと同じ名前(`source_files`)。拡張子まで書けばその名前そのもの、
     省けば `.sqlite3` / `.db` を付けて探す(`source_db.find_named`)。
     """
     from . import user_settings
-    names = dict(LOT_DB_FILES)
+    names = source_files()
     for table, key in KEY_LOT_DB2_FILES.items():
         value = user_settings.get(key)
         if isinstance(value, str) and value.strip():
@@ -325,14 +344,14 @@ def lot_db2_files() -> dict[str, str]:
 
 
 def file_name_problem(name: str) -> str:
-    """2つ目のファイル名として使えない理由(使えれば空)。フォルダは別の欄に入れる。"""
+    """ファイル名として使えない理由(使えれば空)。フォルダは別の欄に入れる。"""
     text = (name or "").strip()
     if not text:
         return ""
     bad = sorted({c for c in text if c in BAD_FILE_CHARS})
     if bad:
         return ("ファイル名に使えない文字があります: " + " ".join(bad)
-                + "(フォルダは「仕掛台帳(2つ目)のフォルダ」の欄に入れてください)")
+                + "(フォルダはフォルダの欄に入れてください)")
     return ""
 
 

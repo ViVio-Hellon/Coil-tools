@@ -58,7 +58,7 @@ class ExportTest(_Base):
         data = self._written()
         self.assertEqual(data["settings"], {config.KEY_LOT_DB_DIR: r"C:\台帳",
                                             config.KEY_SHARED_DIR: r"\\srv\共有"})
-        self.assertIn("梱包課共有の仕掛フォルダ", result.message)   # 既定のままで入れていない
+        self.assertIn("第1パス: 梱包課共有の仕掛フォルダ(LS4LOT)", result.message)   # 既定のままで入れていない
         readme = (self.dir / distribution.README_NAME).read_text(encoding="utf-8-sig")
         self.assertIn(r"C:\台帳", readme)
         self.assertIn("管理者パスワード", readme)                    # 入れていない理由
@@ -98,8 +98,8 @@ class ApplyTest(_Base):
                      "知らない鍵": "捨てる"})
         user_settings.save(config.KEY_KONPO_DB_DIR, r"D:\この端末で直した")
         result = distribution.apply_on_start()
-        self.assertEqual(result.applied, ["仕掛台帳のフォルダ"])
-        self.assertEqual(result.kept, ["梱包課共有の仕掛フォルダ"])
+        self.assertEqual(result.applied, ["第1パス: 仕掛台帳のフォルダ(SIKALOT・SIKAHIKI・SIKAODR)"])
+        self.assertEqual(result.kept, ["第1パス: 梱包課共有の仕掛フォルダ(LS4LOT)"])
         self.assertEqual(user_settings.get(config.KEY_LOT_DB_DIR), r"\\配布\台帳")
         self.assertEqual(user_settings.get(config.KEY_KONPO_DB_DIR), r"D:\この端末で直した")
         self.assertIsNone(user_settings.get("知らない鍵"))
@@ -155,7 +155,7 @@ class ReviewTest(_Base):
                      config.KEY_KONPO_DB_DIR: r"\\配布\梱包",
                      config.KEY_SHARED_DIR: r"\\配布\共有"})
         result = distribution.apply_on_start()
-        self.assertEqual(result.applied, ["仕掛台帳のフォルダ", "梱包課共有の仕掛フォルダ"])
+        self.assertEqual(result.applied, ["第1パス: 仕掛台帳のフォルダ(SIKALOT・SIKAHIKI・SIKAODR)", "第1パス: 梱包課共有の仕掛フォルダ(LS4LOT)"])
         self.assertEqual(result.kept, ["梱包資材マスタのフォルダ（共有）"])
         self.assertEqual(user_settings.get(config.KEY_LOT_DB_DIR), r"\\配布\台帳")
         self.assertEqual(user_settings.get(config.KEY_SHARED_DIR), r"D:\この端末で決めた")
@@ -169,7 +169,7 @@ class ReviewTest(_Base):
         result = distribution.export(PASSWORD, [config.KEY_LOT_DB_DIR, config.KEY_KONPO_DB_DIR])
         self.assertTrue(result.ok)
         self.assertEqual(self._written()["settings"], {config.KEY_KONPO_DB_DIR: r"C:\梱包"})
-        self.assertIn("仕掛台帳のフォルダ", result.message)            # 入れていないと言う
+        self.assertIn("第1パス: 仕掛台帳のフォルダ(SIKALOT・SIKAHIKI・SIKAODR)", result.message)            # 入れていないと言う
 
     def test_形の違う値は読まない_理由を出す(self):
         self._place({config.KEY_AUTO_IMPORT: "false",                 # 文字の "false"
@@ -177,7 +177,7 @@ class ReviewTest(_Base):
                      config.KEY_SHARED_DIR: "",
                      config.KEY_KONPO_DB_DIR: r"  \\配布\梱包  "})
         result = distribution.apply_on_start()
-        self.assertEqual(result.applied, ["梱包課共有の仕掛フォルダ"])
+        self.assertEqual(result.applied, ["第1パス: 梱包課共有の仕掛フォルダ(LS4LOT)"])
         self.assertEqual(user_settings.get(config.KEY_KONPO_DB_DIR), r"\\配布\梱包")   # 前後の空白は落とす
         self.assertIsNone(user_settings.get(config.KEY_AUTO_IMPORT))
         self.assertTrue(user_settings.auto_import_enabled())         # 既定のまま(「する」)
@@ -311,7 +311,7 @@ class WebTest(_Base):
         body = res.get_json()
         self.assertTrue(body["distribution"]["exists"])
         self.assertEqual(body["distribution"]["contents"],
-                         [{"label": "仕掛台帳のフォルダ", "value": r"C:\台帳"}])
+                         [{"label": "第1パス: 仕掛台帳のフォルダ(SIKALOT・SIKAHIKI・SIKAODR)", "value": r"C:\台帳"}])
         self.assertEqual(res.mimetype, "application/json")         # ダウンロードではない
 
         user_settings.save(config.KEY_LOT_DB_DIR, r"C:\直した")
