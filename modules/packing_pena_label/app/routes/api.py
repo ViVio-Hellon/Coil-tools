@@ -25,7 +25,7 @@ _REQUIRED_MATERIALS = [
 
 #: 取得元の表示名
 _SOURCE_LABEL = {"sqlite": "SQLite", "access": "Access(ACE)",
-                 "csv": "CSV（検証用）"}
+                 "csv": "CSV"}
 
 
 def _esc_lines(lines):
@@ -749,7 +749,7 @@ class ApiRoutes:
 
         aim = pick("aim_ref_path")
         csv_override = pick("material_csv_file")
-        csv_path = csv_override or self.cfg.default_material_csv_path
+        csv_path = csv_override or ""       # 指定した CSV だけ(同梱のサンプルは読まない)
         prefer = pick("prefer_access")
         db_file = pick("material_db_file")
 
@@ -762,12 +762,12 @@ class ApiRoutes:
         lines.append("cscript 経由の読取: %s"
                      % ("使える" if AccessBridge.available() else
                         "この環境では使えません（Windows 以外 / VBScript 無し）"))
-        lines.append("CSV 代替: %s" % csv_path)
+        lines.append("資材マスタ CSV(指定): %s" % (csv_path or "(未設定。同梱のサンプルは読みません)"))
         try:
             table = probe.load(use_cache=False)
         except AccessError as exc:
             lines.append("結果: 読めませんでした")
-            lines.append(str(exc))
+            lines.extend(str(exc).split("\n"))
             return {"ok": False, "level": "error",
                     "message": "資材マスタを読めませんでした",
                     "detail": "<br>".join(_esc_lines(lines))}

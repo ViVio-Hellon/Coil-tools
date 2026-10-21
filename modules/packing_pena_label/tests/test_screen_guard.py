@@ -21,6 +21,7 @@ import urllib.request
 from modules.packing_pena_label import server
 from modules.packing_pena_label.app.config import Config                        # noqa: E402
 from modules.packing_pena_label.app.services.screen_guard import ScreenGuard    # noqa: E402
+from ._material import business_csv  # noqa: E402
 
 
 def free_port() -> int:
@@ -195,6 +196,7 @@ class TwoTabsHttpTest(unittest.TestCase):
         cfg = Config()
         cfg.port = free_port()
         cfg.prefer_access = False
+        cfg.material_csv_file = business_csv()   # 同梱サンプルの写しを指定した CSV として
         cfg.__class__.local_dir = property(lambda self, d=cls.tmp: d)
         cls.cfg = cfg
         cls.httpd, cls.ctx = server.create_server(cfg)

@@ -45,8 +45,10 @@
     el.appendChild(x);
     el.className = "toast no-print " + (level || "info");
     el.hidden = false;
-    if (toastTimer) { clearTimeout(toastTimer); }
-    toastTimer = setTimeout(hideToast, 7000);
+    if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+    // 止めた知らせ(エラー)は、読んで閉じるまで出したままにする(統合 1.2.31。資材マスタに届かず
+    // 計算を止めたとき、理由と確かめることが 7 秒で消えて分からなくなるため)
+    if (level !== "error") { toastTimer = setTimeout(hideToast, 7000); }
   }
   window.pplToast = toast;
 

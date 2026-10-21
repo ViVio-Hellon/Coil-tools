@@ -101,7 +101,7 @@ class AppContext:
         self.master = SizeMaster(cfg.size_master_path)
         self.materials = MaterialRepository(
             accdb_dir=cfg.aim_ref_path,
-            csv_path=cfg.material_csv_path,
+            csv_path=cfg.material_csv_file,       # 指定した CSV だけ(同梱のサンプルは読まない)
             prefer_access=cfg.prefer_access,
             timeout_sec=cfg.access_timeout_sec,
             refresh_sec=cfg.material_refresh_sec,

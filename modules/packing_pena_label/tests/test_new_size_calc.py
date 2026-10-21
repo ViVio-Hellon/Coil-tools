@@ -39,6 +39,7 @@ from modules.packing_pena_label.app.services import tare_calc as TC
 from modules.packing_pena_label.app.services.size_master import SizeMaster
 
 from .test_master_admin import free_port
+from ._material import business_csv  # noqa: E402
 
 T1, T2 = 101.35, 99.8          # 1条重量(小数2桁: 丸めの境目も通る)
 
@@ -256,6 +257,7 @@ class ApiFlowTest(unittest.TestCase):
         cfg = Config()
         cfg.port = free_port()
         cfg.prefer_access = False
+        cfg.material_csv_file = business_csv()   # 同梱サンプルの写しを指定した CSV として
         cfg.material_db_file = cls.db
         cfg.barcode_mode = "svg"
         cfg.__class__.local_dir = property(lambda self, d=cls.tmp: d)

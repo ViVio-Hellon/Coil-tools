@@ -27,6 +27,7 @@ from modules.packing_pena_label.app.config import Config                        
 from modules.packing_pena_label.app.repositories.material_repo import MaterialRepository  # noqa: E402
 from modules.packing_pena_label.app.services import master_admin as MA            # noqa: E402
 from modules.packing_pena_label.app.services.settings import PATH_PASSWORD as _PW   # noqa: E402
+from ._material import business_csv  # noqa: E402
 
 
 def make_master(path, rows=None):
@@ -233,6 +234,7 @@ class MasterAdminHttpTest(unittest.TestCase):
         cfg = Config()
         cfg.port = free_port()
         cfg.prefer_access = False
+        cfg.material_csv_file = business_csv()   # 同梱サンプルの写しを指定した CSV として
         cfg.material_db_file = cls.db
         cfg.__class__.local_dir = property(lambda self, d=cls.tmp: d)
         cls.httpd, cls.ctx = server.create_server(cfg)
@@ -469,6 +471,7 @@ class MasterReachesThePrintTest(unittest.TestCase):
         cfg = Config()
         cfg.port = free_port()
         cfg.prefer_access = False
+        cfg.material_csv_file = business_csv()   # 同梱サンプルの写しを指定した CSV として
         cfg.material_db_file = cls.db
         cfg.__class__.local_dir = property(lambda self, d=cls.tmp: d)
         cls.httpd, cls.ctx = server.create_server(cfg)

@@ -135,11 +135,19 @@ class MaterialTable:
 class MaterialRepository:
     """資材マスタの取得元を切り替えるリポジトリ。
 
-    1. Windows かつ accdb が存在 -> cscript + ADODB + ACE
-    2. それ以外                   -> CSV（``data/資材重量.csv``）
+    読む順(統合 1.2.31。現場の指摘で直した):
 
-    CSV は開発・検証用、および Access へ到達できない場合の代替。
-    どちらを使ったかは ``last_source`` で判別できる。
+    1. SQLite(``db_path`` が設定されていて実在するとき)
+    2. Access(Windows かつ accdb が設定されているとき。cscript + ADODB + ACE)
+    3. **設定で指定した CSV**(``csv_path``。空なら読まない)
+    4. 直前に読んだ内容(取得元へ届かないとき。``serving_stale = True``。2026.09 決定 D-8)
+    5. どれも無ければ止める(``AccessError``。VBA と同じ「資材重量なし」)。**何が読めなかったか・
+       どこを見ればよいか**を文にして返す
+
+    **同梱の data/資材重量.csv は読まない。** 試験用のサンプル値で、業務値ではない。以前は 3 の位置で
+    必ず読まれ、朝から共有フォルダへ届かない・作業の途中で瞬断した、だけでサンプルの単重に入れ替わり、
+    間違った NW/GW のラベルが黙って刷れた(画面右上のバッジが変わるだけ)。
+    どれを使ったかは ``last_source`` で判別できる。
     """
 
     def __init__(self, accdb_dir: str, csv_path: str = "",
@@ -209,6 +217,10 @@ class MaterialRepository:
         if not check_now and self.refresh_sec > 0 \
                 and (time.monotonic() - self._cache_at) < self.refresh_sec:
             return False
+        # 届かずに直前の内容で動いているあいだは、確かめる時が来るたびに読み直しを試す
+        # (届くようになったら「古い内容」を外す)
+        if self.serving_stale:
+            return True
         return self._stamp(self._source_path()) != self._cache_stamp
 
     def load(self, use_cache: bool = True,
@@ -247,7 +259,7 @@ class MaterialRepository:
                     errors.append("SQLite: %s" % exc)
                     log.warning("SQLite を読めません、次の取得元を試します: %s", exc)
             else:
-                errors.append("SQLite: %s が見つかりません" % self.db_path)
+                errors.append("梱包資材マスタ(SQLite): %s が見つかりません" % self.db_path)
 
         # 2) Access
         if self.prefer_access and AccessBridge.available() and self.accdb_path:
@@ -259,34 +271,57 @@ class MaterialRepository:
                 self._remember(table, self.accdb_path)
                 return table
             except AccessError as exc:
-                errors.append("Access: %s" % exc)
-                log.warning("Access 読取に失敗、CSV へフォールバックします: %s", exc)
+                errors.append("Access: %s を読めません（%s）" % (self.accdb_path, exc))
+                log.warning("Access を読めません、次の取得元を試します: %s", exc)
 
-        if self.csv_path and os.path.exists(self.csv_path):
-            try:
-                table = self._load_csv(self.csv_path)
-            except (OSError, UnicodeDecodeError, csv.Error) as exc:
-                errors.append("CSV: %s を読めません（%s）" % (self.csv_path, exc))
+        # 3) 設定で指定した CSV(空なら読まない。同梱のサンプルは読まない)
+        if self.csv_path:
+            if os.path.exists(self.csv_path):
+                try:
+                    table = self._load_csv(self.csv_path)
+                except (OSError, UnicodeDecodeError, csv.Error) as exc:
+                    errors.append("CSV: %s を読めません（%s）" % (self.csv_path, exc))
+                else:
+                    self.last_source = "csv"
+                    self.last_error = "; ".join(errors)
+                    self._remember(table, self.csv_path)
+                    return table
             else:
-                self.last_source = "csv"
-                self.last_error = "; ".join(errors)
-                self._remember(table, self.csv_path)
-                return table
-        else:
-            errors.append("CSV: %s が見つかりません" % (self.csv_path or "(未設定)"))
+                errors.append("CSV: %s が見つかりません" % self.csv_path)
         self.last_error = "; ".join(errors)
 
-        # 取得元へ一時的に到達できないだけなら、直前のマスタで業務を続けさせる。
-        # （ライン作業の途中でネットワークが瞬断しても止めないため）
+        # 4) 取得元へ一時的に到達できないだけなら、直前のマスタで業務を続けさせる。
+        # （ライン作業の途中でネットワークが瞬断しても止めないため。2026.09 決定 D-8）
         # 取得元の表示は変えず、"古い内容で動いている" ことだけを別に立てる。
         if self._cache is not None:
             log.warning("資材マスタを読み直せないため、直前の内容で継続します: %s",
                         self.last_error)
+            self._cache_at = time.monotonic()      # 次に試すのは鮮度チェックの間隔のあと
             self.serving_stale = True
             return self._cache
 
+        # 5) 止める。何が読めなかったか・どこを見ればよいかを言う
         self.last_source = ""
-        raise AccessError("資材重量なし / " + self.last_error)
+        raise AccessError(self.why_unreadable(errors))
+
+    def why_unreadable(self, errors: List[str]) -> str:
+        """読めなかったときの説明(画面にそのまま出す)。"""
+        lines = ["資材マスタを読めないため、計算を止めました。"
+                 "このまま計算すると、ラベルの NW・GW が正しくなりません。"]
+        tried = [e for e in errors if e]
+        if not (self.db_path or (self.prefer_access and self.accdb_path) or self.csv_path):
+            lines.append("・資材マスタの参照先が設定されていません"
+                         "(設定の「梱包資材マスタ(SQLite)」または「資材マスタの参照先フォルダー」)。")
+        elif self.prefer_access and self.accdb_path and not AccessBridge.available() \
+                and not self.db_path and not self.csv_path:
+            lines.append("・Access の参照先 %s は、この PC では読めません"
+                         "(Windows の cscript が使えません)。" % self.accdb_path)
+        for item in tried:
+            lines.append("・" + item)
+        lines.append("確かめること: 共有フォルダに届くか(ネットワーク・サーバーが止まっていないか)、"
+                     "設定の資材マスタの参照先が合っているか。")
+        lines.append("届くようになったら、もう一度「計算」を押してください。")
+        return "\n".join(lines)
 
     def _remember(self, table: MaterialTable, path: str) -> None:
         self._cache = table

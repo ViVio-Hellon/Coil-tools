@@ -24,6 +24,7 @@ from modules.packing_pena_label.app.config import Config                        
 from modules.packing_pena_label.app.services import label_align as LA             # noqa: E402
 from modules.packing_pena_label.app.services import label_sheet as LS             # noqa: E402
 from modules.packing_pena_label.app.services.settings import PATH_PASSWORD as _PW   # noqa: E402
+from ._material import business_csv  # noqa: E402
 
 
 def printed(value_mm, offset, scale_pct, p, o):
@@ -190,6 +191,7 @@ class AlignHttpTest(unittest.TestCase):
         cfg = Config()
         cfg.port = free_port()
         cfg.prefer_access = False
+        cfg.material_csv_file = business_csv()   # 同梱サンプルの写しを指定した CSV として
         cfg.material_db_file = cls.db
         cls.orig_local_dir = Config.__dict__["local_dir"]
         Config.local_dir = property(lambda self, d=cls.tmp: d)

@@ -29,6 +29,7 @@ from modules.packing_pena_label.app.config import Config, load_config           
 from modules.packing_pena_label.app.services import distribution as D             # noqa: E402
 
 from modules.packing_pena_label.app.services.settings import PATH_PASSWORD as PW   # noqa: E402
+from ._material import business_csv  # noqa: E402
 
 
 class DistributionTestCase(unittest.TestCase):
@@ -283,6 +284,7 @@ class DistributionHttpTest(unittest.TestCase):
         cfg = Config()
         cfg.port = free_port()
         cfg.prefer_access = False
+        cfg.material_csv_file = business_csv()   # 同梱サンプルの写しを指定した CSV として
         cfg.material_db_file = str(db)
         # 他のテストへ漏らさないよう、元の定義を取っておいて戻す
         cls.orig_local_dir = Config.__dict__["local_dir"]

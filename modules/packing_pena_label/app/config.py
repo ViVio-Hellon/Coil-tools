@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 #: アプリケーションID（ローカル領域のフォルダ名、多重起動判定、/api/health の識別子）
 APP_ID = "PackingPenaLabel"
 APP_NAME = "梱包ペナ ラベル・風袋計算"
-APP_VERSION = "1.5.31"
+APP_VERSION = "1.5.32"
 #: 版を切った日。画面のバージョン表示に添える。
 #: **中身を直したら必ずここを上げる**。上げ忘れると、
 #: 現場が「新しいファイルに差し替わったか」を画面から判断できない。
@@ -127,7 +127,7 @@ class Config:
     #: font モードで使うフォント名
     barcode_font_family: str = "K's BarCodeFont Code39"
 
-    #: Access を優先して読むか（False なら常に CSV）
+    #: Access も試すか（False なら Access を飛ばす）
     prefer_access: bool = True
     access_timeout_sec: int = 60
     #: 資材マスタの鮮度チェック間隔(秒)。0 で毎回チェック。
@@ -460,6 +460,8 @@ def load_config(path: str = "", include_local: bool = True) -> Config:
         "PPL_AIM_PATH": ("aim_ref_path", str),
         "PPL_PREFER_ACCESS": ("prefer_access",
                               lambda v: str(v).lower() in ("1", "true", "yes")),
+        # 資材マスタ CSV(通し試験で、試験用の写しを指定した CSV として読ませる。統合 1.2.31)
+        "PPL_MATERIAL_CSV": ("material_csv_file", str),
     }
     for env_key, (attr, conv) in env_map.items():
         raw = os.environ.get(env_key)

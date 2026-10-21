@@ -63,8 +63,8 @@ SETTINGS: List[SettingSpec] = [
         placeholder=r"\\サーバー名\共有\...",
         help=("VBA の定数 PATH_AIM_参照 に相当。"
               "このフォルダーの直下に " + ACCDB_NAME + " があること。"
-              "空欄のままだと Access を読めず、CSV（検証用）で動作する。"),
-        default_hint="CSV へフォールバック"),
+              "SQLite・Access・CSV のどれも読めなければ、計算を止めて理由を出す。"),
+        default_hint="未設定(Access は読まない)"),
     SettingSpec(
         key="debug_print_path", label="共有ログの出力先フォルダー", kind="dir",
         group=GROUP_REF, need_write=True,
@@ -94,7 +94,7 @@ SETTINGS: List[SettingSpec] = [
         help=("読む順は DB > CSV。梱包資材マスタ（SQLite）・旧 Access を読めないときだけ使う。"
               "列は 管理番号 / 梱包資材名 / 単位質量 / 係数。"
               "「手本を出す」で、欄に入れたパスへ列の見出しと例を出す（あるファイルは上書きしない）。"),
-        default_hint="同梱 data/資材重量.csv"),
+        default_hint="未設定(CSV は読まない。同梱の data/資材重量.csv は試験用で読まない)"),
     SettingSpec(
         key="kataban_csv_file", label="型番マスタ CSV", kind="file",
         group=GROUP_MASTER, placeholder=r"C:\...\型番.csv",
@@ -158,8 +158,8 @@ SETTINGS: List[SettingSpec] = [
               "この項目に関係なく先に読みます。"
               "ここをオンにすると、SQLite が読めなかったときに限り"
               "旧 Access(.accdb) も試します。"
-              "オフにすると Access を飛ばして CSV（検証用）へ落ちます。"),
-        default_hint="SQLite → (ここがオンなら Access) → CSV の順"),
+              "オフにすると Access を飛ばして、指定した CSV を読みます(無ければ止めて理由を出す)。"),
+        default_hint="SQLite → (ここがオンなら Access) → 指定した CSV の順"),
     SettingSpec(
         key="access_timeout_sec", label="旧 Access 読取のタイムアウト（秒）",
         kind="int", group=GROUP_BEHAVIOR, minimum=5, maximum=600,
@@ -413,7 +413,7 @@ def _resolved_path(cfg: Config, key: str) -> str:
     """空欄のときに実際に使われるパスを見せる。"""
     mapping = {
         "size_master_file": cfg.size_master_path,
-        "material_csv_file": cfg.material_csv_path,
+        "material_csv_file": cfg.material_csv_file or "(未設定。CSV は読みません)",
         "kataban_csv_file": cfg.kataban_csv_path,
         "export_dir_path": cfg.export_dir,
         "aim_ref_path": cfg.accdb_path,
@@ -510,7 +510,7 @@ def apply_live(cfg: Config, ctx) -> List[str]:
     # 資材マスタの参照先・読み方
     ctx.materials.reconfigure(
         accdb_dir=cfg.aim_ref_path,
-        csv_path=cfg.material_csv_path,
+        csv_path=cfg.material_csv_file,       # 指定した CSV だけ(同梱のサンプルは読まない)
         prefer_access=cfg.prefer_access,
         timeout_sec=cfg.access_timeout_sec,
         refresh_sec=cfg.material_refresh_sec,

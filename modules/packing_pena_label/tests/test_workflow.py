@@ -14,6 +14,7 @@ from modules.packing_pena_label.app.repositories.sqlite_store import Store
 from modules.packing_pena_label.app.services import size_master as SM
 from modules.packing_pena_label.app.services.size_master import SizeMaster
 from modules.packing_pena_label.app.services.workflow import Workflow
+from ._material import business_csv  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -23,6 +24,7 @@ class WorkflowTestBase(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         cfg = Config()
         cfg.prefer_access = False
+        cfg.material_csv_file = business_csv()   # 同梱サンプルの写しを指定した CSV として
         self.cfg = cfg
         self.store = Store(os.path.join(self.tmp, "state.sqlite3"))
         self.master = SizeMaster(os.path.join(ROOT, "data", "size_master.json"))

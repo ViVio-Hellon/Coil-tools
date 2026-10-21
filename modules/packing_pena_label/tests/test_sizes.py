@@ -26,6 +26,7 @@ from modules.packing_pena_label.app.services.size_master import SizeMaster
 
 from .test_http import HttpTestCase
 from .test_master_admin import free_port, make_master
+from ._material import business_csv  # noqa: E402
 
 
 class AddSizeTest(unittest.TestCase):
@@ -112,6 +113,7 @@ class SizeSettingsHttpTest(unittest.TestCase):
         cfg = Config()
         cfg.port = free_port()
         cfg.prefer_access = False
+        cfg.material_csv_file = business_csv()   # 同梱サンプルの写しを指定した CSV として
         cfg.material_db_file = cls.db
         cfg.__class__.local_dir = property(lambda self, d=cls.tmp: d)
         cls.cfg = cfg

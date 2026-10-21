@@ -64,6 +64,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import sqlite3
@@ -77,6 +78,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 results: list = []
+
+
+def pena_material_csv(home: Path) -> str:
+    """ペナラベルの資材マスタ(試験用)。同梱のサンプルの写しを「設定で指定した CSV」として読ませる。
+
+    統合 1.2.31 から、ペナラベルは同梱の data/資材重量.csv(試験用のサンプル値)を読まない
+    (共有の資材マスタに届かないだけでサンプルに落ち、間違った NW/GW が刷れたため)。
+    """
+    dest = Path(home) / "pena_material" / "資材重量.csv"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / "modules" / "packing_pena_label" / "data" / "資材重量.csv", dest)
+    return str(dest)
 
 
 def default_password(rel: str, name: str) -> str:
@@ -236,7 +249,7 @@ class App:
                         COIL_TOOL_MASTER_DB_DIR=str(home / "master"),
                         COIL_TOOL_LOT_DB_DIR=str(home / "lot"),
                         COIL_PACKING_TOOLS_DISTRIBUTION_DIR=str(self.dist_common(home)),
-                        PPL_PREFER_ACCESS="0")
+                        PPL_PREFER_ACCESS="0", PPL_MATERIAL_CSV=pena_material_csv(home))
         for name in ("PYTHONDONTWRITEBYTECODE",):
             self.env.pop(name, None)
         self.proc = None

@@ -29,6 +29,18 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def pena_material_csv(home: Path) -> str:
+    """ペナラベルの資材マスタ(試験用)。同梱のサンプルの写しを「設定で指定した CSV」として読ませる。
+
+    統合 1.2.31 から、ペナラベルは同梱の data/資材重量.csv(試験用のサンプル値)を読まない
+    (共有の資材マスタに届かないだけでサンプルに落ち、間違った NW/GW が刷れたため)。
+    """
+    dest = Path(home) / "pena_material" / "資材重量.csv"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / "modules" / "packing_pena_label" / "data" / "資材重量.csv", dest)
+    return str(dest)
 results = []
 
 
@@ -57,7 +69,7 @@ def main(argv=None) -> int:
                PACKING_DETAILS_SHARED_DIR=str(home / "share"),
                PACKING_DETAILS_LOT_DB_DIR=str(home / "lot"), PACKING_DETAILS_KONPO_DB_DIR=str(home / "konpo"),
                COIL_TOOL_MASTER_DB_DIR=str(home / "master"), COIL_TOOL_LOT_DB_DIR=str(home / "lot"),
-               PPL_PREFER_ACCESS="0")
+               PPL_PREFER_ACCESS="0", PPL_MATERIAL_CSV=pena_material_csv(home))
     # 本番と同じく .pyc を書かせる(書き先は start_app が決める。アプリのフォルダには作らない)
     for name in ("PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX"):
         env.pop(name, None)

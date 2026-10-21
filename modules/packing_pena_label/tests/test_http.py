@@ -15,6 +15,7 @@ import urllib.request
 from modules.packing_pena_label import server
 from modules.packing_pena_label.app.config import Config                        # noqa: E402
 from modules.packing_pena_label.app.services.settings import PATH_PASSWORD as _PW   # noqa: E402
+from ._material import business_csv  # noqa: E402
 
 
 def free_port() -> int:
@@ -30,6 +31,7 @@ class HttpTestCase(unittest.TestCase):
         cfg = Config()
         cfg.port = free_port()
         cfg.prefer_access = False
+        cfg.material_csv_file = business_csv()   # 同梱サンプルの写しを指定した CSV として
         # 状態とログをテスト用の一時領域へ隔離する
         cfg.__class__.local_dir = property(lambda self, d=cls.tmp: d)
         cls.cfg = cfg
@@ -298,10 +300,18 @@ class TestSettingsScreen(HttpTestCase):
 
     def test_test_master_endpoint(self):
         _, j = self.post("/api/settings/test-master", {"values": {
-            "aim_ref_path": "", "material_csv_file": "",
+            "aim_ref_path": "", "material_csv_file": business_csv(),
             "prefer_access": False, "access_timeout_sec": 60}})
         self.assertTrue(j["ok"], j)
         self.assertIn("detail", j)
+
+    def test_参照先が無ければ読めないと理由を言う_同梱のサンプルは読まない(self):
+        """統合 1.2.31: 以前は同梱の検証用サンプルを読んで「読めました」と言っていた。"""
+        _, j = self.post("/api/settings/test-master", {"values": {
+            "aim_ref_path": "", "material_csv_file": "", "material_db_file": "",
+            "prefer_access": False, "access_timeout_sec": 60}})
+        self.assertFalse(j["ok"], j)
+        self.assertIn("参照先が設定されていません", j["detail"])
 
     def test_reset_restores_defaults(self):
         import os

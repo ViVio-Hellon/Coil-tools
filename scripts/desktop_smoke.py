@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,18 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def pena_material_csv(home: Path) -> str:
+    """ペナラベルの資材マスタ(試験用)。同梱のサンプルの写しを「設定で指定した CSV」として読ませる。
+
+    統合 1.2.31 から、ペナラベルは同梱の data/資材重量.csv(試験用のサンプル値)を読まない
+    (共有の資材マスタに届かないだけでサンプルに落ち、間違った NW/GW が刷れたため)。
+    """
+    dest = Path(home) / "pena_material" / "資材重量.csv"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / "modules" / "packing_pena_label" / "data" / "資材重量.csv", dest)
+    return str(dest)
 WINDOWS = os.name == "nt"
 
 
@@ -51,6 +64,7 @@ def isolated_env(work: Path) -> dict:
         COIL_TOOL_LOT_DB_DIR=str(work / "material" / "lot"),
         PACKING_PENA_DISTRIBUTION_DIR=str(work / "pena" / "dist"),
         PPL_PREFER_ACCESS="0",
+        PPL_MATERIAL_CSV=pena_material_csv(work / "pena"),
     )
     if WINDOWS:
         env["LOCALAPPDATA"] = str(work / "localappdata")

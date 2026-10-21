@@ -181,7 +181,7 @@ class PageRoutes:
 
         src = self.wf.materials.last_source
         label = {"sqlite": "SQLite", "access": "Access(ACE)",
-                 "csv": "CSV（検証用）"}.get(src, "未読込")
+                 "csv": "CSV"}.get(src, "未読込")
         # 取得元へ到達できず直前の内容で動いているときは、
         # 全画面のヘッダーで分かるようにする（診断画面だけでは気付けない）。
         stale = bool(getattr(self.wf.materials, "serving_stale", False))
