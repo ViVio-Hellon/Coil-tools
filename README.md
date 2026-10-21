@@ -47,7 +47,13 @@ DB処理・帳票は移植元のまま、それぞれ独立して動きます。
 
 | 文書 | 中身 |
 |---|---|
-| [`modules/packing_details/README.md`](modules/packing_details/README.md) | 梱包明細の README(移植元) |
+| [`modules/packing_details/README.md`](modules/packing_details/README.md) | 梱包明細の README(移植元。「移植で必ず読むもの」に下の6本) |
+| [`modules/packing_details/docs/01_VBA解析書.md`](modules/packing_details/docs/01_VBA解析書.md) | 移植前の現行仕様。画面の流れ・割数の配分・積み・副番・出力・紙面(VBA の元ソースは無く、コードの注記・変更履歴から組み立てた) |
+| [`modules/packing_details/docs/02_移植対応表.md`](modules/packing_details/docs/02_移植対応表.md) | VBA の手続きと Python の関数の対応 |
+| [`modules/packing_details/docs/03_不明点と要確認事項.md`](modules/packing_details/docs/03_不明点と要確認事項.md) | 現行の挙動を維持しつつ確認が必要な点 |
+| [`modules/packing_details/docs/04_DB運用と同時実行の確認事項.md`](modules/packing_details/docs/04_DB運用と同時実行の確認事項.md) | Access→SQLite、手元へ写してから読む、長時間起動、複数PC・同時書込 |
+| [`modules/packing_details/docs/05_設定ガイド.md`](modules/packing_details/docs/05_設定ガイド.md) | 置き場所(第1パス・第2パス)、設定の層、配布手順 |
+| [`modules/packing_details/docs/06_明細表印刷の実寸化.md`](modules/packing_details/docs/06_明細表印刷の実寸化.md) | A4横の左半分の紙面、紙の端から5mm、書き足し・作り直し |
 | [`modules/packing_details/docs/説明書.md`](modules/packing_details/docs/説明書.md) | 梱包明細の説明書(移植元) |
 | [`modules/packing_details/docs/変更履歴.md`](modules/packing_details/docs/変更履歴.md) | 梱包明細の変更履歴 |
 
