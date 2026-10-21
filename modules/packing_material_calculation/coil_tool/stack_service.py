@@ -206,6 +206,9 @@ def _split_for_no_single(state: CalcState, stack: float, ins: float) -> tuple[in
     # 積数は小数点第1位で切り捨て(3.5 → 3。現場の確認、統合 1.2.6)。
     # Re_積数 は検入数の半分なので、端数は .5 だけ
     state.Re_積数 = str(vba.round_down(re_stack))
+    # リプラの本数を数えるときは割ったままの値(2.5)を使う。2 で数えると、分けた2台(3本・2本)の
+    # コイル間リプラが「2本積み×2台」の 4本になり、正しい 4+2=6本より 2本少なかった(統合 1.2.32)
+    state.Re_積数_割 = repr(re_stack)
     state.Re_台数 = "2"
     state.積数 = vba.int_text(stack)
     state.mark(FLAG_SINGLE_SPLIT)

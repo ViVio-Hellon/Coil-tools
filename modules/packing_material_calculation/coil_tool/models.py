@@ -167,6 +167,9 @@ class CalcState:
     台数: str = ""
     # 1本積み不可で分けたときの別枠 (VBA `Re_積数` / `Re_台数`)
     Re_積数: str = ""
+    # 別枠の積数の**割ったままの値**(例 2.5)。画面の Re_積数 は切り捨てる(2.5 → 2。現場の確認)が、
+    # リプラの本数はこちらで数える(分けた2台は 3本と2本 → コイル間 4+2=6本。統合 1.2.32)
+    Re_積数_割: str = ""
     Re_台数: str = ""
     # 総高さの確認表示 (VBA `HightCoil`)
     総高さ: str = ""
@@ -244,6 +247,7 @@ class CalcState:
         self.本数 = ""
         self.TotalC = ""
         self.Re_積数 = ""
+        self.Re_積数_割 = ""
         self.Re_台数 = ""
         self.特殊Flag = ""
         self.PFlag = ""

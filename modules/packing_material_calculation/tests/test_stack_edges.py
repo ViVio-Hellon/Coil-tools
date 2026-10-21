@@ -61,6 +61,23 @@ def test_split_uses_spare_when_more_than_two_units(conn):
     assert s.Re_台数 == "2"
 
 
+@pytest.mark.parametrize("ins, coil_gap", [
+    (13, 18),     # 4・4・3・2 本 → 6+6+4+2
+    (17, 24),     # 4・4・4・3・2 本 → 6+6+6+4+2
+    (9, 12),      # 4・3・2 本 → 6+4+2
+])
+def test_分けた2台のコイル間リプラは割ったままの積数で数える(conn, ins, coil_gap):
+    """1本積み不可で分けた2台(例 3本・2本)のコイル間リプラ(統合 1.2.32・現場の確認)。
+
+    画面の別枠の積数は切り捨てる(2.5 → 2)が、リプラの本数は割ったままの 2.5 で数える。
+    以前は 2 で数えて「2本積み×2台」の 4本にし、正しい 4+2=6本より 2本少なかった
+    (チェックリスト・発注票まで少ないまま届いた)。"""
+    s, r = run(conn, 検入数=ins, 枚数=4)
+    assert r.ok
+    assert s.Re_積数 == "2"                 # 画面は切り捨てのまま
+    assert s.本数 == str(coil_gap)
+
+
 def test_no_split_when_remainder_is_not_one(conn):
     """余りが1本でなければ、ふつうに切り上げ"""
     s, r = run(conn, 検入数=14, 枚数=4)

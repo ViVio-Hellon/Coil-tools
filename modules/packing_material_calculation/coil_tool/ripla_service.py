@@ -209,7 +209,11 @@ def _calculate(conn: sqlite3.Connection, state: CalcState) -> int:
 
     # 別枠(1本積み不可で分けたぶん)があれば足す
     if str(state.Re_積数).strip():
-        re_per_layer = (vba.val(state.Re_積数) - 1) * 2
+        # 割ったままの別枠の積数で数える(2.5 → (2.5-1)×2 = 3本/台 × 2台 = 6本 = 3本の台 4 + 2本の台 2)。
+        # 画面の Re_積数(切り捨てた 2)で数えると 2本少なかった(統合 1.2.32・現場の確認)
+        re_stack = vba.val(state.Re_積数_割) if str(state.Re_積数_割).strip() \
+            else vba.val(state.Re_積数)
+        re_per_layer = (re_stack - 1) * 2
         coil_count += re_per_layer * state.Re_台数値
 
     state.最下部長さ = vba.int_text(bottom_length)
