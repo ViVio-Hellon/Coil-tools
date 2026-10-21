@@ -22,7 +22,59 @@
 DB処理・帳票は移植元のまま、それぞれ独立して動きます。変えたのは「入れ物」
 (起動・停止・待ち受け・画面の外枠・ログ)だけです。何をどう決めたかは
 [`docs/統合設計.md`](docs/統合設計.md) にあります。各機能の業務仕様は
-`modules/<機能>/README.md`(移植元のまま)を見てください。
+`modules/<機能>/README.md`(移植元のまま)を見てください。どの文書がどこにあるかは、すぐ下の
+「文書の置き場所」にまとめてあります。
+
+## 文書の置き場所
+
+**各機能の README と `docs/` は移植元のまま機能のフォルダに入っています。** 機能の README に
+`docs/…` と書いてあるのは、その機能のフォルダから見た場所です(リポジトリ直下の `docs/` ではありません)。
+
+### 統合ツール全体(リポジトリ直下の `docs/`)
+
+| 文書 | 中身 |
+|---|---|
+| [`docs/ツール文書/00_文書一覧.md`](docs/ツール文書/00_文書一覧.md) | **はじめに読む。** 3機能と統合ツールの 仕様・操作説明・思想とモード(13本)の一覧 |
+| [`docs/統合設計.md`](docs/統合設計.md) | 3つのツールを1つにまとめたときの調査・比較・採用した実装・影響・テスト |
+| [`docs/仕掛ファイルの仕様.md`](docs/仕掛ファイルの仕様.md) | 仕掛ファイルの置き場所(第1パス・第2パス)・LS4LOT の2つの形式・列の関係 |
+| [`docs/デスクトップ版.md`](docs/デスクトップ版.md) | デスクトップ版(exe)の作り・動きの約束・作り方・確かめたこと |
+| [`docs/ランチャー連携.md`](docs/ランチャー連携.md) | 業務ツール統合ランチャーとのつなぎ方 |
+| [`docs/数の丸め点検.md`](docs/数の丸め点検.md) | 3機能の丸め・切り捨ての点検の記録 |
+| [`docs/変更履歴.md`](docs/変更履歴.md) | 統合ツールの変更履歴と版の決まり |
+| `templates/manual/*.html` | ツール上の説明書(上の帯の「説明書」。現場向けの写真つき) |
+
+### 梱包明細(`modules/packing_details/`)
+
+| 文書 | 中身 |
+|---|---|
+| [`modules/packing_details/README.md`](modules/packing_details/README.md) | 梱包明細の README(移植元) |
+| [`modules/packing_details/docs/説明書.md`](modules/packing_details/docs/説明書.md) | 梱包明細の説明書(移植元) |
+| [`modules/packing_details/docs/変更履歴.md`](modules/packing_details/docs/変更履歴.md) | 梱包明細の変更履歴 |
+
+### ペナラベル(`modules/packing_pena_label/`)
+
+| 文書 | 中身 |
+|---|---|
+| [`modules/packing_pena_label/README.md`](modules/packing_pena_label/README.md) | ペナラベルの README(移植元。「11. 移植で必ず読むもの」に下の6本) |
+| [`modules/packing_pena_label/docs/01_VBA解析書.md`](modules/packing_pena_label/docs/01_VBA解析書.md) | 移植前の現行仕様。計算式・判定・出力を確定させたもの |
+| [`modules/packing_pena_label/docs/02_移植対応表.md`](modules/packing_pena_label/docs/02_移植対応表.md) | VBA の手続きと Python の関数の対応 |
+| [`modules/packing_pena_label/docs/03_不明点と要確認事項.md`](modules/packing_pena_label/docs/03_不明点と要確認事項.md) | 現行の挙動を維持しつつ確認が必要な点 |
+| [`modules/packing_pena_label/docs/04_DB運用と同時実行の確認事項.md`](modules/packing_pena_label/docs/04_DB運用と同時実行の確認事項.md) | Access→SQLite、長時間起動、複数PC同時書込 |
+| [`modules/packing_pena_label/docs/05_設定ガイド.md`](modules/packing_pena_label/docs/05_設定ガイド.md) | ファイルパスの変更、設定の2層構成、配布手順 |
+| [`modules/packing_pena_label/docs/06_ラベル印刷の実寸化.md`](modules/packing_pena_label/docs/06_ラベル印刷の実寸化.md) | Excel台紙の採寸、mm絶対配置、バーコード、位置合わせ |
+| [`modules/packing_pena_label/docs/変更履歴.md`](modules/packing_pena_label/docs/変更履歴.md) | ペナラベルの変更履歴 |
+
+### 資材計算(`modules/packing_material_calculation/`)
+
+| 文書 | 中身 |
+|---|---|
+| [`modules/packing_material_calculation/README.md`](modules/packing_material_calculation/README.md) | 資材計算の README(移植元) |
+| [`modules/packing_material_calculation/docs/はじめに読む_起動と使い方.md`](modules/packing_material_calculation/docs/はじめに読む_起動と使い方.md) | 起動と使い方(移植元) |
+| [`modules/packing_material_calculation/docs/VBA解析.md`](modules/packing_material_calculation/docs/VBA解析.md) | 移植前の VBA の構造解析 |
+| [`modules/packing_material_calculation/docs/移植計画.md`](modules/packing_material_calculation/docs/移植計画.md) | 移植の計画 |
+| [`modules/packing_material_calculation/docs/不明点.md`](modules/packing_material_calculation/docs/不明点.md) | 不明点・要確認事項 |
+| [`modules/packing_material_calculation/docs/検証/照合のやり方.md`](modules/packing_material_calculation/docs/検証/照合のやり方.md) | VBA の結果との照合のやり方(`VBA実績.csv`・`照合出力.bas` と同じフォルダ) |
+| [`modules/packing_material_calculation/docs/変更履歴.md`](modules/packing_material_calculation/docs/変更履歴.md) | 資材計算の変更履歴 |
 
 ## 起動と停止
 
