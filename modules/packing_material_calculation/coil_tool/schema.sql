@@ -188,3 +188,21 @@ CREATE TABLE IF NOT EXISTS 取り込み履歴 (
     元ファイル  TEXT NOT NULL DEFAULT '',
     件数        INTEGER NOT NULL DEFAULT 0
 );
+
+
+-- ------------------------------------------------------------------
+-- コイル実績(統合 1.2.29・現場の指示)
+--
+-- 梱包課共有の仕掛のファイル名が LS4LOT 以外(実績の形式。例: 実績_LS4.sqlite3)のとき、
+-- いまの年月の行だけを写す(`coil_tool/coil_results.py`、決まりは `common/ls4_source.py`)。
+--     外径 = BOX実績_ｺｲﾙ内径 + 2 × BOX実績_ｺｲﾙ肉厚
+-- 受注を選んだとき、ここに外径があればコイル外径の既定値にする(無ければ受注の外径 MAX)
+-- ------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS コイル実績 (
+    ロット番号   TEXT PRIMARY KEY,
+    内径         REAL,
+    肉厚         REAL,
+    外径         REAL,
+    作業開始     TEXT NOT NULL DEFAULT '',
+    元ファイル   TEXT NOT NULL DEFAULT ''
+);

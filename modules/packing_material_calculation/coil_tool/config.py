@@ -120,6 +120,14 @@ LOT_DB_FILES = {
     "仕掛受注": "SIKAODR.sqlite3",
 }
 
+# 梱包課共有の仕掛フォルダ(第1パスの LS4LOT。梱包明細と同じ既定。統合 1.2.29)。
+# 資材計算は**名前が LS4LOT 以外のとき(実績の形式)だけ**読み、コイル外径 = 内径 + 2 × 肉厚 に使う
+# (`coil_tool/coil_results.py`。名前が LS4LOT のままなら読まない ── 内径・肉厚が無いので)
+DEFAULT_KONPO_DB_DIR = Path(os.environ.get(
+    "COIL_TOOL_KONPO_DB_DIR",
+    r"\\nlmfangyshrd\各課共有\0130_日軽稲沢\梱包課\梱包課共有\仕掛"))
+KONPO_DB_FILE = "LS4LOT.sqlite3"
+
 # CSV などの書き出し先。**書く場所**なので、既定は共有ではなくツールの下。
 # 【いまは使っていない】設定の欄は外した(統合 1.2.22。そこへ書き出す処理が移植元から無かった)。
 # 書き出す機能を足すときの置き場所として残す
@@ -233,8 +241,27 @@ def file_name_problem(name: str) -> str:
     bad = sorted({c for c in text if c in BAD_FILE_CHARS})
     if bad:
         return ("ファイル名に使えない文字があります: " + " ".join(bad)
-                + "(フォルダは「仕掛台帳(2つ目)のフォルダ」の欄に入れてください)")
+                + "(フォルダはフォルダの欄に入れてください)")
     return ""
+
+
+def konpo_db_dir() -> Path:
+    """梱包課共有の仕掛フォルダ(第1パスの LS4LOT)。"""
+    return _configured_dir(KEY_KONPO_DB_DIR, DEFAULT_KONPO_DB_DIR)
+
+
+def konpo_db_file() -> str:
+    """第1パスの LS4LOT の名前(空なら LS4LOT.sqlite3)。LS4LOT 以外なら実績の形式で読む。"""
+    from . import user_settings
+    value = user_settings.get(KEY_KONPO_DB_FILE)
+    return value.strip() if isinstance(value, str) and value.strip() else KONPO_DB_FILE
+
+
+def ls4_db2_file() -> str:
+    """第2パスの LS4LOT の名前(空なら第1パスと同じ名前)。"""
+    from . import user_settings
+    value = user_settings.get(KEY_LS4_DB2_FILE)
+    return value.strip() if isinstance(value, str) and value.strip() else konpo_db_file()
 
 
 def lot_db_dirs() -> list[Path]:
@@ -267,6 +294,10 @@ KEY_LOT_DB2_FILES = {
     "仕掛引当": "lot_db2_file_hiki",
     "仕掛受注": "lot_db2_file_odr",
 }
+# 第1パスの LS4LOT(梱包課共有)のフォルダと名前、第2パスの LS4LOT の名前(統合 1.2.29。梱包明細と同じ鍵)
+KEY_KONPO_DB_DIR = "konpo_db_dir"
+KEY_KONPO_DB_FILE = "konpo_db_file"
+KEY_LS4_DB2_FILE = "lot_db2_file_ls4"
 # ファイル名に使えない文字(Windows)。2つ目のファイル名の欄で断る
 BAD_FILE_CHARS = '\\/:*?"<>|'
 KEY_EXPORT_DIR = "export_dir"

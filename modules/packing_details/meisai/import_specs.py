@@ -23,7 +23,7 @@ IMEを切り替えることになるため。対応表をここ1か所に置け�
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .logging_utils import get_logger
 
@@ -156,6 +156,16 @@ IMPORT_SPECS: dict[str, list[tuple[str, str, object]]] = {
         ("製造板丈", "製造板丈", to_real),
     ],
 }
+
+# 仕掛当工程を**実績の形式**のファイル(名前が LS4LOT 以外。例: 実績_LS4.sqlite3)から取るときの対応
+# (統合 1.2.29・現場の指示。決まりは `common/ls4_source.py`、仕様は `docs/仕掛ファイルの仕様.md`)。
+#     BOX設計_縦割数 = 当工程設計_縦割数 / BOX設計_横割数 = 当工程設計_横割数
+# ほかの列(設備名・枚本数・製造板厚 …)は実績の形式に無いので入れない(既定の 0 / 空。使っていない)
+RESULTS_SPEC: list[tuple[str, str, Callable]] = [
+    ("ロット番号", "ﾛｯﾄ番号", to_text),
+    ("当工程設計_縦割数", "BOX設計_縦割数", to_whole),
+    ("当工程設計_横割数", "BOX設計_横割数", to_whole),
+]
 
 # 値が `None` の行を落とす列。**鍵が空の行は入れても引けない。**
 REQUIRED_KEY_COLUMNS: dict[str, tuple[str, ...]] = {

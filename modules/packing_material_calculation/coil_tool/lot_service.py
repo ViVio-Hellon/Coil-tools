@@ -17,7 +17,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Optional
 
-from . import db, vba
+from . import coil_results, db, vba
 from .logging_utils import get_logger
 from .models import CalcState, OrderInfo
 
@@ -147,6 +147,14 @@ def load_into(conn: sqlite3.Connection, state: CalcState, order_no: str) -> bool
     if info is None:
         return False
     state.order = info
-    if info.コイル外径_MAX != OrderInfo.NO_DATA:
+    # コイル実績(実績の形式のファイル)に外径があれば、それを既定値にする(統合 1.2.29・現場の指示)。
+    #     外径 = BOX実績_ｺｲﾙ内径 + 2 × BOX実績_ｺｲﾙ肉厚
+    # 無ければいままでどおり受注の外径 MAX(`coil_tool/coil_results.py`)
+    outer = coil_results.outer_for(conn, state.LOT)
+    if outer is not None:
+        state.外径 = vba.fmt(outer, 2)
+        state.note(f"コイル外径は実績から出しました(内径 + 2 × 肉厚 = {state.外径}mm)。"
+                   "違うときは打ち直してください")
+    elif info.コイル外径_MAX != OrderInfo.NO_DATA:
         state.外径 = info.コイル外径_MAX
     return True

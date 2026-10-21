@@ -21,8 +21,9 @@ from common import app_config as _integrated_app_config
 from common import app_config as _common_app_config
 from common import logging_utils as _common_logging
 from common import storage_places
-from modules.packing_material_calculation.coil_tool import (admin_session, app_config, config, data_sync,
-                       distribution, source_db, staff, user_settings)
+from common import ls4_source
+from modules.packing_material_calculation.coil_tool import (admin_session, app_config, coil_results, config,
+                       data_sync, distribution, source_db, staff, user_settings)
 from modules.packing_material_calculation.coil_tool.presenters import master as master_presenter
 from modules.packing_material_calculation.coil_tool.logging_utils import get_logger
 
@@ -75,6 +76,42 @@ FIELDS: tuple[dict[str, Any], ...] = (
         "kind": "file",
         "table": table,
     } for table, key in config.KEY_LOT_DB2_FILES.items()),
+    {
+        # 梱包課共有の仕掛(第1パスの LS4LOT)。統合 1.2.29。資材計算は**名前が LS4LOT 以外**
+        # (実績の形式)のときだけ読み、コイル外径 = 内径 + 2 × 肉厚 に使う
+        "key": config.KEY_KONPO_DB_DIR,
+        "label": "第1パス: 梱包課共有の仕掛フォルダ(LS4LOT)",
+        "detail": ("名前が LS4LOT 以外(実績の形式)のときだけ読み、コイル外径 = 内径 + 2 × 肉厚 にする。"
+                   "LS4LOT のままなら読まない(受注の外径 MAX を使う)"),
+        "vba": "",
+        "expect": "下の「LS4LOT の名前」",
+        "default": str(config.DEFAULT_KONPO_DB_DIR),
+    },
+    {
+        "key": config.KEY_KONPO_DB_FILE,
+        "label": "第1パス: LS4LOT の名前",
+        "detail": ("梱包課共有の仕掛フォルダで探すファイル名。LS4LOT 以外の名前(例: 実績_LS4)なら実績の形式で読む"
+                   "(いまの年月の行だけ。仕様は docs/仕掛ファイルの仕様.md)"),
+        "vba": "",
+        "expect": "",
+        "default": config.KONPO_DB_FILE,
+        "optional": True,
+        "kind": "file",
+        "table": "仕掛当工程",
+        "where": "konpo",
+    },
+    {
+        "key": config.KEY_LS4_DB2_FILE,
+        "label": "第2パスの名前: LS4LOT の代わり",
+        "detail": ("第2パス(仕掛台帳の第2パスのフォルダ)で探す名前。空なら第1パスと同じ名前。"
+                   "LS4LOT 以外なら実績の形式で読み、第1パスに無いロットの外径を足す"),
+        "vba": "",
+        "expect": "",
+        "default": "",
+        "optional": True,
+        "kind": "file",
+        "table": "仕掛当工程",
+    },
 )
 # 「書き出し先」(CSV を出す場所)の欄は外した(統合 1.2.22)。移植元から欄だけがあって、
 # そこへ書き出す処理がどこにも無かった(文書を作るときに見つかった)。前の設定に値が残っていても使わない
@@ -89,6 +126,7 @@ PATH_KEYS = frozenset({
     config.KEY_MASTER_DB_DIR, config.KEY_LOT_DB_DIR,
     config.KEY_LOT_DB_DIR_2,
     *config.KEY_LOT_DB2_FILES.values(),
+    config.KEY_KONPO_DB_DIR, config.KEY_KONPO_DB_FILE, config.KEY_LS4_DB2_FILE,
 })
 
 REFUSE_NEEDS_PASSWORD = "needs_password"
@@ -123,6 +161,27 @@ def _second_file_place(table: str) -> str:
 
 for _table, _key in config.KEY_LOT_DB2_FILES.items():
     _RESOLVERS[_key] = (lambda t: lambda: _second_file_place(t))(_table)
+
+
+def _ls4_place(first: bool) -> str:
+    """LS4LOT の名前の欄の「いま見に行く場所」(統合 1.2.29)。"""
+    name = config.konpo_db_file() if first else config.ls4_db2_file()
+    if not ls4_source.is_results_name(name):
+        return f"{name}(名前が LS4LOT なので読みません。外径は受注の外径 MAX)"
+    if first:
+        folder = config.konpo_db_dir()
+    else:
+        dirs = config.lot_db_dirs()
+        if len(dirs) < 2:
+            return "(第2パスのフォルダが空なので使いません)"
+        folder = dirs[1]
+    found = source_db.find_named(folder, name)
+    return str(found) if found else f"{name}({folder} に見つかりません)"
+
+
+_RESOLVERS[config.KEY_KONPO_DB_DIR] = config.konpo_db_dir
+_RESOLVERS[config.KEY_KONPO_DB_FILE] = lambda: _ls4_place(True)
+_RESOLVERS[config.KEY_LS4_DB2_FILE] = lambda: _ls4_place(False)
 
 
 # ==================================================================
@@ -348,10 +407,14 @@ def _probe_dir(field: dict[str, Any], text: str) -> dict[str, Any]:
 def _probe_file(field: dict[str, Any], text: str, out: dict[str, Any]) -> dict[str, Any]:
     """仕掛台帳の第2パスのファイル名を確かめる: 使える名前か・第2パスのフォルダにあるか・要る列がそろっているか。"""
     name = text or field["default"]
+    if field.get("table") == "仕掛当工程" and not name:
+        name = config.konpo_db_file()                 # 第2パスの名前が空なら第1パスと同じ
     problem = config.file_name_problem(name)
     if problem:
         out["message"] = problem
         return out
+    if field.get("table") == "仕掛当工程":
+        return _probe_ls4(field, name, out)
     dirs = config.lot_db_dirs()
     if len(dirs) < 2:
         out.update(ok=True, message="第2パスのフォルダが空なので、この名前は使いません")
@@ -366,6 +429,32 @@ def _probe_file(field: dict[str, Any], text: str, out: dict[str, Any]) -> dict[s
         out["message"] = "見つかりましたが、足りない列があります: " + "・".join(missing)
         return out
     out.update(ok=True, message="見つかりました・要る列はそろっています")
+    return out
+
+
+def _probe_ls4(field: dict[str, Any], name: str, out: dict[str, Any]) -> dict[str, Any]:
+    """LS4LOT の名前を確かめる(統合 1.2.29): LS4LOT なら読まない・それ以外は実績の形式の列。"""
+    if not ls4_source.is_results_name(name):
+        out.update(ok=True, message="名前が LS4LOT なので資材計算は読みません(外径は受注の外径 MAX)")
+        return out
+    if field.get("where") == "konpo":
+        folder = config.konpo_db_dir()
+    else:
+        dirs = config.lot_db_dirs()
+        if len(dirs) < 2:
+            out.update(ok=True, message="第2パスのフォルダが空なので、この名前は使いません")
+            return out
+        folder = dirs[1]
+    path = source_db.find_named(folder, name)
+    if path is None:
+        out["message"] = f"{folder} に {name} が見つかりません"
+        return out
+    out["resolved"] = str(path)
+    missing = coil_results.missing_columns(path)
+    if missing:
+        out["message"] = "見つかりましたが、実績の形式の列が足りません: " + "・".join(missing)
+        return out
+    out.update(ok=True, message="見つかりました・実績の形式の列はそろっています(外径 = 内径 + 2 × 肉厚)")
     return out
 
 

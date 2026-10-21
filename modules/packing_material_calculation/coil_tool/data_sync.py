@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from . import config, db, import_specs, source_db
+from . import coil_results, config, db, import_specs, source_db
 from .logging_utils import get_logger
 
 log = get_logger("data_sync")
@@ -328,12 +328,18 @@ def import_all(conn: Optional[Any] = None) -> SyncResult:
     マスタさえ読めれば包装仕様の閲覧はできる。
     """
     result = SyncResult(started_at=db.now_db_string())
+
+    def run(target) -> list[TableResult]:
+        tables = import_master(target) + import_lot(target)
+        coil = coil_results.import_results(target)      # 実績の形式を読む設定のときだけ(統合 1.2.29)
+        return tables + ([coil] if coil is not None else [])
+
     if conn is None:
         with db.connect() as own:
             db.apply_schema(own)
-            result.tables = import_master(own) + import_lot(own)
+            result.tables = run(own)
     else:
-        result.tables = import_master(conn) + import_lot(conn)
+        result.tables = run(conn)
     result.finished_at = db.now_db_string()
 
     if result.ok:
@@ -496,6 +502,20 @@ def auto_import(conn: Any, *, progress=None) -> SyncResult:
         else:
             result.tables.append(_import_table(
                 conn, dest_table=dest, source_path=path, source_table=source_table))
+
+    # コイル実績(実績の形式を読む設定のときだけ。統合 1.2.29)。元が変わっていなければ飛ばす
+    if coil_results.wanted():
+        files = coil_results.sources()
+        record = known.get(coil_results.TABLE)
+        same = bool(files) and _unchanged(record, files[0]) and (
+            len(files) < 2 or _unchanged(known.get(coil_results.SECOND_NOTE), files[1]))
+        if same:
+            result.tables.append(TableResult(table=coil_results.TABLE, ok=True,
+                                             rows=int(record.get("件数", 0)), source=str(files[0])))
+        else:
+            coil = coil_results.import_results(conn)
+            if coil is not None:
+                result.tables.append(coil)
 
     if not plan:
         log.warning("取り込み元が1つも見つかりません: マスタ=%s 台帳=%s",

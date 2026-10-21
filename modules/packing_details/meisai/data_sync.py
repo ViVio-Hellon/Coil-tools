@@ -26,6 +26,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
+from common import ls4_source
+
 from . import config, import_specs, source_db
 from .logging_utils import get_logger
 
@@ -113,16 +115,61 @@ def _same_file(a: Optional[Path], b: Optional[Path]) -> bool:
     return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 
 
+def is_results_file(table: str, path: Path) -> bool:
+    """仕掛当工程を**実績の形式**で読むファイルか(名前が LS4LOT 以外。`common/ls4_source.py`)。"""
+    return table == "仕掛当工程" and ls4_source.is_results_name(Path(path).name)
+
+
+def _results_tables(path: Path) -> dict[str, list[str]]:
+    """実績のファイルの表と列。"""
+    return {t: source_db.columns(Path(path), t) for t in source_db.list_tables(Path(path))}
+
+
 def second_missing_columns(path: Path, table: str) -> list[str]:
     """2つ目のファイルに**足りない列**(取り込み元の列名)。現場の約束「名前は変えても、
-    中身の要る列は必ずそろえる」を設定画面で確かめるため。読めなければ空。"""
+    中身の要る列は必ずそろえる」を設定画面で確かめるため。読めなければ空。
+
+    仕掛当工程を実績の形式で読むファイルなら、実績の形式の要る列で見る(統合 1.2.29)。"""
     try:
+        if is_results_file(table, path):
+            tables = _results_tables(Path(path))
+            if not tables or ls4_source.choose_table(tables, import_specs.SOURCE_TABLE):
+                return []
+            best = tables.get(import_specs.SOURCE_TABLE) or next(iter(tables.values()))
+            return ls4_source.missing_required(best)
         have = set(source_db.columns(Path(path), import_specs.SOURCE_TABLE))
     except (source_db.SourceError, OSError):
         return []
     if not have:
         return []
     return [src for _col, src, _conv in import_specs.IMPORT_SPECS[table] if src not in have]
+
+
+def read_source(table: str, path: Path) -> tuple[list[dict[str, Any]], list, str]:
+    """取り込み元の行と、使う対応表と、知らせ(空でよい)。
+
+    仕掛当工程のファイル名が LS4LOT 以外なら**実績の形式**で読む(統合 1.2.29・現場の指示):
+    要る列をそろえた表を探し、**いまの年月の行だけ**を、ロットごとに作業開始がいちばん新しい
+    1行にして返す(`common/ls4_source.pick_rows`)。
+    """
+    if not is_results_file(table, path):
+        return read_table(path), import_specs.IMPORT_SPECS[table], ""
+    try:
+        tables = _results_tables(Path(path))
+        picked = ls4_source.choose_table(tables, import_specs.SOURCE_TABLE)
+        if picked is None:
+            best = tables.get(import_specs.SOURCE_TABLE) or (next(iter(tables.values())) if tables else [])
+            raise SyncError(f"{Path(path).name} に実績の形式の列がありません: "
+                            f"{', '.join(ls4_source.missing_required(best))}"
+                            "(名前が LS4LOT 以外のファイルは実績の形式で読みます)")
+        rows = source_db.read_table(Path(path), picked)
+    except source_db.SourceError as exc:
+        raise SyncError(str(exc)) from exc
+    kept = ls4_source.pick_rows(rows)
+    year, month = ls4_source.this_month()
+    note = (f"仕掛当工程: {Path(path).name} は実績の形式で読みました"
+            f"({year}-{month:02d} の行だけ {len(kept):,}ロット / 全 {len(rows):,}行)")
+    return kept, import_specs.RESULTS_SPEC, note
 
 
 def missing_sources(found: dict[str, Path]) -> dict[str, str]:
@@ -212,20 +259,23 @@ def import_table(conn: sqlite3.Connection, table: str, source_path: Path, *,
     総入れ替えすると、それまで使えていたデータまで消える。
     """
     result = result or ImportResult()
-    spec = import_specs.IMPORT_SPECS[table]
 
     try:
-        rows = read_table(source_path)
+        rows, spec, note = read_source(table, source_path)
     except SyncError as exc:
         log.warning("%s: 読み取り失敗 %s", table, exc)
         result.errors.append(f"{table}: {exc}")
         return result
+    results_format = spec is import_specs.RESULTS_SPEC
+    if note:
+        result.notes.append(note)
 
-    if not rows:
+    # 実績の形式は、今月の行が無ければ**空にする**(先月の割数を使わない。現場の指示)
+    if not rows and not results_format:
         result.imported[table] = 0
         return result
 
-    present = set(rows[0].keys())
+    present = set(rows[0].keys()) if rows else {src for _c, src, _v in spec}
     missing = [src for _col, src, _conv in spec if src not in present]
     if missing:
         keys = {src for col, src, _conv in spec
@@ -356,10 +406,9 @@ def merge_second(conn: sqlite3.Connection, table: str, path: Path,
     それを使う(python-web-tools と同じ)。同じロット・受注が両方にあれば1つ目を正とする
     (2つ目の行は足さない)。読めなければ一言残して何もしない(1つ目の分は入っている)。
     """
-    spec = import_specs.IMPORT_SPECS[table]
     key = LOT_MERGE_KEYS[table]
     try:
-        rows = read_table(path)
+        rows, spec, _note = read_source(table, path)
     except SyncError as exc:
         result.errors.append(f"{table}: 第2パスのファイルを読めませんでした({exc})")
         log.warning("%s: 2つ目 %s を読めません: %s", table, path, exc)

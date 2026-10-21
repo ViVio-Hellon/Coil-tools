@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 from modules.packing_details.meisai import config, data_sync, distribution, user_settings
@@ -20,6 +21,14 @@ from .test_web import HEADERS, _client, _post
 
 def _ls4(path: Path, *lots: str) -> None:
     _db.make_source(path, _db.TOKOTEI_COLUMNS, [_db.tokotei_row(n) for n in lots])
+
+
+def _results(path: Path, *lots: str) -> None:
+    """名前が LS4LOT 以外のファイル = 実績の形式(統合 1.2.29。いまの年月の行)。"""
+    now = date.today().strftime("%Y-%m-%d 08:00:00")
+    _db.make_source(path, ("ﾛｯﾄ番号", "BOX設計_縦割数", "BOX設計_横割数", "BOX実績_作業開始_日付"),
+                    [{"ﾛｯﾄ番号": n, "BOX設計_縦割数": "2", "BOX設計_横割数": "12",
+                      "BOX実績_作業開始_日付": now} for n in lots])
 
 
 def _tokotei(conn) -> list[str]:
@@ -43,7 +52,7 @@ class LotPathsTest(unittest.TestCase):
     # ---- 第1パス: LS4LOT の名前 ----
     def test_第1パスのLS4LOTは名前を変えられる(self):
         _ls4(self.konpo / "LS4LOT.sqlite3", "X999999")
-        _ls4(self.konpo / "当工程.sqlite3", "A000001")
+        _results(self.konpo / "当工程.sqlite3", "A000001")
         user_settings.save(config.KEY_KONPO_DB_FILE, "当工程")
         self.assertEqual(data_sync.find_sources()["仕掛当工程"], self.konpo / "当工程.sqlite3")
         self.assertEqual(config.source_files()["仕掛当工程"], "当工程")
@@ -67,7 +76,7 @@ class LotPathsTest(unittest.TestCase):
         user_settings.save(config.KEY_LOT_DB_DIR2, str(self.second))
         user_settings.save(config.KEY_LOT_DB2_FILES["仕掛当工程"], "LS4_2")
         _ls4(self.second / "LS4LOT.sqlite3", "X999999")
-        _ls4(self.second / "LS4_2.sqlite3", "B000001")
+        _results(self.second / "LS4_2.sqlite3", "B000001")
         self.assertEqual(data_sync.find_sources()["仕掛当工程"], self.second / "LS4_2.sqlite3")
         self.import_konpo()
         self.assertEqual(_tokotei(self.conn), ["B000001"])

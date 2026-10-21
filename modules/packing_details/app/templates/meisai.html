@@ -235,6 +235,8 @@
           <label for="setKonpoFile" id="setKonpoFileHead">LS4LOT の名前</label>
           <input type="text" id="setKonpoFile" spellcheck="false" autocomplete="off" aria-labelledby="setKonpoFileHead">
         </div>
+        {#- 名前で形式が変わる(統合 1.2.29。docs/仕掛ファイルの仕様.md) -#}
+        <span class="stamp">名前が LS4LOT なら いままでの形式(当工程設計_縦割数・横割数)。それ以外の名前(例: 実績_LS4)なら実績の形式で読みます(BOX設計_縦割数・横割数。作業開始がいまの年月の行だけ)。第2パスの名前も同じです。</span>
         <span class="stamp" id="setKonpoNote"></span>
         <div class="set-stamps" id="setKonpoStamps"></div>
         <div class="set-qa-buttons">

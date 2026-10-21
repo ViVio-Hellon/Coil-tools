@@ -9,6 +9,9 @@
 | ペナラベル | テスラ向け出荷ラベルの発行と風袋計算 | `ViVio-Hellon/packing-pena-label-python-web` | v1.5.0 |
 | 資材計算 | パレット・リプラ・緩衝材の員数、チェックリスト、発注票 | `ViVio-Hellon/packing-material-calculation-python-web` | VER 0.2.0 |
 
+**仕掛ファイル(SIKALOT・SIKAHIKI・SIKAODR・LS4LOT・実績の形式)の置き場所・ファイル名・列の関係は
+[`docs/仕掛ファイルの仕様.md`](docs/仕掛ファイルの仕様.md) にまとめてあります。**
+
 **統合 1.2.0 から、上の帯の「説明書」で、写真入りの操作説明書(4冊)をツールの中で開けます**(下の「操作説明書」)。
 
 **統合 1.1.0 から、専用の窓で動くデスクトップ版(`コイル梱包ツール.exe`。ポートを使わない)が
@@ -54,7 +57,7 @@ DB処理・帳票は移植元のまま、それぞれ独立して動きます。
 ## 画面の作り
 
 ```
-上の帯   コイル梱包ツール VER1.2.28 [梱包明細] [ペナラベル] [資材計算]   画面の色[自動|ライト|ダーク] 説明書 ログ 接続OK [終了]
+上の帯   コイル梱包ツール VER1.2.29 [梱包明細] [ペナラベル] [資材計算]   画面の色[自動|ライト|ダーク] 説明書 ログ 接続OK [終了]
 中身     見せているタブの機能の画面(iframe)。ほかのタブは隠しているだけで消えない
 ```
 
@@ -101,6 +104,7 @@ scripts/make_dist.py                配布用フォルダを作る(デスクト�
 scripts/make_shortcuts.vbs          配った先で押すと、ブラウザ版・デスクトップ版のショートカットを作る
 scripts/desktop_smoke.py            exe を起動して、画面が届く・待ち受けない・止めたら Python も終わるを確かめる
 docs/統合設計.md                    調査・比較・採用した実装・影響・テスト
+docs/仕掛ファイルの仕様.md          仕掛ファイルの置き場所(第1パス・第2パス)・LS4LOT の2つの形式・列の関係
 docs/デスクトップ版.md              デスクトップ版の作り・動きの約束・作り方・確かめたこと
 ```
 
@@ -186,10 +190,10 @@ Python を 3.12 から 3.13 に上げるなど **Store の Python の版を変�
 
 | | 版 | 出どころ |
 |---|---|---|
-| コイル梱包ツール(統合ツール) | 1.2.28 | `config/app.json`(デスクトップ版の `src-tauri/tauri.conf.json`・`Cargo.toml` もそろえる) |
-| 梱包明細 | 0.13.27 | `modules/packing_details/config/app.json` |
+| コイル梱包ツール(統合ツール) | 1.2.29 | `config/app.json`(デスクトップ版の `src-tauri/tauri.conf.json`・`Cargo.toml` もそろえる) |
+| 梱包明細 | 0.13.28 | `modules/packing_details/config/app.json` |
 | ペナラベル | 1.5.31 | `modules/packing_pena_label/app/config.py` の `APP_VERSION` |
-| 資材計算 | 0.2.26 | `modules/packing_material_calculation/config/app.json` |
+| 資材計算 | 0.2.27 | `modules/packing_material_calculation/config/app.json` |
 
 機能の中身を変えたら、その機能の版と統合ツールの版の両方を上げます。統合画面や共通部分
 だけを変えたら、統合ツールの版だけを上げます。決まりの全体は `docs/変更履歴.md`。
