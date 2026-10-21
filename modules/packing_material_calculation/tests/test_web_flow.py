@@ -47,6 +47,23 @@ def test_unknown_lot_returns_empty(ready):
     assert "ありません" in body["message"]
 
 
+def test_選んだ受注番号は面を移って戻っても残る(ready):
+    """LotNo → 受注番号を選ぶ → ほかの面へ → 戻る、で受注番号が消えていた(統合 1.2.30)。
+    戻ったときに読む中身(GET /api/calc)に、選択肢と選んだ受注番号が入っていること。"""
+    ready.post("/api/calc/lot", json={"LOT": "A123456"})
+    ready.post("/api/calc/order", json={"受注番号": "12345678"})
+    ready.get("/checklist?t=test-token")
+    view = ready.get("/api/calc").get_json()["view"]
+    assert view["candidates"] == ["12345678"]
+    assert view["order"]["受注番号"] == "12345678"
+    # LotNo を打ち直せば選択肢も入れ替わる・はじめからで消える
+    ready.post("/api/calc/lot", json={"LOT": "Z999999"})
+    assert ready.get("/api/calc").get_json()["view"]["candidates"] == []
+    ready.post("/api/calc/lot", json={"LOT": "A123456"})
+    ready.post("/api/calc/clear", json={})
+    assert ready.get("/api/calc").get_json()["view"]["candidates"] == []
+
+
 def test_order_expands_fields(ready):
     ready.post("/api/calc/lot", json={"LOT": "A123456"})
     r = ready.post("/api/calc/order", json={"受注番号": "12345678"})

@@ -82,6 +82,11 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     """`schema.sql` を適用する(何度呼んでも同じ結果)。"""
     schema_path = Path(__file__).resolve().parent / "schema.sql"
     conn.executescript(schema_path.read_text(encoding="utf-8"))
+    # あとから足した列(`CREATE TABLE IF NOT EXISTS` は前からある表に列を足さない)
+    have = {r[1] for r in conn.execute('PRAGMA table_info("コイル実績")')}
+    if have and "枚本数" not in have:
+        conn.execute('ALTER TABLE "コイル実績" ADD COLUMN 枚本数 INTEGER')   # 統合 1.2.30
+        conn.commit()
 
 
 # ------------------------------------------------------------------

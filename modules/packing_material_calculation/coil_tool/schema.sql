@@ -203,6 +203,7 @@ CREATE TABLE IF NOT EXISTS コイル実績 (
     内径         REAL,
     肉厚         REAL,
     外径         REAL,
+    枚本数       INTEGER,                -- 検入数(本)。BOX実績_枚本数、無ければ 横割数 × 縦割数(統合 1.2.30)
     作業開始     TEXT NOT NULL DEFAULT '',
     元ファイル   TEXT NOT NULL DEFAULT ''
 );

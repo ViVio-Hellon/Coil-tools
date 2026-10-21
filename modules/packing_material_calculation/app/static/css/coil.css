@@ -137,6 +137,14 @@ table.grid-table td.num{ text-align:right; font-variant-numeric:tabular-nums; }
 .resolved{ font-family:ui-monospace,monospace; font-size:11.5px;
            color:var(--muted); margin-top:5px; overflow-wrap:anywhere; }
 .probe{ font-size:12px; margin-top:5px; }
+/* 置き場所の枠(統合 1.2.30。梱包明細の「置き場所・取り込み」と同じ形) */
+.setbox{ border:1px solid var(--hairline); border-radius:8px; padding:12px 14px; margin:0 0 14px; }
+.setbox__h{ display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; font-weight:700; font-size:15px; }
+.setbox .setrow{ padding:8px 0; }
+.setbox .setrow--name .setrow__k{ font-weight:600; font-size:13px; }
+.setbox__tables{ display:grid; gap:2px; font-family:ui-monospace,monospace; font-size:11.5px;
+  background:var(--info-bg); border-radius:6px; padding:6px 10px; margin:8px 0; }
+.setbox__tables .miss{ color:var(--state-error); }
 .probe--ok{ color:var(--state-ok); }
 .probe--ng{ color:var(--state-error); }
 

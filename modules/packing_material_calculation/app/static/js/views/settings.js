@@ -44,18 +44,18 @@ openTab(location.hash.slice(1));
 window.addEventListener('hashchange', () => openTab(location.hash.slice(1)));
 
 // ------------------------------------------------------------------
-function fieldHtml(f) {
-  const optional = f.optional ? '<span class="muted">(空でよい)</span>' : '';
-  const vba = f.vba ? `<span class="setrow__vba">VBA: ${esc(f.vba)}</span>` : '';
-  const expect = f.expect
-    ? `<div class="setrow__d">探すファイル: <code>${esc(f.expect)}</code></div>` : '';
+// 置き場所の枠(統合 1.2.30。梱包明細の「置き場所・取り込み」と同じ形)。
+// 同じ枠で考えるもの(フォルダとファイル名)を1つの枠に入れ、枠ごとに確かめる・保存して取り込み
+function fieldRow(f, g) {
+  const name = f.kind === 'file';
+  // フォルダの欄が枠の見出しと同じ名前なら、同じ言葉を2度出さない(説明は枠の頭に出ている)
+  const same = g && !name && f.label === g.label;
   return `
-  <div class="setrow" data-key="${esc(f.key)}">
-    <div class="setrow__k">${esc(f.label)} ${optional} ${vba}</div>
-    <div class="setrow__d">${esc(f.detail)}</div>
-    ${expect}
+  <div class="setrow${name ? ' setrow--name' : ''}" data-key="${esc(f.key)}">
+    <label class="setrow__k" for="in-${esc(f.key)}">${esc(same ? 'フォルダ' : f.label)}</label>
+    ${same ? '' : `<div class="setrow__d">${esc(f.detail)}</div>`}
     <input type="text" class="input" id="in-${esc(f.key)}"
-           value="${esc(f.value)}" placeholder="${esc(f.default)}"
+           value="${esc(f.value)}" placeholder="${esc(f.default ? '空なら ' + f.default : '空なら使いません')}"
            spellcheck="false" autocomplete="off">
     <div class="resolved">
       いま見に行く場所: ${esc(f.resolved) || '(使いません)'}
@@ -63,14 +63,35 @@ function fieldHtml(f) {
       ${f.relative ? ' <b>(アプリのフォルダからの相対として読みました)</b>' : ''}
     </div>
     <div class="probe" id="pr-${esc(f.key)}"></div>
-    <div class="btnrow">
-      <button class="btn btn--find" type="button"
-              data-probe="${esc(f.key)}">確かめる</button>
-      <button class="btn btn--run" type="button"
-              data-save="${esc(f.key)}">この欄を保存</button>
-      <button class="btn" type="button" data-reset="${esc(f.key)}">既定に戻す</button>
-    </div>
   </div>`;
+}
+
+function groupHtml(g) {
+  const tables = g.tables.map(t => t.at
+    ? `<div>${esc(t.table)}  ${esc(t.at)}  ${esc(t.rows)}件</div>`
+    : `<div class="miss">${esc(t.table)}  まだ取り込んでいません</div>`).join('');
+  return `
+  <section class="setbox" data-group="${esc(g.id)}">
+    <div class="setbox__h"><span>${esc(g.label)}</span>
+      <span class="where where-local">このPCに保存</span></div>
+    <p class="setrow__d">${esc(g.lead)}</p>
+    <div class="setrow__d">探すファイル: <code>${esc(g.files)}</code></div>
+    ${g.fields.map(f => fieldRow(f, g)).join('')}
+    <div class="setbox__tables">${tables}</div>
+    <div class="btnrow">
+      <button class="btn btn--find" type="button" data-gprobe="${esc(g.id)}">確かめる</button>
+      <button class="btn btn--run" type="button" data-gsave="${esc(g.id)}">保存して取り込み</button>
+      <button class="btn" type="button" data-greset="${esc(g.id)}">既定に戻す</button>
+    </div>
+    <div id="gr-${esc(g.id)}"></div>
+  </section>`;
+}
+
+function groupValues(id) {
+  const g = view.groups.find(x => x.id === id);
+  const out = {};
+  (g ? g.fields : []).forEach(f => { out[f.key] = $('#in-' + f.key).value; });
+  return out;
 }
 
 // ------------------------------------------------------------------
@@ -143,14 +164,14 @@ function render(v, opts = {}) {
   $$('#fields .setrow').forEach((row) => {
     const key = row.dataset.key;
     const input = $('input.input', row);
-    if (!key || key === opts.done || !input) return;
+    if (!key || (opts.done || []).includes(key) || !input) return;
     const probe = $('#pr-' + key);
     keep[key] = {
       value: input.value !== input.defaultValue ? input.value : null,
       probe: probe && probe.textContent ? { cls: probe.className, text: probe.textContent } : null,
     };
   });
-  $('#fields').innerHTML = v.fields.map(fieldHtml).join('');
+  $('#fields').innerHTML = (v.groups || []).map(groupHtml).join('');
   Object.keys(keep).forEach((key) => {
     const input = $('#in-' + key);
     const probe = $('#pr-' + key);
@@ -176,7 +197,7 @@ function render(v, opts = {}) {
   text($('#p-log'), v.log_dir);
   renderStore(v.storage);
 
-  const order = ['包装仕様', 'パレット', 'リプラサイズ', '仕掛引当', '仕掛受注'];
+  const order = ['包装仕様', 'パレット', 'リプラサイズ', '班員名簿', '仕掛引当', '仕掛受注', 'コイル実績'];
   $('#imported').innerHTML = order.map(name => {
     const r = v.imported[name];
     return `<tr>
@@ -187,40 +208,89 @@ function render(v, opts = {}) {
     </tr>`;
   }).join('');
 
-  // 欄ごとのボタンを配り直す(innerHTML で作り直しているので毎回)。
-  // **1欄ぶんだけ送る。** まとめて送ると、直すつもりのない欄まで
-  // いまの画面の値で上書きしてしまう
-  $$('[data-save]').forEach(btn => {
+  // 枠ごとのボタンを配り直す(innerHTML で作り直しているので毎回)。
+  // **その枠の欄だけ送る。** ほかの枠の打ちかけは送らない(上書きしない)
+  $$('[data-gsave]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const key = btn.dataset.save;
-      const r = await call('/api/settings', { [key]: $('#in-' + key).value });
-      if (!r.ok) { refuse(r, '保存できません'); return; }
-      render(r.view, { done: key, master: true });
-      toast(`${label(key)} を保存しました。`
-            + '置き場所を変えたときは「いま取り込む」を押してください');
+      const id = btn.dataset.gsave;
+      const keys = Object.keys(groupValues(id));
+      btn.disabled = true;
+      btn.textContent = '取り込んでいます…';
+      const r = await call('/api/settings/group', { group: id, values: groupValues(id) });
+      btn.disabled = false;
+      btn.textContent = '保存して取り込み';
+      if (!r.view) {
+        refuse(r, '保存できません');
+        if (r.key && $('#in-' + r.key)) $('#in-' + r.key).focus();
+        return;
+      }
+      render(r.view, { done: keys, master: id === 'master' });
+      const box = $('#gr-' + id);
+      if (box) box.innerHTML = importHtml(r.tables || []);
+      const bad = (r.tables || []).filter(t => !t.ok);
+      toast(bad.length ? `保存しました。${bad.length} 件取り込めませんでした` : '保存して取り込みました',
+            bad.length ? 'warn' : '');
     });
   });
 
-  $$('[data-probe]').forEach(btn => {
+  $$('[data-gprobe]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const key = btn.dataset.probe;
-      const r = await call('/api/settings/probe',
-                           { [key]: $('#in-' + key).value });
+      const id = btn.dataset.gprobe;
+      const r = await call('/api/settings/probe', groupValues(id));
       if (!r.ok) { toast(r.message || '確かめられません', 'warn'); return; }
-      const res = r.results[0];
-      showProbe(res);
-      toast(res.ok ? '届きました' : '届きませんでした', res.ok ? '' : 'warn');
+      r.results.forEach(showProbe);
+      const ng = r.results.filter(x => !x.ok).length;
+      toast(ng ? `届かない・足りないものがあります(${ng} 件)` : '届きました', ng ? 'warn' : '');
     });
   });
 
-  $$('[data-reset]').forEach(btn => {
+  $$('[data-greset]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const r = await call('/api/settings/reset', { key: btn.dataset.reset });
+      const id = btn.dataset.greset;
+      const keys = Object.keys(groupValues(id));
+      const r = await call('/api/settings/group/reset', { group: id });
       if (!r.ok) { refuse(r, '戻せません'); return; }
-      render(r.view, { done: btn.dataset.reset, master: true });
-      toast('既定に戻しました');
+      render(r.view, { done: keys, master: id === 'master' });
+      toast('既定に戻しました。取り込むときは「保存して取り込み」を押してください');
     });
   });
+}
+
+/** 取り込みの結果(枠の「保存して取り込み」と「いま取り込む」で同じ出し方) */
+function importHtml(tables) {
+  const bad = tables.filter(t => !t.ok);
+  const filled = tables.filter(t => t.ok && t.filled && t.filled.length);
+  const dup = tables.filter(t => t.duplicates && t.duplicates.length);
+  const notes = tables.filter(t => t.note);
+  let html = '';
+  if (bad.length) {
+    html += `<div class="note note--warn"><b>取り込めなかったもの</b><ul>`
+      + bad.map(t => `<li>${esc(t.table)}: ${esc(t.error)}</li>`).join('')
+      + `</ul></div>`;
+  }
+  if (filled.length) {
+    html += `<div class="note"><b>取り込み元に無かった列</b>（既定値で埋めました）<ul>`
+      + filled.map(t => `<li>${esc(t.table)}: ${esc(t.filled.join(', '))}</li>`).join('')
+      + `</ul></div>`;
+  }
+  if (dup.length) {
+    // **黙って捨てない。** 取り込み元に同じ番号の行が2つある、という
+    // 知らせ。先に出てきた行を使っている（VBAも最初の1件しか見ない）
+    html += `<div class="note note--warn"><b>取り込み元に同じ番号の行が2つ以上あります</b>`
+      + `（先に出てきた行を使いました。元のマスタを直してください）<ul>`
+      + dup.map(t => `<li>${esc(t.table)}: ${esc(t.duplicates.join(', '))}</li>`).join('')
+      + `</ul></div>`;
+  }
+  if (notes.length) {
+    html += `<div class="note"><b>知らせ</b><ul>`
+      + notes.map(t => `<li>${esc(t.table)}: ${esc(t.note)}</li>`).join('')
+      + `</ul></div>`;
+  }
+  if (!html && tables.length) {
+    html = `<p class="probe probe--ok">✓ 取り込みました: `
+      + tables.map(t => `${esc(t.table)} ${esc(t.rows)}件`).join('・') + '</p>';
+  }
+  return html;
 }
 
 /** 担当者の一覧。**取り込み直したら、ここも入れ替わる。**
@@ -275,7 +345,7 @@ function renderPathLock(canEdit) {
     '置き場所を変えるにはパスワードが要ります。'
     + 'この画面のいちばん上でパスワードを入れてください。'
     + '（見るだけならそのままできます）';
-  $$('[data-save], [data-reset]').forEach(b => { b.disabled = !canEdit; });
+  $$('[data-gsave], [data-greset]').forEach(b => { b.disabled = !canEdit; });
 
   // 配布設定も同じ関門(置き場所とパスワードを配るので)
   const dist = $('#distLock');
@@ -413,36 +483,7 @@ $('#import').addEventListener('click', async () => {
 
   const box = $('#import-result');
   const bad = (r.tables || []).filter(t => !t.ok);
-  const filled = (r.tables || []).filter(t => t.ok && t.filled && t.filled.length);
-  const dup = (r.tables || []).filter(t => t.duplicates && t.duplicates.length);
-  // 仕掛台帳の第2パスから足した件数など(統合 1.2.7)
-  const notes = (r.tables || []).filter(t => t.note);
-
-  let html = '';
-  if (bad.length) {
-    html += `<div class="note note--warn"><b>取り込めなかったもの</b><ul>`
-      + bad.map(t => `<li>${esc(t.table)}: ${esc(t.error)}</li>`).join('')
-      + `</ul></div>`;
-  }
-  if (filled.length) {
-    html += `<div class="note"><b>取り込み元に無かった列</b>（既定値で埋めました）<ul>`
-      + filled.map(t => `<li>${esc(t.table)}: ${esc(t.filled.join(', '))}</li>`).join('')
-      + `</ul></div>`;
-  }
-  if (dup.length) {
-    // **黙って捨てない。** 取り込み元に同じ番号の行が2つある、という
-    // 知らせ。先に出てきた行を使っている（VBAも最初の1件しか見ない）
-    html += `<div class="note note--warn"><b>取り込み元に同じ番号の行が2つ以上あります</b>`
-      + `（先に出てきた行を使いました。元のマスタを直してください）<ul>`
-      + dup.map(t => `<li>${esc(t.table)}: ${esc(t.duplicates.join(', '))}</li>`).join('')
-      + `</ul></div>`;
-  }
-  if (notes.length) {
-    html += `<div class="note"><b>第2パス</b><ul>`
-      + notes.map(t => `<li>${esc(t.table)}: ${esc(t.note)}</li>`).join('')
-      + `</ul></div>`;
-  }
-  box.innerHTML = html;
+  box.innerHTML = importHtml(r.tables || []);
 
   if (r.view) render(r.view, { master: true });
   toast(r.ok ? `取り込みました（${r.total} 件）`

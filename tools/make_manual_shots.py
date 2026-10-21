@@ -445,11 +445,18 @@ def material_scene(app, ctx, sh, cam):
     fr.wait_for_timeout(800)
     cam.take("material-settings", pg, clip=clip, marks=[
         (1, box_of(fr, "#authPass"), "b"), (2, box_of(fr, "#tab-source"), "b"),
-        (3, box_of(fr, "#fields .setrow"), "l")])
+        (3, box_of(fr, "#fields .setbox"), "l")])
+    # 枠の1つ(第1パス 梱包課共有の仕掛。フォルダと名前の2つ)を全部見せる: 欄・取り込んだ表・ボタン
+    into_view(fr, '#fields .setbox[data-group="konpo"]')
+    cam.take("material-settings-group", pg, clip=clip, marks=[
+        (1, box_of(fr, '#fields .setbox[data-group="konpo"] .setbox__h'), "l"),
+        (2, box_of(fr, '#fields .setbox[data-group="konpo"] [data-gprobe]'), "b"),
+        (3, box_of(fr, '#fields .setbox[data-group="konpo"] [data-gsave]'), "b"),
+        (4, box_of(fr, '#fields .setbox[data-group="konpo"] [data-greset]'), "b")])
     into_view(fr, "#import")
     cam.take("material-import", pg, clip=clip, marks=[
         (1, box_of(fr, "#auto-import")), (2, box_of(fr, "#import")), (3, box_of(fr, "#imported"), "l")])
-    fr.fill("#authPass", "nisk")
+    fr.fill("#authPass", E.MATERIAL_PASSWORD)
     fr.click("#authOpen")
     E.material_toast(fr, "直せるように")
     fr.click("#tab-master")

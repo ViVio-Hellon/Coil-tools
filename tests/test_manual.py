@@ -27,6 +27,19 @@ TEMPLATES = ROOT / "templates" / "manual"
 IMG = ROOT / "static" / "manual" / "img"
 
 
+def _default_passwords() -> list:
+    """3機能の既定のパスワード(設定のファイルの字面から拾う。試験に文字で書かない)。"""
+    out = []
+    for rel, name in (("modules/packing_material_calculation/coil_tool/config.py", "ADMIN_PASSWORD"),
+                      ("modules/packing_pena_label/app/services/settings.py", "PATH_PASSWORD"),
+                      ("modules/packing_details/meisai/config.py", "ADMIN_PASSWORD")):
+        src = (ROOT / rel).read_text(encoding="utf-8")
+        m = re.search(rf'^{name}\s*=\s*(?:os\.environ\.get\([^,]+,\s*)?"([^"]*)"', src, re.M)
+        assert m, (rel, name)
+        out.append(m.group(1))
+    return out
+
+
 def png_size(path: Path) -> tuple:
     """PNG の幅と高さ(IHDR)。Pillow を使わない(現場の PC には無い)。"""
     head = path.read_bytes()[:24]
@@ -133,7 +146,18 @@ class ManualPhotosTest(unittest.TestCase):
         """パスワード(既定値)は説明書に載せない。"""
         for path in TEMPLATES.glob("*.html"):
             text = path.read_text(encoding="utf-8")
-            self.assertNotIn("nisk", text, path.name)
+            for secret in _default_passwords():
+                self.assertNotIn(secret, text, path.name)
+
+    def test_no_password_in_the_documents(self):
+        """README・文書(md)にも既定のパスワードを書かない。"""
+        books = [p for p in ROOT.rglob("*.md")
+                 if not any(part in (".git", "node_modules", "target") for part in p.parts)]
+        self.assertTrue(books)
+        for path in books:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for secret in _default_passwords():
+                self.assertNotIn(secret, text, str(path.relative_to(ROOT)))
 
 
 class OpenFromTheToolTest(unittest.TestCase):

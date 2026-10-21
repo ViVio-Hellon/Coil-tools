@@ -26,6 +26,7 @@ from modules.packing_pena_label import server
 from modules.packing_pena_label.app.config import Config                          # noqa: E402
 from modules.packing_pena_label.app.repositories.material_repo import MaterialRepository  # noqa: E402
 from modules.packing_pena_label.app.services import master_admin as MA            # noqa: E402
+from modules.packing_pena_label.app.services.settings import PATH_PASSWORD as _PW   # noqa: E402
 
 
 def make_master(path, rows=None):
@@ -289,13 +290,13 @@ class MasterAdminHttpTest(unittest.TestCase):
     def test_bad_row_id_is_400(self):
         st, _ = self.post("/api/master/save",
                           {"table": "資材重量", "rowId": "あ",
-                           "values": {"係数": "1"}, "password": "nisk"})
+                           "values": {"係数": "1"}, "password": _PW})
         self.assertEqual(st, 400)
 
     def test_missing_row_is_409(self):
         st, j = self.post("/api/master/save",
                           {"table": "資材重量", "rowId": 9999,
-                           "values": {"係数": "1"}, "password": "nisk"})
+                           "values": {"係数": "1"}, "password": _PW})
         self.assertEqual(st, 409)
         self.assertEqual(j["refuse"], MA.REFUSE_NO_ROW)
 
@@ -321,7 +322,7 @@ class MasterAdminHttpTest(unittest.TestCase):
         rid = rows["rows"][0]["__行"]
         st, j = self.post("/api/master/save",
                           {"table": "資材重量", "rowId": rid,
-                           "values": {"単位質量": "0.55"}, "password": "nisk"})
+                           "values": {"単位質量": "0.55"}, "password": _PW})
         self.assertEqual(st, 200)
         self.assertTrue(j["ok"], j)
         _, m = self.post("/api/materials", {})

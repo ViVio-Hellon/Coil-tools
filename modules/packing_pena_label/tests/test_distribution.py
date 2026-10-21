@@ -28,7 +28,7 @@ from modules.packing_pena_label.app import config as C                          
 from modules.packing_pena_label.app.config import Config, load_config             # noqa: E402
 from modules.packing_pena_label.app.services import distribution as D             # noqa: E402
 
-PW = "nisk"
+from modules.packing_pena_label.app.services.settings import PATH_PASSWORD as PW   # noqa: E402
 
 
 class DistributionTestCase(unittest.TestCase):

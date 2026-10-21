@@ -52,6 +52,7 @@ function render(v) {
   if (document.activeElement !== $('#ins')) $('#ins').value = v.input.検入数;
   if (document.activeElement !== $('#outer')) $('#outer').value = v.input.外径;
   if (document.activeElement !== $('#stack')) $('#stack').value = r.積数;
+  showOrderChoices(v);
 
   // ---- 受注情報 ----
   text($('#o-厚'), o.受注板厚);        text($('#o-幅'), o.受注板幅);
@@ -134,6 +135,26 @@ function apply(res, okMessage) {
 // ------------------------------------------------------------------
 // ロット
 // ------------------------------------------------------------------
+/**
+ * 受注番号の選択肢と、選んだ受注番号をサーバの中身から出し直す(統合 1.2.30)。
+ * 以前は LotNo を打ったときにだけ選択肢を作っていたので、ほかの面へ移って戻ると
+ * 受注情報は残っているのに受注番号の欄が「—」になった。
+ */
+function showOrderChoices(v) {
+  const sel = $('#order-no');
+  if (document.activeElement === sel) return;
+  const chosen = (v.order && v.order.受注番号) || '';
+  const list = (v.candidates || []).slice();
+  if (chosen && !list.includes(chosen)) list.push(chosen);
+  const want = ['', ...list].join('\n');
+  const have = [...sel.options].map(o => o.value).join('\n');
+  if (want !== have) {
+    sel.innerHTML = '<option value="">—</option>'
+      + list.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  }
+  sel.value = chosen;
+}
+
 $('#lot').addEventListener('input', async (e) => {
   // VBA は7桁打ち終わった時点で自動で走らせていた。同じにする
   const value = e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, '');
@@ -142,9 +163,8 @@ $('#lot').addEventListener('input', async (e) => {
 
   const r = await call('/api/calc/lot', { LOT: value });
   const sel = $('#order-no');
-  sel.innerHTML = '<option value="">—</option>'
-    + (r.candidates || []).map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
   if (r.view) render(r.view);
+  else sel.innerHTML = '<option value="">—</option>';
   if (r.message) toast(r.message, 'warn');
   else if ((r.candidates || []).length === 1) {
     // 候補が1つなら選んでおく。選ばせる意味がない

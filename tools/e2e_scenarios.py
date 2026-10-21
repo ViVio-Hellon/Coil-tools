@@ -79,6 +79,23 @@ ROOT = Path(__file__).resolve().parent.parent
 results: list = []
 
 
+def default_password(rel: str, name: str) -> str:
+    """既定のパスワードを、その機能の設定のファイルから読む(試験・道具に文字で書かない)。
+
+    取り込むと起動時の処理が走るものもあるので、ファイルの字面から拾う。"""
+    src = (ROOT / rel).read_text(encoding="utf-8")
+    m = re.search(rf'^{name}\s*=\s*(?:os\.environ\.get\([^,]+,\s*)?"([^"]*)"', src, re.M)
+    if not m:
+        raise RuntimeError(f"{rel} に {name} が見つかりません")
+    return m.group(1)
+
+
+MATERIAL_PASSWORD = default_password("modules/packing_material_calculation/coil_tool/config.py",
+                                     "ADMIN_PASSWORD")
+PENA_PASSWORD = default_password("modules/packing_pena_label/app/services/settings.py", "PATH_PASSWORD")
+DETAILS_PASSWORD = default_password("modules/packing_details/meisai/config.py", "ADMIN_PASSWORD")
+
+
 def check(name, ok, detail=""):
     results.append((name, bool(ok), detail))
     print("  %s %-52s %s" % ("OK " if ok else "NG ", name, str(detail)[:110]), flush=True)
@@ -668,6 +685,18 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
     fr.check("#size-fixed")
     fr.click("#add")
     check("資材計算: チェックリストへ積む", material_toast(fr, "行目に積みました"), text(fr, "#toast"))
+    # 面を移って戻っても、選んだ受注番号が残っている(戻ると「—」になっていた。統合 1.2.30)
+    fr.click('nav.rail a.rail__item[href*="/checklist"]')
+    fr.wait_for_load_state()
+    fr = sh.frame("material")
+    material_ready(fr)
+    fr.click('nav.rail a.rail__item[href*="/calc"]')
+    fr.wait_for_load_state()
+    fr = sh.frame("material")
+    material_ready(fr)
+    check("資材計算: 面を移って戻っても受注番号が残っている",
+          wait_until(lambda: text(fr, "#order-no") == ORDER_NO and text(fr, "#lot") == "A123456", 8),
+          (text(fr, "#lot"), text(fr, "#order-no")))
     fr.click('nav.rail a.rail__item[href*="/checklist"]')
     fr.wait_for_load_state()
     fr = sh.frame("material")
@@ -1587,7 +1616,7 @@ def scenario_master(app: App, ctx, sh: Shell, note: dict) -> None:
     p = sh.tab("pena")
     master_db = str(app.home / "master" / "梱包資材マスタ.sqlite3")
     res = _api(p, "/pena/api/settings/save",
-               {"values": {"material_db_file": master_db}, "password": "nisk"})
+               {"values": {"material_db_file": master_db}, "password": PENA_PASSWORD})
     check("マスタ: ペナラベル 資材マスタ(SQLite)を指す", res["status"] == 200, res["body"])
     p.click('.appbar-nav a[href$="/settings"]')
     wait_until(lambda: visible(p, '.subtab[data-sub="master"]'), 10)
@@ -1595,7 +1624,7 @@ def scenario_master(app: App, ctx, sh: Shell, note: dict) -> None:
     _sort_check(p, "ペナラベル", "#mTbl thead", "#mTbl tbody")
     # 元へ戻す(ほかの段はペナラベルを CSV で動かしている)
     res = _api(p, "/pena/api/settings/save",
-               {"values": {"material_db_file": ""}, "password": "nisk"})
+               {"values": {"material_db_file": ""}, "password": PENA_PASSWORD})
     check("マスタ: ペナラベル 資材マスタの設定を元へ戻す", res["status"] == 200, res["body"])
     p.click('.appbar-nav a[data-pane="home"]')
     pena_ready(p)
@@ -1668,7 +1697,7 @@ def scenario_trail(app: App, ctx, sh: Shell, note: dict) -> None:
     lf.click("#btnDistExport")
     check("後追い: 配布設定に書き出すには管理者パスワードが要る", dist_said("違います"),
           lf.locator("#distResult").text_content())
-    admin = os.environ.get("PACKING_DETAILS_ADMIN_PASSWORD", "nisk")
+    admin = os.environ.get("PACKING_DETAILS_ADMIN_PASSWORD", DETAILS_PASSWORD)
     lf.fill("#distPassword", admin)
     lf.click("#btnDistExport")
     dist_file = App.dist_common(app.home) / "設定.json"

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from flask import Blueprint, current_app, jsonify, render_template, request
 
@@ -22,7 +22,7 @@ from common import app_config as _common_app_config
 from common import logging_utils as _common_logging
 from common import storage_places
 from common import ls4_source
-from modules.packing_material_calculation.coil_tool import (admin_session, app_config, coil_results, config,
+from modules.packing_material_calculation.coil_tool import (admin_session, app_config, coil_results, config, db,
                        data_sync, distribution, source_db, staff, user_settings)
 from modules.packing_material_calculation.coil_tool.presenters import master as master_presenter
 from modules.packing_material_calculation.coil_tool.logging_utils import get_logger
@@ -113,6 +113,59 @@ FIELDS: tuple[dict[str, Any], ...] = (
         "table": "仕掛当工程",
     },
 )
+FIELD_BY_KEY = {f["key"]: f for f in FIELDS}
+
+# 置き場所の**枠**(統合 1.2.30・現場の指摘: 同じ枠で考えるものを別々の欄で設定していて間違えやすい。
+# 梱包明細の「置き場所・取り込み」と同じ形)。枠ごとに確かめる・保存して取り込み・既定に戻す。
+# `tables` は保存したあとに取り込む表(その枠の分だけ)
+GROUPS: tuple[dict[str, Any], ...] = (
+    {"id": "master", "label": "梱包資材マスタのフォルダ",
+     "lead": "包装仕様・パレット・リプラサイズ・班員名簿を読む先(VBA PATH_AIM_参照)。",
+     "keys": (config.KEY_MASTER_DB_DIR,),
+     "tables": ("包装仕様", "パレット", "リプラサイズ", "班員名簿")},
+    {"id": "lot", "label": "第1パス: 仕掛台帳のフォルダ",
+     "lead": "ロット検索と受注情報を読む先(VBA PATH_仕掛_参照)。ファイル名は決まっています。",
+     "keys": (config.KEY_LOT_DB_DIR,),
+     "tables": ("仕掛引当", "仕掛受注")},
+    {"id": "konpo", "label": "第1パス: 梱包課共有の仕掛フォルダ(LS4LOT)",
+     "lead": ("名前が LS4LOT 以外(実績の形式。例: 実績_LS4)のときだけ読み、コイル外径(内径 + 2 × 肉厚)と"
+              "検入数(BOX実績_枚本数)に使います。LS4LOT のままなら読みません(仕様は docs/仕掛ファイルの仕様.md)。"),
+     "keys": (config.KEY_KONPO_DB_DIR, config.KEY_KONPO_DB_FILE),
+     "tables": ("コイル実績",)},
+    {"id": "second", "label": "第2パス: 仕掛ファイルのフォルダ",
+     "lead": ("第1パスで見つからないときに見る先(空なら使いません)。第1パスに無いファイルは第2パスから読み、"
+              "第1パスに無いロット・受注は第2パスから足します(両方にあれば第1パス)。名前が空なら第1パスと同じ名前。"),
+     "keys": (config.KEY_LOT_DB_DIR_2, *config.KEY_LOT_DB2_FILES.values(), config.KEY_LS4_DB2_FILE),
+     "tables": ("仕掛引当", "仕掛受注", "コイル実績")},
+)
+GROUP_BY_ID = {g["id"]: g for g in GROUPS}
+
+
+def _group_files(group_id: str) -> str:
+    """その枠で探すファイル(画面に出す。**何を置けばよいか**が分からないと直せない)。"""
+    if group_id == "master":
+        return config.MATERIAL_DB_NAME
+    if group_id == "lot":
+        return " / ".join(config.LOT_DB_FILES[t] for t in config.KEY_LOT_DB2_FILES)
+    if group_id == "konpo":
+        return config.konpo_db_file()
+    names = config.lot_db2_files()
+    return " / ".join([names[t] for t in config.KEY_LOT_DB2_FILES] + [config.ls4_db2_file()])
+
+
+def _group_view(group: dict[str, Any], imported: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": group["id"], "label": group["label"], "lead": group["lead"],
+        "files": _group_files(group["id"]),
+        "fields": [_field_view(FIELD_BY_KEY[k]) for k in group["keys"]],
+        "tables": [{"table": t,
+                    "at": (imported.get(t) or {}).get("取り込み日時", ""),
+                    "rows": (imported.get(t) or {}).get("件数", ""),
+                    "source": (imported.get(t) or {}).get("元ファイル", "")}
+                   for t in group["tables"]],
+    }
+
+
 # 「書き出し先」(CSV を出す場所)の欄は外した(統合 1.2.22)。移植元から欄だけがあって、
 # そこへ書き出す処理がどこにも無かった(文書を作るときに見つかった)。前の設定に値が残っていても使わない
 
@@ -270,6 +323,8 @@ def _view(conn) -> dict[str, Any]:
     return {
         "about": _about(),
         "fields": [_field_view(f) for f in FIELDS],
+        # 置き場所の枠(統合 1.2.30)。画面はこれで描く
+        "groups": [_group_view(g, data_sync.last_import(conn)) for g in GROUPS],
         "line": user_settings.get_line(),
         "lines": list(config.LINES),
         "worker": worker,
@@ -347,13 +402,27 @@ def get_ribbon():
 # ==================================================================
 # 確かめる ── 保存する前に、そこに届くか見る
 # ==================================================================
-def _probe_dir(field: dict[str, Any], text: str) -> dict[str, Any]:
+def _typed_dir(typed: dict[str, Any], key: str) -> Optional[Path]:
+    """同じ枠で**いま打ってある**フォルダ(保存前)。打っていなければ None(保存してある場所を見る)。"""
+    if key not in typed:
+        return None
+    text = str(typed.get(key) or "").strip()
+    if not text:
+        return None
+    try:
+        return config.resolve_dir(text)
+    except ValueError:
+        return None
+
+
+def _probe_dir(field: dict[str, Any], text: str,
+               typed: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """打たれた場所を見に行く。**保存はしない。**"""
     out: dict[str, Any] = {"key": field["key"], "ok": False,
                            "resolved": "", "message": "", "found": []}
     text = (text or "").strip()
     if field.get("kind") == "file":
-        return _probe_file(field, text, out)
+        return _probe_file(field, text, out, typed or {})
     if not text:
         if field.get("optional"):
             out.update(ok=True, message="空のままにします(使いません)")
@@ -404,7 +473,8 @@ def _probe_dir(field: dict[str, Any], text: str) -> dict[str, Any]:
     return out
 
 
-def _probe_file(field: dict[str, Any], text: str, out: dict[str, Any]) -> dict[str, Any]:
+def _probe_file(field: dict[str, Any], text: str, out: dict[str, Any],
+                typed: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """仕掛台帳の第2パスのファイル名を確かめる: 使える名前か・第2パスのフォルダにあるか・要る列がそろっているか。"""
     name = text or field["default"]
     if field.get("table") == "仕掛当工程" and not name:
@@ -414,8 +484,11 @@ def _probe_file(field: dict[str, Any], text: str, out: dict[str, Any]) -> dict[s
         out["message"] = problem
         return out
     if field.get("table") == "仕掛当工程":
-        return _probe_ls4(field, name, out)
+        return _probe_ls4(field, name, out, typed or {})
     dirs = config.lot_db_dirs()
+    second_typed = _typed_dir(typed or {}, config.KEY_LOT_DB_DIR_2)
+    if second_typed is not None:
+        dirs = [dirs[0], second_typed]
     if len(dirs) < 2:
         out.update(ok=True, message="第2パスのフォルダが空なので、この名前は使いません")
         return out
@@ -432,15 +505,19 @@ def _probe_file(field: dict[str, Any], text: str, out: dict[str, Any]) -> dict[s
     return out
 
 
-def _probe_ls4(field: dict[str, Any], name: str, out: dict[str, Any]) -> dict[str, Any]:
+def _probe_ls4(field: dict[str, Any], name: str, out: dict[str, Any],
+               typed: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """LS4LOT の名前を確かめる(統合 1.2.29): LS4LOT なら読まない・それ以外は実績の形式の列。"""
     if not ls4_source.is_results_name(name):
         out.update(ok=True, message="名前が LS4LOT なので資材計算は読みません(外径は受注の外径 MAX)")
         return out
     if field.get("where") == "konpo":
-        folder = config.konpo_db_dir()
+        folder = _typed_dir(typed or {}, config.KEY_KONPO_DB_DIR) or config.konpo_db_dir()
     else:
         dirs = config.lot_db_dirs()
+        second_typed = _typed_dir(typed or {}, config.KEY_LOT_DB_DIR_2)
+        if second_typed is not None:
+            dirs = [dirs[0], second_typed]
         if len(dirs) < 2:
             out.update(ok=True, message="第2パスのフォルダが空なので、この名前は使いません")
             return out
@@ -465,7 +542,7 @@ def probe():
     results = []
     for field in FIELDS:
         if field["key"] in payload:
-            results.append(_probe_dir(field, str(payload[field["key"]])))
+            results.append(_probe_dir(field, str(payload[field["key"]]), payload))
     if not results:
         return jsonify(ok=False, reason="no_field",
                        message="確かめる欄がありません"), 400
@@ -529,6 +606,80 @@ def save_settings():
     return jsonify(ok=True, view=_view(get_db()))
 
 
+def _table_results(tables) -> list[dict[str, Any]]:
+    return [{"table": t.table, "ok": t.ok, "rows": t.rows, "source": t.source, "error": t.error,
+             "filled": t.filled, "duplicates": t.duplicates, "note": t.note} for t in tables]
+
+
+@bp.post("/api/settings/group")
+def save_group():
+    """1つの枠(フォルダとファイル名)をまとめて保存し、**その枠の分だけ取り込む**(統合 1.2.30)。
+
+    梱包明細の「保存して取り込み」と同じ形。置き場所を変えただけでは手元は変わらないので、
+    保存したらすぐ取り込む。
+    """
+    payload = request.get_json(silent=True) or {}
+    group = GROUP_BY_ID.get(str(payload.get("group", "")))
+    if group is None:
+        return jsonify(ok=False, reason="unknown_group", message="知らない枠です"), 400
+    given = payload.get("values") or {}
+    if not isinstance(given, dict):
+        return jsonify(ok=False, reason="bad_values", message="値の形が違います"), 400
+    if not _path_gate(group["keys"]):
+        return jsonify(ok=False, reason=REFUSE_NEEDS_PASSWORD,
+                       message=NEEDS_PASSWORD_MESSAGE), 403
+    values: dict[str, Any] = {}
+    for key in group["keys"]:
+        if key not in given:
+            continue
+        value = str(given.get(key) or "").strip()
+        field = FIELD_BY_KEY[key]
+        if field.get("kind") == "file":
+            problem = config.file_name_problem(value)
+            if problem:
+                return jsonify(ok=False, reason="bad_name", key=key,
+                               message=f"{field['label']}: {problem}"), 422
+        elif value:
+            try:
+                config.resolve_dir(value)
+            except ValueError as exc:
+                return jsonify(ok=False, reason="bad_path", key=key,
+                               message=f"{field['label']}: 読めない書き方です: {exc}"), 422
+        values[key] = value
+    if values and not user_settings.save_many(values):
+        return jsonify(ok=False, reason="write_failed",
+                       message=f"設定ファイルに書けません: {config.USER_CONFIG_PATH}"), 500
+
+    conn = get_db()
+    db.apply_schema(conn)
+    tables = []
+    if group["id"] == "master":
+        tables += data_sync.import_master(conn)
+    if group["id"] in ("lot", "second"):
+        tables += data_sync.import_lot(conn)
+    if group["id"] in ("lot", "konpo", "second"):
+        coil = coil_results.import_results(conn)
+        if coil is not None:
+            tables.append(coil)
+    return jsonify(ok=all(t.ok for t in tables), group=group["id"],
+                   tables=_table_results(tables), view=_view(conn))
+
+
+@bp.post("/api/settings/group/reset")
+def reset_group():
+    """1つの枠をまとめて既定に戻す(取り込みはしない。戻したあとに「保存して取り込み」)。"""
+    payload = request.get_json(silent=True) or {}
+    group = GROUP_BY_ID.get(str(payload.get("group", "")))
+    if group is None:
+        return jsonify(ok=False, reason="unknown_group", message="知らない枠です"), 400
+    if not _path_gate(group["keys"]):
+        return jsonify(ok=False, reason=REFUSE_NEEDS_PASSWORD,
+                       message=NEEDS_PASSWORD_MESSAGE), 403
+    for key in group["keys"]:
+        user_settings.clear(key)
+    return jsonify(ok=True, view=_view(get_db()))
+
+
 @bp.post("/api/settings/reset")
 def reset_field():
     """1つの欄を既定へ戻す。"""
@@ -560,14 +711,8 @@ def run_import():
     return jsonify(
         ok=result.ok,
         total=result.total_rows,
-        tables=[{
-            "table": t.table, "ok": t.ok, "rows": t.rows,
-            "source": t.source, "error": t.error, "filled": t.filled,
-            # 鍵が重なっていて飛ばした行。**黙って捨てない**
-            "duplicates": t.duplicates,
-            # 仕掛台帳の第2パスから足した件数など(統合 1.2.7)
-            "note": t.note,
-        } for t in result.tables],
+        # 鍵が重なっていて飛ばした行(黙って捨てない)・第2パスから足した件数なども入る
+        tables=_table_results(result.tables),
         view=_view(conn),
     )
 

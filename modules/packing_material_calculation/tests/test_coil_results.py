@@ -19,7 +19,7 @@ from modules.packing_material_calculation.tests._web import client, sandbox   # 
 from modules.packing_material_calculation.tests.test_web_settings import unlock
 
 COLUMNS = ("ﾛｯﾄ番号", "BOX設計_横割数", "BOX設計_縦割数", "BOX実績_作業開始_日付",
-           "BOX実績_ｺｲﾙ内径", "BOX実績_ｺｲﾙ肉厚")
+           "BOX実績_ｺｲﾙ内径", "BOX実績_ｺｲﾙ肉厚", "BOX実績_枚本数")
 
 
 def _ym(months_ago: int = 0) -> str:
@@ -34,8 +34,11 @@ def _results(path: Path, rows: list[tuple]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.execute('CREATE TABLE "実績" (%s)' % ", ".join(f'"{c}" TEXT' for c in COLUMNS))
-    for lot, started, inner, thick in rows:
-        conn.execute('INSERT INTO "実績" VALUES (?, ?, ?, ?, ?, ?)', (lot, "12", "2", started, inner, thick))
+    for row in rows:
+        lot, started, inner, thick = row[:4]
+        count = row[4] if len(row) > 4 else ""
+        conn.execute('INSERT INTO "実績" VALUES (?, ?, ?, ?, ?, ?, ?)',
+                     (lot, "12", "2", started, inner, thick, count))
     conn.commit()
     conn.close()
     return path
@@ -128,3 +131,34 @@ def test_設定画面に欄があり_確かめるで形式を言う(client, plac
     assert r.get_json()["results"][0]["ok"], r.get_json()
     r = client.post("/api/settings/probe", json={config.KEY_KONPO_DB_FILE: ""})
     assert "LS4LOT" in r.get_json()["results"][0]["message"]
+
+
+def test_検入数は枚本数_無ければ横割数と縦割数の積_手で入れてあれば上書きしない(place, monkeypatch):
+    konpo, conn = place
+    user_settings.save(config.KEY_KONPO_DB_FILE, "実績_LS4")
+    _results(konpo / "実績_LS4.sqlite3", [
+        ("A000001", f"{_ym()}-05 08:00:00", "508", "200", "18"),
+        ("B000001", f"{_ym()}-05 08:00:00", "508", "200", ""),      # 枚本数が空 → 12 × 2
+    ])
+    coil_results.import_results(conn)
+    assert coil_results.count_for(conn, "A000001") == 18
+    assert coil_results.count_for(conn, "B000001") == 24
+    monkeypatch.setattr(lot_service, "expand_order",
+                        lambda c, o: OrderInfo(受注番号=o, コイル外径_MAX="1000.00"))
+    state = CalcState(LOT="A000001")
+    lot_service.load_into(conn, state, "O1")
+    assert state.検入数 == "18"
+    assert any("検入数は実績から" in m for m in state.messages)
+    typed = CalcState(LOT="A000001", 検入数="7")
+    lot_service.load_into(conn, typed, "O1")
+    assert typed.検入数 == "7"
+
+
+def test_前の版の手元の表にも枚本数の列を足す(place):
+    _konpo, conn = place
+    conn.execute('DROP TABLE "コイル実績"')
+    conn.execute('CREATE TABLE "コイル実績" (ロット番号 TEXT PRIMARY KEY, 内径 REAL, 肉厚 REAL, 外径 REAL,'
+                 " 作業開始 TEXT NOT NULL DEFAULT '', 元ファイル TEXT NOT NULL DEFAULT '')")
+    db.apply_schema(conn)
+    cols = {r[1] for r in conn.execute('PRAGMA table_info("コイル実績")')}
+    assert "枚本数" in cols

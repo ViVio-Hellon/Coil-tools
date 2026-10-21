@@ -149,6 +149,9 @@ class CalcState:
     検入数: str = ""
     外径: str = ""
     order: OrderInfo = field(default_factory=OrderInfo)
+    # LotNo で引いた受注番号の候補。画面を移って戻っても選んだ受注番号を出し直せるよう、
+    # 選択肢ごと覚えておく(統合 1.2.30。以前は画面だけが持っていて、戻ると消えた)
+    候補: list[str] = field(default_factory=list)
 
     # ---------------- パレット ----------------
     パレット種類: str = ""
@@ -260,6 +263,7 @@ class CalcState:
         self.外径 = ""
         self.単重再計算 = ""
         self.order = OrderInfo()
+        self.候補 = []
 
     # --------------------------------------------------------------
     # 読み取りの補助。判定側が `vba.val(state.積数)` と書き続けずに済む

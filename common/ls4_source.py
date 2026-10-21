@@ -13,6 +13,7 @@
         BOX設計_横割数 = 当工程設計_横割数
         BOX実績_作業開始_日付 … **いまの年月の行だけ**使う(2026-10-21 00:01:56 → 2026-10)
         BOX実績_ｺｲﾙ内径・BOX実績_ｺｲﾙ肉厚 … コイル外径 = 内径 + 2 × 肉厚(資材計算)
+        BOX実績_枚本数 … 検入数(本)(資材計算)。無ければ BOX設計_横割数 × BOX設計_縦割数
 
 同じロットが何行もあれば、作業開始がいちばん新しい行を使う。
 """
@@ -36,11 +37,12 @@ COL_BOX_YOKO = "BOX設計_横割数"
 COL_START = "BOX実績_作業開始_日付"
 COL_INNER = "BOX実績_ｺｲﾙ内径"
 COL_THICK = "BOX実績_ｺｲﾙ肉厚"
+COL_COUNT = "BOX実績_枚本数"
 
 #: 実績の形式で**無いと読まない**列(ロット・割数・月の判定)
 RESULTS_REQUIRED = (COL_LOT, COL_BOX_TATE, COL_BOX_YOKO, COL_START)
-#: 実績の形式で、あれば使う列(コイル外径)
-RESULTS_OPTIONAL = (COL_INNER, COL_THICK)
+#: 実績の形式で、あれば使う列(コイル外径・検入数)
+RESULTS_OPTIONAL = (COL_INNER, COL_THICK, COL_COUNT)
 
 _MONTH = re.compile(r"^\s*(\d{4})[-/.](\d{1,2})")
 
@@ -98,6 +100,18 @@ def outer_diameter(row: dict) -> Optional[float]:
     if inner is None or thick is None or inner <= 0 or thick <= 0:
         return None
     return round(inner + 2 * thick, 2)
+
+
+def coil_count(row: dict) -> Optional[int]:
+    """検入数(本) = BOX実績_枚本数。無い・0 以下なら BOX設計_横割数 × BOX設計_縦割数(同じ数のはず)。
+    どちらも出せなければ None(いままでどおり手で入れる)。"""
+    count = _number(row.get(COL_COUNT))
+    if count is not None and count > 0 and count == int(count):
+        return int(count)
+    tate, yoko = _number(row.get(COL_BOX_TATE)), _number(row.get(COL_BOX_YOKO))
+    if tate and yoko and tate > 0 and yoko > 0 and tate == int(tate) and yoko == int(yoko):
+        return int(tate) * int(yoko)
+    return None
 
 
 def choose_table(tables: dict[str, Iterable[str]], preferred: str = "") -> Optional[str]:

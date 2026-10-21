@@ -125,6 +125,13 @@ class Ls4SourceRulesTest(unittest.TestCase):
         self.assertIsNone(ls4_source.year_month(""))
         self.assertIsNone(ls4_source.year_month("2026-13-01"))
 
+    def test_検入数は枚本数_無ければ横割数と縦割数の積(self):
+        self.assertEqual(ls4_source.coil_count({"BOX実績_枚本数": "18", "BOX設計_横割数": "12",
+                                                "BOX設計_縦割数": "2"}), 18)
+        self.assertEqual(ls4_source.coil_count({"BOX実績_枚本数": "", "BOX設計_横割数": "12",
+                                                "BOX設計_縦割数": "2"}), 24)
+        self.assertIsNone(ls4_source.coil_count({"BOX設計_横割数": "", "BOX設計_縦割数": "2"}))
+
     def test_外径は内径と2倍の肉厚_無ければNone(self):
         self.assertEqual(ls4_source.outer_diameter({"BOX実績_ｺｲﾙ内径": "508", "BOX実績_ｺｲﾙ肉厚": "200.5"}), 909.0)
         self.assertIsNone(ls4_source.outer_diameter({"BOX実績_ｺｲﾙ内径": "508", "BOX実績_ｺｲﾙ肉厚": ""}))

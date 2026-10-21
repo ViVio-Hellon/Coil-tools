@@ -1,9 +1,9 @@
 {
  "taken": "2026-10-21",
  "versions": {
-  "app": "1.2.29",
+  "app": "1.2.30",
   "details": "0.13.28",
-  "material": "0.2.27",
+  "material": "0.2.28",
   "pena": "1.5.31"
  },
  "images": {
@@ -116,6 +116,10 @@
    "h": 818
   },
   "material-settings": {
+   "w": 1280,
+   "h": 818
+  },
+  "material-settings-group": {
    "w": 1280,
    "h": 818
   },

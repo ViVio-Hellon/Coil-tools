@@ -23,6 +23,7 @@ from modules.packing_pena_label import server
 from modules.packing_pena_label.app.config import Config                          # noqa: E402
 from modules.packing_pena_label.app.services import label_align as LA             # noqa: E402
 from modules.packing_pena_label.app.services import label_sheet as LS             # noqa: E402
+from modules.packing_pena_label.app.services.settings import PATH_PASSWORD as _PW   # noqa: E402
 
 
 def printed(value_mm, offset, scale_pct, p, o):
@@ -286,7 +287,7 @@ class AlignHttpTest(unittest.TestCase):
 
     # ---------------- 合言葉（入れただけでは分からない、の対策）----------------
     def test_right_password_is_told_so(self):
-        st, j = self.post("/api/settings/check-password", {"password": "nisk"})
+        st, j = self.post("/api/settings/check-password", {"password": _PW})
         self.assertEqual(st, 200)
         self.assertTrue(j["valid"])
 

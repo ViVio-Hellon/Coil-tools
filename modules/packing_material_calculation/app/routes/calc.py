@@ -46,6 +46,8 @@ def view_of(state: CalcState, *, shape: ripla_service.ShapeView = None) -> dict[
             "外径": state.外径,
             "積数": state.積数,
         },
+        # 受注番号の選択肢(画面を移って戻っても選んだまま出す。統合 1.2.30)
+        "candidates": list(state.候補),
         "order": {
             "受注番号": order.受注番号,
             "受注材質": order.受注材質,
@@ -160,6 +162,7 @@ def find_lot():
     state.LOT = lot_no
 
     candidates = lot_service.find_order_numbers(conn, lot_no)
+    state.候補 = list(candidates)
     if not candidates:
         return jsonify(ok=True, view=view_of(state), candidates=[],
                        message="そのロットに紐づく受注がありません"

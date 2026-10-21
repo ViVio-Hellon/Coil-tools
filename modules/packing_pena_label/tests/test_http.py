@@ -14,6 +14,7 @@ import urllib.request
 
 from modules.packing_pena_label import server
 from modules.packing_pena_label.app.config import Config                        # noqa: E402
+from modules.packing_pena_label.app.services.settings import PATH_PASSWORD as _PW   # noqa: E402
 
 
 def free_port() -> int:
@@ -240,7 +241,7 @@ class TestSettingsScreen(HttpTestCase):
 
         _, j = self.post("/api/settings/save", {
             "values": {"material_csv_file": path, "prefer_access": False},
-            "password": "nisk"})          # パス変更には合言葉が要る
+            "password": _PW})          # パス変更には合言葉が要る
         self.assertTrue(j["ok"], j)
         self.assertIn("資材マスタの参照先", j.get("applied", []))
 
@@ -258,7 +259,7 @@ class TestSettingsScreen(HttpTestCase):
     def test_unreachable_path_saves_with_warning(self):
         _, j = self.post("/api/settings/save",
                          {"values": {"aim_ref_path": "/no/such/share"},
-                          "password": "nisk"})
+                          "password": _PW})
         self.assertTrue(j["ok"], "共有が落ちていても保存はできるべき")
         self.assertTrue(j["warnings"])
 

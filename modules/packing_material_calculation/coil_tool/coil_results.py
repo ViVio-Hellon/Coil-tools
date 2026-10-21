@@ -4,6 +4,7 @@
 名前が LS4LOT のままなら読まない(内径・肉厚が無いので、いままでどおり受注の外径 MAX を使う)。
 
     外径 = BOX実績_ｺｲﾙ内径 + 2 × BOX実績_ｺｲﾙ肉厚
+    検入数(本) = BOX実績_枚本数(無ければ BOX設計_横割数 × BOX設計_縦割数。統合 1.2.30)
 
 - BOX実績_作業開始_日付 が**いまの年月**の行だけを使い、同じロットは作業開始がいちばん新しい行
   (形式の決まりは梱包明細と同じ部品 `common/ls4_source.py`。仕様は `docs/仕掛ファイルの仕様.md`)
@@ -115,15 +116,17 @@ def import_results(conn: Any):
         notes.append(f"{path.name}: {year}-{month:02d} の行 {added:,}ロット(全 {total:,}行)"
                      + ("を第2パスから足しました" if index else ""))
     try:
+        ensure_columns(conn)
         with conn:
             conn.execute(f'DELETE FROM "{TABLE}"')
             for lot, (row, path) in merged.items():
                 outer = ls4_source.outer_diameter(row)
                 conn.execute(
-                    f'INSERT INTO "{TABLE}" (ロット番号, 内径, 肉厚, 外径, 作業開始, 元ファイル)'
-                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    f'INSERT INTO "{TABLE}" (ロット番号, 内径, 肉厚, 外径, 枚本数, 作業開始, 元ファイル)'
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (lot, _num(row.get(ls4_source.COL_INNER)), _num(row.get(ls4_source.COL_THICK)),
-                     outer, str(row.get(ls4_source.COL_START) or ""), str(path)))
+                     outer, ls4_source.coil_count(row),
+                     str(row.get(ls4_source.COL_START) or ""), str(path)))
             conn.execute(
                 "INSERT OR REPLACE INTO 取り込み履歴 (テーブル名, 取り込み日時, 元ファイル, 件数)"
                 " VALUES (?, ?, ?, ?)", (TABLE, db.now_db_string(), str(files[0]), len(merged)))
@@ -144,6 +147,31 @@ def _num(value: Any) -> Optional[float]:
         return float(str(value).strip())
     except (TypeError, ValueError):
         return None
+
+
+def ensure_columns(conn: sqlite3.Connection) -> None:
+    """1.2.29 で作った手元の表に、あとから足した列(枚本数。統合 1.2.30)を足す。"""
+    try:
+        have = {r[1] for r in conn.execute(f'PRAGMA table_info("{TABLE}")')}
+        if have and "枚本数" not in have:
+            with conn:
+                conn.execute(f'ALTER TABLE "{TABLE}" ADD COLUMN 枚本数 INTEGER')
+    except sqlite3.Error:
+        log.warning("コイル実績に列を足せませんでした", exc_info=True)
+
+
+def count_for(conn: sqlite3.Connection, lot_no: str) -> Optional[int]:
+    """そのロットの検入数(本)(実績から)。無ければ None(いままでどおり手で入れる)。"""
+    if not lot_no:
+        return None
+    try:
+        row = conn.execute(f'SELECT 枚本数 FROM "{TABLE}" WHERE ロット番号 = ?',
+                           (str(lot_no).strip(),)).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None or row[0] is None or int(row[0]) <= 0:
+        return None
+    return int(row[0])
 
 
 def outer_for(conn: sqlite3.Connection, lot_no: str) -> Optional[float]:

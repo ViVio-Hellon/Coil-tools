@@ -713,5 +713,5 @@ def test_パスワードは平文で保存しない(ready):
 
 def test_既定のパスワードで通る(looking):
     """一度も変えていない端末は、これまでどおり既定で通る"""
-    assert config.ADMIN_PASSWORD == "nisk"
-    assert unlock(looking, "nisk").status_code == 200
+    assert config.ADMIN_PASSWORD
+    assert unlock(looking, config.ADMIN_PASSWORD).status_code == 200

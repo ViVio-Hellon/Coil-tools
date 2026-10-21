@@ -56,7 +56,7 @@ class ServerErrorTest(unittest.TestCase):
 
     def test_api_failure_returns_an_error_number(self):
         res = self.client.post("/material/api/boom?t=" + TOKEN,
-                               json={"password": "himitsu", "合言葉": "nisk", "lot": "A123456"})
+                               json={"password": "himitsu", "合言葉": "aikotoba", "lot": "A123456"})
         self.assertEqual(res.status_code, 500)
         body = res.get_json()
         self.assertFalse(body["ok"])

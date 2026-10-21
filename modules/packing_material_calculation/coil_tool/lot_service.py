@@ -157,4 +157,10 @@ def load_into(conn: sqlite3.Connection, state: CalcState, order_no: str) -> bool
                    "違うときは打ち直してください")
     elif info.コイル外径_MAX != OrderInfo.NO_DATA:
         state.外径 = info.コイル外径_MAX
+    # 検入数(本)も実績から(BOX実績_枚本数、無ければ 横割数 × 縦割数。統合 1.2.30)。
+    # **先に手で入れてあれば上書きしない**
+    count = coil_results.count_for(conn, state.LOT)
+    if count is not None and not str(state.検入数).strip():
+        state.検入数 = str(count)
+        state.note(f"検入数は実績から入れました({count}本)。違うときは打ち直してください")
     return True
