@@ -231,6 +231,23 @@ def print_area(cells: Dict[Tuple[int, int], str], three_digit: bool,
     return "$A$1:$BJ$186"
 
 
+def blocks_in_area(area: str) -> Tuple[bool, bool]:
+    """印刷範囲(`print_area` の戻り値)に入るブロック (上, 下)。
+
+    VBA は印刷範囲の外を刷らなかった。2ケタで条の少ないサイズ(63/73/82.5)は上のブロック
+    (18 枚)だけ。以前は印刷範囲を見出しに出すだけで、重量の入った上下とも 36 枚刷っていた
+    (存在しないコイル番号のラベルが 18 枚出た。統合 1.2.31・現場の指示で直した)。
+    """
+    area = (area or "").replace("$", "").upper()
+    if area == "A1:BJ186":
+        return True, True
+    if area == "A1:BJ93":
+        return True, False
+    if area == "A94:BJ186":
+        return False, True
+    return False, False
+
+
 class AllSizeService:
     """全サイズ画面の業務処理。"""
 
@@ -342,6 +359,15 @@ class AllSizeService:
         msg = V.validate_kensa_no(ken)
         if msg:
             return {"ok": False, "level": "warn", "message": msg}
+
+        # 重量は 0 より大きい数だけ(「-」だけ などを通さない。統合 1.2.31)。空はその台紙を使わない
+        used = (("1-1-?", w1), ("2-1-?", w2), ("1-2-?", w4), ("2-2-?", w5)) if three_digit \
+            else (("丈1", w1), ("丈2", w2))
+        for name, value in used:
+            if str(value or "").strip() and V.weight_number(value) is None:
+                return {"ok": False, "level": "warn",
+                        "message": f"重量が数になっていません　{name}(「{value}」)。"
+                                   "0 より大きい数で入れてください"}
 
         n1, n2 = sheet_names(combo_text)
         kataban = entry["kataban"]

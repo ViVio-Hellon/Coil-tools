@@ -1234,12 +1234,14 @@ class PageRoutes:
             cells = data.get("cells", {})
             labels = []
             from ..services.all_size import (SUB_ROWS_BLOCK1, SUB_ROWS_BLOCK2,
-                                             SUB_COL_L, SUB_COL_R)
-            for rows, wt, size in ((SUB_ROWS_BLOCK1, data.get("weightTop", ""),
-                                    data.get("sizeTop", "")),
-                                   (SUB_ROWS_BLOCK2, data.get("weightBottom", ""),
-                                    data.get("sizeBottom", ""))):
-                if wt == "":
+                                             SUB_COL_L, SUB_COL_R, blocks_in_area)
+            # VBA の印刷範囲の外は刷らない(2ケタの 63/73/82.5 は上のブロックだけ。統合 1.2.31)
+            in_top, in_bottom = blocks_in_area(data.get("printArea", ""))
+            for rows, wt, size, inside in ((SUB_ROWS_BLOCK1, data.get("weightTop", ""),
+                                            data.get("sizeTop", ""), in_top),
+                                           (SUB_ROWS_BLOCK2, data.get("weightBottom", ""),
+                                            data.get("sizeBottom", ""), in_bottom)):
+                if wt == "" or not inside:
                     continue
                 for r in rows:
                     for col in (SUB_COL_L, SUB_COL_R):
@@ -2487,6 +2489,57 @@ class PageRoutes:
             return "ロック: %s ／ 待ち受け: %s" % (path, mode)
         return ("start_app.py を経由していないためロックは未使用。"
                 "待ち受け: %s" % mode)
+
+    def print_log(self) -> str:
+        """計算・印刷の記録(統合 1.2.31・現場の指示)。
+
+        どの取得元(SQLite / Access / CSV / 古い内容)の、いつ時点の資材重量で計算し・刷ったか。
+        新しい順に 300 件。記録はこの PC の状態DB(`work_log`)にある(5000 件を超えたら古いものから消す)。
+        """
+        rows = []
+        for r in self.wf.recent_log(300):
+            d = r.get("data") or {}
+            m = d.get("material") or {}
+            src = esc(m.get("label") or "-")
+            if m.get("stale"):
+                src = f'<b class="logstale">{src}(古い内容)</b>'
+            when = esc(m.get("asOf") or "")
+            what = esc(r.get("title", ""))
+            detail = []
+            for sh in d.get("sheets") or []:
+                detail.append(f'{esc(sh.get("size", ""))} 重量{esc(sh.get("weight", ""))} '
+                              f'NW {esc("/".join(x for x in sh.get("NW") or [] if x))} '
+                              f'GW {esc("/".join(x for x in sh.get("GW") or [] if x))} '
+                              f'{sh.get("labels", 0)}枚')
+            for k, c in sorted((d.get("coils") or {}).items()):
+                detail.append(f'梱包{esc(k)}: {esc(c.get("本数", ""))}本 '
+                              f'NW {esc(c.get("NW", ""))} GW {esc(c.get("GW", ""))}')
+            if d.get("combo"):
+                detail.append(f'{esc(d["combo"])} 重量 {esc("・".join(d.get("weights") or []))}')
+            if d.get("width") and not detail:
+                detail.append(f'巾 {esc(d["width"])}mm')
+            if d.get("inputChanged"):
+                detail.append('<b class="logstale">入力が変わったまま(印刷は止めていた)</b>')
+            kind_cls = "logprint" if r.get("kind") == "印刷" else "logcalc"
+            rows.append(
+                f'<tr><td class="nowrap">{esc(r.get("at", ""))}</td>'
+                f'<td><span class="{kind_cls}">{esc(r.get("kind", ""))}</span></td>'
+                f'<td class="nowrap">{what}</td><td>{esc(d.get("kensaNo", ""))}</td>'
+                f'<td>{src}</td><td class="nowrap">{when}</td>'
+                f'<td>{"<br>".join(detail)}</td></tr>')
+        body = ('<div class="card"><h2>計算・印刷の記録</h2>'
+                '<p class="hint">どの取得元の、いつ時点の資材重量で計算し・刷ったかを残しています'
+                '(新しい順に 300 件。この PC の分)。<b>資材マスタの時点</b>は、読んだ資材マスタの'
+                'ファイルの更新日時です。<b>印刷</b>は印刷の画面を開いた記録です'
+                '(ブラウザは、刷ったか・やめたかを教えません)。印刷の行の資材重量は、'
+                'その紙の値を計算したときのものです。</p>'
+                + ('<div class="scroll"><table class="tbl"><thead><tr><th>時刻</th><th>種類</th>'
+                   '<th>何を</th><th>検査番号</th><th>資材重量の取得元</th><th>資材マスタの時点</th>'
+                   '<th>中身</th></tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>'
+                   if rows else '<div class="empty">まだ記録がありません。</div>')
+                + '<style>.logstale{color:var(--err)}.logprint{font-weight:700}'
+                  '.nowrap{white-space:nowrap}</style></div>')
+        return self._shell("計算・印刷の記録", body, "")
 
     def diag(self) -> str:
         """基盤仕様書 2.6: 障害時に何を見ればよいか分かる画面。"""

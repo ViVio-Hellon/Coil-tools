@@ -167,3 +167,55 @@ class TestService(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPrintOnlyInsideArea(unittest.TestCase):
+    """全サイズの印刷は VBA の印刷範囲の外を刷らない(統合 1.2.31・現場の指示)。
+
+    2ケタで条の少ないサイズ(63/73/82.5)は上のブロック 18 枚だけ。以前は上下 36 枚刷り、
+    存在しないコイル番号(-0119〜-0136)のラベルが出た。"""
+
+    def test_印刷範囲に入るブロック(self):
+        from modules.packing_pena_label.app.services.all_size import blocks_in_area
+        self.assertEqual(blocks_in_area("$A$1:$BJ$186"), (True, True))
+        self.assertEqual(blocks_in_area("$A$1:$BJ$93"), (True, False))
+        self.assertEqual(blocks_in_area("$A$94:$BJ$186"), (False, True))
+        self.assertEqual(blocks_in_area(""), (False, False))
+
+
+class TestPrintViewCounts(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from .test_http import HttpTestCase
+        cls.http = HttpTestCase
+        HttpTestCase.setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.http.tearDownClass()
+
+    def _labels(self, combo):
+        h = self.http()
+        h.post("/api/all-size/prepare", {"comboText": combo})
+        _, j = h.post("/api/all-size/submit", {"comboText": combo, "kensaNo": "W123456",
+                                               "threeDigit": False, "w1": "10", "w2": "12"})
+        self.assertTrue(j["ok"], j)
+        _, html = h.get("/all-size/print?combo=" + __import__("urllib.parse").parse.quote(combo))
+        return html.count('<div class="lbl">'), html
+
+    def test_条の少ないサイズは上のブロックだけ(self):
+        n, html = self._labels("1.0×63.0×Coil")
+        self.assertEqual(n, 36)                 # 台紙 2 枚 × 上のブロック 18 枚
+        self.assertNotIn("-0119", html)
+        self.assertNotIn("-0236", html)
+
+    def test_ほかのサイズは上下とも(self):
+        n, _ = self._labels("1.0×53.5×Coil")
+        self.assertEqual(n, 72)                 # 台紙 2 枚 × 36 枚
+
+    def test_重量が数でなければ決定で止める(self):
+        h = self.http()
+        _, j = h.post("/api/all-size/submit", {"comboText": "1.0×53.5×Coil", "kensaNo": "W123456",
+                                               "threeDigit": False, "w1": "-", "w2": "12"})
+        self.assertFalse(j["ok"])
+        self.assertIn("数になっていません", j["message"])

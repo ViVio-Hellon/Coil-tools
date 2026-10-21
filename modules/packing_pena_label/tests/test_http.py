@@ -32,7 +32,9 @@ class HttpTestCase(unittest.TestCase):
         cfg.port = free_port()
         cfg.prefer_access = False
         cfg.material_csv_file = business_csv()   # 同梱サンプルの写しを指定した CSV として
-        # 状態とログをテスト用の一時領域へ隔離する
+        # 状態とログをテスト用の一時領域へ隔離する(終わったら戻す。戻さないと、
+        # あとに走る試験の Config まで一時領域を指したままになる)
+        cls._orig_local_dir = Config.__dict__.get("local_dir")
         cfg.__class__.local_dir = property(lambda self, d=cls.tmp: d)
         cls.cfg = cfg
         cls.httpd, cls.ctx = server.create_server(cfg)
@@ -49,6 +51,8 @@ class HttpTestCase(unittest.TestCase):
         cls.thread.join(timeout=5)
         cls.ctx.store.close()
         shutil.rmtree(cls.tmp, ignore_errors=True)
+        if getattr(cls, "_orig_local_dir", None) is not None:
+            Config.local_dir = cls._orig_local_dir
 
     # --------------------------------------------------------
     def get(self, path):

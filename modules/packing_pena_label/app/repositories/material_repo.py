@@ -132,6 +132,10 @@ class MaterialTable:
         return not self.records or not self.fields
 
 
+#: 取得元の呼び名(画面右上の札・記録と同じ)
+SOURCE_LABELS = {"sqlite": "SQLite", "access": "Access(ACE)", "csv": "CSV"}
+
+
 class MaterialRepository:
     """資材マスタの取得元を切り替えるリポジトリ。
 
@@ -329,6 +333,24 @@ class MaterialRepository:
         self._cache_stamp = self._stamp(path)
         self._cache_at = time.monotonic()     # 経過判定用
         self._cache_at_wall = time.time()     # 表示用
+
+    def describe(self) -> dict:
+        """いま使っている資材重量の素性(計算・印刷の記録に残す。統合 1.2.31)。
+
+        取得元・ファイル・**そのファイルの更新日時(いつ時点のマスタか)**・読んだ時刻・
+        届かずに前の内容で動いているか。
+        """
+        stamp = self._cache_stamp
+        fmt = "%Y-%m-%d %H:%M:%S"
+        return {
+            "source": self.last_source or "",
+            "label": SOURCE_LABELS.get(self.last_source, "未読込"),
+            "stale": bool(self.serving_stale),
+            "path": stamp[0] if stamp else "",
+            "asOf": time.strftime(fmt, time.localtime(stamp[1])) if stamp else "",
+            "readAt": (time.strftime(fmt, time.localtime(self._cache_at_wall))
+                       if self._cache_at_wall else ""),
+        }
 
     def cache_info(self) -> dict:
         """/diag 画面と運用確認用。"""

@@ -77,7 +77,19 @@ CREATE TABLE IF NOT EXISTS kv_store (
     payload     TEXT NOT NULL,
     updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
+
+-- 計算・印刷の記録(統合 1.2.31)。どの取得元の、いつ時点の資材重量で計算し・刷ったか
+CREATE TABLE IF NOT EXISTS work_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    at          TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    kind        TEXT NOT NULL,
+    title       TEXT NOT NULL DEFAULT '',
+    payload     TEXT NOT NULL DEFAULT '{}'
+);
 """
+
+#: 記録を残す件数(古いものから消す)
+WORK_LOG_KEEP = 5000
 
 
 def is_network_path(path: str) -> bool:
@@ -401,3 +413,24 @@ class Store:
 
     def del_kv(self, key: str) -> None:
         self._write("DELETE FROM kv_store WHERE key=?", (key,))
+
+    # ============================================================ 計算・印刷の記録
+    def add_log(self, kind: str, title: str, payload: dict) -> None:
+        """計算・印刷の記録を1行足す(古いものは `WORK_LOG_KEEP` 件を超えたら消す)。"""
+        self._write("INSERT INTO work_log (kind, title, payload) VALUES (?,?,?)",
+                    (kind, title, json.dumps(payload, ensure_ascii=False)))
+        self._write("DELETE FROM work_log WHERE id <= "
+                    "(SELECT MAX(id) FROM work_log) - ?", (WORK_LOG_KEEP,))
+
+    def recent_log(self, limit: int = 300) -> List[dict]:
+        rows = self._query("SELECT id, at, kind, title, payload FROM work_log "
+                           "ORDER BY id DESC LIMIT ?", (int(limit),))
+        out = []
+        for r in rows:
+            try:
+                data = json.loads(r["payload"])
+            except json.JSONDecodeError:
+                data = {}
+            out.append({"id": r["id"], "at": r["at"], "kind": r["kind"],
+                        "title": r["title"], "data": data})
+        return out

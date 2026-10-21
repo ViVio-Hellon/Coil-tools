@@ -374,6 +374,13 @@ class Workflow:
             return Result(True, "本数が入力されていません", "warn",
                           {"state": state.to_dict()})
 
+        # 本数を入れた丈の重量(重量反映でラベルへ写した値)が数でなければ止める(統合 1.2.31)。
+        # 「-」だけで重量反映すると NW=0 のまま計算・印刷まで通った(VBA は CDbl で止まった)。
+        # 消す前に確かめる(止めたときに、前の計算結果を消さない)
+        msg = self._label_weight_problem(state)
+        if msg:
+            return Result(False, msg, "warn", {"state": state.to_dict()})
+
         # VBA: クリア()
         self.clear_all(state, save=False)
 
@@ -445,8 +452,21 @@ class Workflow:
         # 風袋計算の結果はクリアでも残るので、クリアのあと別の検番を反映して刷ると
         # 新しい見出しに前の結果が並ぶ(統合 1.2.26・構造点検で見つかった)
         self.store.set_kv(self._TARE_INPUT_KEY, self._calc_fingerprint(state))
+        # どの取得元の、いつ時点の資材重量で計算したか(統合 1.2.31・現場の指示)。
+        # 印刷の記録にもこれを写す(刷ったときではなく、計算したときの資材重量で刷るため)
+        material = self.materials.describe()
+        material["calcAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        self.store.set_kv(self._TARE_MATERIAL_KEY, material)
 
         self.save_state(state)
+        self._log("計算", "風袋計算", {
+            "kensaNo": state.lbl_kensa_no,
+            "sizes": [x for x in (state.lbl_size1, state.lbl_size2) if x],
+            "weights": [x for x in (state.lbl_weight1, state.lbl_weight2) if x],
+            "coils": {str(k): {"本数": str(state.coil_h.get(k, "") or ""),
+                               "NW": state.nw.get(k, ""), "GW": state.gw.get(k, "")}
+                      for k in (1, 2, 3, 4) if str(state.coil_h.get(k, "") or "").strip()},
+            "material": material})
 
         level = "warn" if missing else "info"
         message = "計算しました"
@@ -460,6 +480,22 @@ class Workflow:
             "missing": missing,
             "materialSource": self.materials.last_source,
         })
+
+    @staticmethod
+    def _label_weight_problem(state: FormState) -> Optional[str]:
+        """本数を入れた丈の、ラベルの重量(重量反映で写した値)が数でなければ理由。"""
+        for take, coils, visible, label in (
+                (1, (1, 2), state.take1_visible, state.lbl_weight1),
+                (2, (3, 4), state.take2_visible, state.lbl_weight2)):
+            if not visible:
+                continue
+            if not any(str(state.coil_h.get(n, "") or "").strip() for n in coils):
+                continue
+            if V.weight_number(label) is None:
+                shown = str(label or "").replace("kg", "").strip() or "空"
+                return (f"丈{take}の重量が数になっていません(「{shown}」)。"
+                        "重量を数で入れて「重量反映」をやり直してください")
+        return None
 
     def _tare_payload(self, coil_no: int, coil_text: float, mat, t1, t2) -> dict:
         """風袋計算シート 1 ブロック分（VBA WriteToSheet 相当）。"""
@@ -588,6 +624,10 @@ class Workflow:
                              cb_key=cb_key, ob_idx=ob_idx)
         data["width"] = fmt(width, "0.0")
         data["footer"] = self._list_footer(state)
+        # どの取得元の、いつ時点の資材重量で計算したか(統合 1.2.31)
+        data["material"] = dict(self.materials.describe(),
+                                calcAt=time.strftime("%Y-%m-%d %H:%M:%S"))
+        self._log("計算", "羅列計算", {"width": data["width"], "material": data["material"]})
         self.store.set_kv("list_result", data)
 
         level = "warn" if data["missing"] else "info"
@@ -674,6 +714,80 @@ class Workflow:
     _CALC_INPUT_KEY = "tare_inputs"
     #: 風袋計算の結果を出したときの入力(クリアでは消さない。`tare_is_stale` が使う)
     _TARE_INPUT_KEY = "tare_result_inputs"
+    #: 風袋計算(とラベルの本数・高さ・NW・GW)を出したときの資材重量の素性(統合 1.2.31)
+    _TARE_MATERIAL_KEY = "tare_material"
+
+    # ============================================================ 計算・印刷の記録
+    def _log(self, kind: str, title: str, payload: dict) -> None:
+        """記録を残す。残せなくても計算・印刷は止めない(ログに理由を出す)。"""
+        try:
+            self.store.add_log(kind, title, payload)
+            m = payload.get("material") or {}
+            log.info("[記録] %s %s 検番=%s 資材重量=%s %s時点%s", kind, title,
+                     payload.get("kensaNo", ""), m.get("label", "-"), m.get("asOf", ""),
+                     "(古い内容)" if m.get("stale") else "")
+        except Exception:                                   # noqa: BLE001
+            log.exception("計算・印刷の記録を残せませんでした: %s %s", kind, title)
+
+    #: 印刷の記録を残す画面(入口から見た道 → 呼び名)
+    PRINT_KINDS = {
+        "/labels/print": "小ラベル", "/labels/sheet": "ラベル台紙",
+        "/tare/print": "風袋計算", "/tare": "風袋計算",
+        "/list/print": "羅列計算", "/list": "羅列計算",
+        "/all-size/print": "全サイズ",
+    }
+
+    def record_print(self, path: str, query: Dict[str, List[str]]) -> Result:
+        """印刷の画面を開いた(刷った)ことを残す(統合 1.2.31・現場の指示)。
+
+        印刷の画面(ブラウザの印刷ダイアログ)を閉じたときに、画面から知らせてくる。
+        ブラウザは「刷ったか・やめたか」を教えないので、**印刷の画面を開いたこと**を残す。
+        資材重量は、その紙の値を計算したときのもの(計算の記録と同じ)を写す。
+        """
+        title = self.PRINT_KINDS.get(path)
+        if not title:
+            return Result(False, "記録しない画面です", "info")
+        payload: dict = {"path": path}
+        if path.startswith("/all-size"):
+            combo = (query.get("combo") or [""])[0]
+            st = self.all_size.load_state()
+            payload.update(combo=combo, kensaNo=st.get("kensaNo", ""),
+                           weights=[w for w in (st.get("w1"), st.get("w2"),
+                                                st.get("w4"), st.get("w5")) if w],
+                           material={"label": "使わない(重量は打った値)"})
+        elif path.startswith("/list"):
+            data = self.store.get_kv("list_result") or {}
+            payload.update(width=data.get("width", ""), material=data.get("material") or {})
+        else:
+            state = self.load_state()
+            payload["kensaNo"] = state.lbl_kensa_no
+            payload["material"] = self.store.get_kv(self._TARE_MATERIAL_KEY, {}) or {}
+            if path.startswith("/labels"):
+                obs = [int(x) for x in ",".join(query.get("ob") or []).split(",")
+                       if x.strip().isdigit()]
+                sheets = []
+                for ob in obs:
+                    v = self.label_view(ob)
+                    if not v:
+                        continue
+                    ph = v.get("printHeader") or {}
+                    sheets.append({"size": ph.get("sizeName", ""), "kensaNo": ph.get("kensaNo", ""),
+                                   "weight": ph.get("weight", ""), "labels": len(v.get("labels") or []),
+                                   "NW": [c.get("nw", "") for c in v.get("coilInfo") or []],
+                                   "GW": [c.get("gw", "") for c in v.get("coilInfo") or []]})
+                payload["sheets"] = sheets
+                payload["inputChanged"] = self.calc_is_stale()
+            else:
+                payload["coils"] = {str(k): {"本数": v.get("coilText", ""),
+                                             "NW": (v.get("display") or {}).get("NW", ""),
+                                             "GW": (v.get("display") or {}).get("GW", "")}
+                                    for k, v in (self.store.all_tare() or {}).items()}
+                payload["inputChanged"] = self.tare_is_stale(state)
+        self._log("印刷", title, payload)
+        return Result(True, "記録しました", "info")
+
+    def recent_log(self, limit: int = 300) -> List[dict]:
+        return self.store.recent_log(limit)
 
     @staticmethod
     def _calc_fingerprint(state: FormState) -> dict:

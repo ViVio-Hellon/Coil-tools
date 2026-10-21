@@ -93,6 +93,8 @@ class ApiRoutes:
             "/api/apply-weight": self._apply_weight,
             "/api/calc-tare": self._calc_tare,
             "/api/progress": self._progress,
+            # 印刷の画面を開いた(刷った)記録。印刷用の別タブから届く(入力画面でなくてよい)
+            "/api/print-log": self._print_log,
             "/api/calc-list": self._calc_list,
             "/api/clear": self._clear,
             "/api/print-targets": self._print_targets,
@@ -140,6 +142,13 @@ class ApiRoutes:
         # 設定を書き換える口(統合 1.2.16 で足した)。2枚目のタブからも書けていた(統合 1.2.26)
         "/api/settings/visible-sizes", "/api/settings/size-add",
     })
+
+    def _print_log(self, body):
+        """印刷の記録(統合 1.2.31)。`path` は入口から見た道、`search` は ?以降。"""
+        from urllib.parse import parse_qs
+        path = str(body.get("path") or "")
+        query = parse_qs(str(body.get("search") or "").lstrip("?"))
+        return self.wf.record_print(path, query).to_dict()
 
     def _progress(self, body):
         """時間のかかる処理(重量計算_DB)の進み具合。読むだけ。"""

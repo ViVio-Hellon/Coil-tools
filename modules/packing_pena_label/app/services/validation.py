@@ -95,14 +95,45 @@ def inp_check(state, mode: int) -> bool:
 
 
 def check_weight_inputs(state) -> Optional[str]:
-    """VBA CommandButton1 の 3 連続 InpCheck。NG メッセージ or None。"""
+    """VBA CommandButton1 の 3 連続 InpCheck。NG メッセージ or None。
+
+    そのあと、使う丈の重量が **0 より大きい数** かを確かめる(統合 1.2.31・現場の指示)。
+    欄は VBA と同じく「-」だけの入力を残す(打ち始めの途中)が、それで重量反映すると
+    NW=0 のまま計算・印刷まで通った(VBA は計算の `CDbl("-")` で止まっていた)。
+    """
     if inp_check(state, 1):
         return "重量入力がありません　丈1"
     if inp_check(state, 2):
         return "重量入力がありません　丈2"
     if inp_check(state, 3):
         return "重量入力がありません　丈1　or　丈2"
+    for take, value in used_weights(state):
+        if weight_number(value) is None:
+            return (f"重量が数になっていません　丈{take}(「{value}」)。"
+                    "0 より大きい数で入れてください")
     return None
+
+
+def used_weights(state) -> List[tuple]:
+    """いま選んでいるサイズで使う丈の (丈, 重量欄の値)。"""
+    if state.selected_cb or state.named_cb:
+        return [(1, state.weight1 or ""), (2, state.weight2 or "")]
+    if state.selected_ob:
+        take = take_of(state.selected_ob)
+        return [(take, (state.weight1 if take == 1 else state.weight2) or "")]
+    return []
+
+
+def weight_number(value) -> Optional[float]:
+    """重量欄・ラベルの重量の値を数に。「kg」は外す。0 以下・読めない(「-」だけ など)なら None。"""
+    s = to_narrow(str(value or "")).replace("kg", "").replace(",", "").strip()
+    if not s or not is_numeric(s):
+        return None
+    try:
+        n = float(s)
+    except ValueError:
+        return None
+    return n if n > 0 else None
 
 
 def validate_settings(state) -> Optional[str]:

@@ -88,6 +88,7 @@ class UnreachableTest(unittest.TestCase):
         state.selected_ob = 14
         state.tip = "TIP1000"
         state.weight2 = "22.0"
+        state.lbl_weight2 = "22.0kg"          # 重量反映で写した値
         state.coil_h = {1: "", 2: "", 3: "11", 4: "11"}
         res = wf.calc_tare(state)
         self.assertFalse(res.ok)

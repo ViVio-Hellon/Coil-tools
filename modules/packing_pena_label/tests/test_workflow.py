@@ -539,3 +539,37 @@ class TestEmptyWeightShowsNothing(WorkflowTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWeightMustBeNumber(WorkflowTestBase):
+    """重量が「-」だけなどの数でない値なら止める(統合 1.2.31・現場の指示)。
+
+    以前は「-」だけで重量反映でき、NW=0・GW=風袋だけのラベルが計算・印刷まで通った
+    (VBA は計算の CDbl("-") で止まっていた)。"""
+
+    def test_重量反映で止める(self):
+        for bad in ("-", "+", ".", "0", "-5"):
+            st = self._cb_state(5, kensa_no="W111111", weight1="10", weight2=bad)
+            r = self.wf.apply_weight(st)
+            self.assertFalse(r.ok, bad)
+            self.assertIn("丈2", r.message)
+            self.assertIn("数になっていません", r.message)
+
+    def test_前に写した重量が数でなければ計算も止め_前の結果を消さない(self):
+        st = self._cb_state(5, kensa_no="W111111", weight1="10", weight2="12")
+        self.assertTrue(self.wf.apply_weight(st).ok)
+        st.coil_h = {1: "11", 2: "11", 3: "10", 4: "10"}
+        self.assertTrue(self.wf.calc_tare(st).ok)
+        gw = dict(st.gw)
+        st.lbl_weight2 = "-kg"                      # 古い版で写した「-」
+        r = self.wf.calc_tare(st)
+        self.assertFalse(r.ok)
+        self.assertIn("丈2の重量が数になっていません", r.message)
+        self.assertEqual(st.gw, gw, "止めたときに前の計算結果を消さない")
+
+    def test_本数を入れていない丈の重量は見ない(self):
+        st = self._cb_state(5, kensa_no="W111111", weight1="10", weight2="12")
+        self.assertTrue(self.wf.apply_weight(st).ok)
+        st.lbl_weight2 = "-kg"
+        st.coil_h = {1: "11", 2: "11", 3: "", 4: ""}
+        self.assertTrue(self.wf.calc_tare(st).ok)

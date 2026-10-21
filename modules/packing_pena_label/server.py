@@ -411,6 +411,8 @@ def _page(ctx: AppContext, rel: str, prefix: str) -> Response:
             return _html(p.settings())
         if rel == "/diag":
             return _html(p.diag())
+        if rel == "/print-log":
+            return _html(p.print_log())
         if rel == "/favicon.ico":
             return Response(b"", status=204, mimetype="image/x-icon")
         return _error_page(404, "ページが見つかりません。", prefix)

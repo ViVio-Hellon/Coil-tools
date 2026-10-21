@@ -213,6 +213,17 @@
   }
   window.pplConfirmOpen = confirmOpen;
 
+  // ---------------------------------------------------------- 印刷の記録(統合 1.2.31)
+  // 印刷の画面(ブラウザの印刷ダイアログ)を閉じたら、どの画面を刷ったかをサーバへ知らせる。
+  // サーバは「どの取得元の、いつ時点の資材重量で計算した紙か」と一緒に残す(/print-log で見る)。
+  // ブラウザは刷ったか・やめたかを教えないので、記録は「印刷の画面を開いた」こと
+  window.addEventListener("afterprint", function () {
+    var path = location.pathname;
+    if (BASE && path.indexOf(BASE) === 0) { path = path.slice(BASE.length); }
+    send("/api/print-log", { path: path || "/", search: location.search })
+      .catch(function () { /* 残せなくても印刷は止めない */ });
+  });
+
   // ---------------------------------------------------------- 印刷用のタブ
   // 帯の「印刷」「このタブを閉じる」(`pages._printbar`)。閉じられないブラウザ・
   // 開き方のときは、× で閉じるよう案内する(本ツールのタブはそのまま残っている)
