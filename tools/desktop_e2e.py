@@ -290,6 +290,7 @@ class Rig:
         return env
 
     def start_driver(self, **extra):
+        self._driver_extra = dict(extra)          # 開き直すときに同じ環境で起こす(`window`)
         self.stop_driver()
         # tauri-driver・msedgedriver の出力は残す(窓を開けなかったときの手がかり。写しと一緒に上げる)
         self.driver_log = open(self.shots / "tauri-driver.log", "ab")
@@ -319,6 +320,38 @@ class Rig:
             subprocess.run(["taskkill", "/F", "/IM", Path(self.native_driver).name], capture_output=True)
             until(lambda: not port_in_use(WD_PORT + 1), 10)
         self.driver = None
+
+    def window(self) -> "Window":
+        """exe を起こして WebDriver の窓口を開く。**WebView2 につながらなかったら、片付けて1度だけ開き直す。**
+
+        Windows の CI で、前の窓を閉じた直後(ブラウザ版を止めた直後)に、新しい窓口が
+        「session not created ... unable to connect to renderer」(msedgedriver の connect failed: 10055)
+        で開けなかった。窓が開いたあとの確かめは、開き直しても1つも省かない。
+        """
+        try:
+            return Window(self.exe)
+        except RuntimeError as exc:
+            if "session not created" not in str(exc):
+                raise
+            print(f"  (窓口を開けませんでした。残った exe を片付けて1度だけ開き直します: {str(exc)[:120]})")
+        self.stop_driver()
+        self.kill_exes()
+        time.sleep(5)                               # WebView2 の片付けと、閉じたつなぎの後始末を待つ
+        self.start_driver(**getattr(self, "_driver_extra", {}))
+        return Window(self.exe)
+
+    def kill_exes(self) -> None:
+        """この試験の exe(と、その子の WebView2)を止めて、居なくなるのを待つ。"""
+        procs = self.exe_pids()
+        for pid in procs:
+            if WINDOWS:
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
+            else:
+                try:
+                    os.kill(pid, 9)
+                except OSError:
+                    pass
+        until(lambda: not self.running(procs), 15)
 
     def exe_pids(self) -> dict:
         """動いている exe: pid → (親, 起動した時刻, 名前)。生きているかは `running` で見る。
@@ -492,7 +525,7 @@ def w_path(part):
 def scenario_main(rig: Rig):
     print("■ 1. 窓の中で3機能を使う(印刷プレビュー11・画面の色・ログ・終了)")
     rig.start_driver()
-    w = Window(rig.exe)
+    w = rig.window()
     try:
         ok = until(lambda: w.js("return document.querySelectorAll('iframe.pane__frame').length") == 3
                    and w.text("#conn") == "接続OK", 60)
@@ -737,7 +770,7 @@ def scenario_main(rig: Rig):
 def scenario_close_and_second(rig: Rig):
     print("■ 2. 窓の × ・2つ目の起動")
     rig.start_driver()
-    w = Window(rig.exe)
+    w = rig.window()
     try:
         until(lambda: w.text("#conn") == "接続OK", 60)
         first = rig.exe_pids()
@@ -809,7 +842,7 @@ def scenario_failures(rig: Rig):
     print("■ 3. 起動できないとき・ブラウザ版とのすみ分け")
     # Python が見つからない
     rig.start_driver(COIL_PACKING_TOOLS_PYTHON="/nonexistent/python3")
-    w = Window(rig.exe)
+    w = rig.window()
     try:
         ok = until(lambda: "起動できませんでした" in w.js("return document.body.innerText"), 30)
         body = w.js("return document.body.innerText")
@@ -822,7 +855,7 @@ def scenario_failures(rig: Rig):
     h = rig.app.start()
     check("(準備)ブラウザ版を起動", h, (h or {}).get("version_set"))
     rig.start_driver()
-    w = Window(rig.exe)
+    w = rig.window()
     try:
         ok = until(lambda: "ブラウザ版" in w.js("return document.body.innerText"), 40)
         check("ブラウザ版が動いていれば、デスクトップ版は理由を出して使わせない", ok,
@@ -833,7 +866,7 @@ def scenario_failures(rig: Rig):
     until(lambda: not rig.app.alive(), 20)
     # デスクトップ版が動いている → ブラウザ版は起動しない
     rig.start_driver()
-    w = Window(rig.exe)
+    w = rig.window()
     try:
         until(lambda: w.text("#conn") == "接続OK", 60)
         h = rig.app.start(timeout=40)
