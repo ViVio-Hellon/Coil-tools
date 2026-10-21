@@ -215,7 +215,8 @@ class Workflow:
             state.lbl_size2 = self._size_label(ob_idx)
 
         # --- VBA: OB5/6 と lblSpec_08_53_1/2 のみ CoilH/NW/GW/TA をクリア ---
-        if ob_idx in (5, 6, 13, 14):
+        # 53.5mm のサイズ。足したサイズも巾 53.5mm なら同じ(統合 1.2.27。サイズの性質で決める)
+        if cfg.clears_coil_on_select:
             slots = (1, 2) if take == 1 else (3, 4)
             for i in slots:
                 state.coil_h[i] = ""

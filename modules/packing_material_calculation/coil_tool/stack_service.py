@@ -98,7 +98,6 @@ def _decide_stack(state: CalcState, spec: PackagingSpec) -> tuple[float, bool, b
     c_flag = vba.is_numeric(order.梱包単位_枚数)
 
     stack = 0.0
-    impossible = False
     order_only = False
 
     if w_flag:
@@ -114,10 +113,7 @@ def _decide_stack(state: CalcState, spec: PackagingSpec) -> tuple[float, bool, b
         # 積数が食い違った(2 × 4台 = 8本 で 10本)
         stack = count_stack(order.梱包単位_枚数)
         state.mark(FLAG_COUNT)
-        if spec.枚数範囲 == COUNT_RANGE_NO_SINGLE:
-            # ﾌﾟﾛｽﾁ-ﾙ_LVS。1本だけ積むことが許されない
-            impossible = True
-            state.mark(FLAG_NO_SINGLE)
+        # 枚数範囲が「1不可」なら1本積み不可(ﾌﾟﾛｽﾁ-ﾙ_LVS)。決まりは `no_single_by_rule`
 
     elif _has_value(spec.梱包単位_重量):
         # 3. 包装仕様の重量指定。範囲の言い回しで上限が変わる
@@ -137,8 +133,6 @@ def _decide_stack(state: CalcState, spec: PackagingSpec) -> tuple[float, bool, b
             stack = count_stack(spec.梱包単位_枚数)
             state.mark(FLAG_COUNT)
         if spec.枚数範囲 == COUNT_RANGE_NO_SINGLE:
-            impossible = True
-            state.mark(FLAG_NO_SINGLE)
             # ここへ来る時点でオーダーの枚数指定は無い(`c_flag` は False)
             # ので、包装仕様の枚数を採る ── 吉川工業 1C1252
             stack = count_stack(spec.梱包単位_枚数)
@@ -148,7 +142,30 @@ def _decide_stack(state: CalcState, spec: PackagingSpec) -> tuple[float, bool, b
         if weight > ONE_COIL_WEIGHT:
             stack = 1.0
 
+    impossible = no_single_by_rule(order, spec)
+    if impossible:
+        state.mark(FLAG_NO_SINGLE)
     return stack, impossible, order_only
+
+
+def no_single_by_rule(order, spec: PackagingSpec) -> bool:
+    """その品は1本積み不可か(枚数範囲「1不可」が効く段か)。**決まりはここ1か所。**
+
+    計算Start(5段の2段目・4段目)と、積数の手直し(`calc_service.recalculate_from_stack`)の
+    両方が使う。手で積数を入れても、1本だけの台は作らない(統合 1.2.27・現場の指示)。
+
+    - 1段目(オーダーの重量)・3段目(包装仕様の重量)で決まる品は、1不可でも見ない(VBA のまま)
+    - 2段目(オーダーの枚数)・4段目(包装仕様の枚数)で、枚数範囲が「1不可」なら1本積み不可
+    """
+    if spec.枚数範囲 != COUNT_RANGE_NO_SINGLE:
+        return False
+    if vba.is_numeric(order.梱包単位_重量):
+        return False                                   # 1段目
+    if vba.is_numeric(order.梱包単位_枚数):
+        return True                                    # 2段目
+    if _has_value(spec.梱包単位_重量):
+        return False                                   # 3段目
+    return _has_value(spec.梱包単位_枚数)              # 4段目
 
 
 # ==================================================================

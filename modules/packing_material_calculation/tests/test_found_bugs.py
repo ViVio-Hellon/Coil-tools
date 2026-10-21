@@ -114,7 +114,7 @@ def test_検入数を変えたら計算し直すまで積めない(ready):
     assert r.status_code == 422
 
 
-def test_積数を直しても分けない_HBもリプラも3台ぶん(conn):
+def test_積数を直して1本の台が出なければ分けない_HBもリプラも3台ぶん(conn):
     s, r = run(conn, 検入数=13, 枚数=4)
     hb_before = s.HB枚数
     s.積数 = "5"
@@ -146,3 +146,52 @@ def test_バリ揃えの結果転送のあと積める(ready):
     assert r.status_code == 200, r.get_json()
     assert r.get_json()["view"]["result"]["台数"] == "3"
     assert ready.post("/api/checklist/add", json={}).status_code == 200
+
+
+# ==================================================================
+# 積数を手で直しても、1本積み不可の品は1本だけの台を作らない(統合 1.2.27・現場の指示)
+# 13本・積数4 は 4・4・4・1 ではなく 4・4・3・2 の4台(計算Start と同じ振り分け)
+# ==================================================================
+def test_手で入れた積数でも_最後の1本の台は2台に分ける(conn):
+    s, r = run(conn, 検入数=13, 枚数=5)          # 計算Start は 5・5・3 の3台
+    assert r.ok and s.台数 == "3" and s.Re_台数 == ""
+    s.積数 = "4"
+    again = calc_service.recalculate_from_stack(conn, s)
+    assert again.ok
+    assert (s.積数, s.台数, s.Re_台数) == ("4", "2", "2")     # 4・4 + 別枠2台(3・2)
+    assert checklist_service._unit_count(s) == "4"
+    assert models.FLAG_SINGLE_SPLIT in s.flags
+    assert any("1本にならないように分けました" in m and "3本・2本" in m for m in s.messages)
+
+
+def test_計算Startと同じ積数に直せば_同じ振り分け(conn):
+    s, r = run(conn, 検入数=13, 枚数=4)
+    start = (s.積数, s.台数, s.Re_積数, s.Re_台数)
+    s.積数 = "4"
+    assert calc_service.recalculate_from_stack(conn, s).ok
+    assert (s.積数, s.台数, s.Re_積数, s.Re_台数) == start
+    assert checklist_service._unit_count(s) == "4"
+
+
+def test_2台ぶんしかないときは2台へ均等に分ける(conn):
+    s, r = run(conn, 検入数=5, 枚数=5)          # 計算Start は 5本の1台
+    s.積数 = "4"                                 # 4・1 になるところ
+    assert calc_service.recalculate_from_stack(conn, s).ok
+    assert s.台数 == "2" and s.Re_台数 == ""
+    assert any("3本・2本" in m for m in s.messages)
+
+
+def test_1本積み不可でない品は_手で入れた積数のまま(conn):
+    s, r = run(conn, 検入数=13, 枚数=4, 枚数範囲="以下")
+    s.積数 = "4"
+    assert calc_service.recalculate_from_stack(conn, s).ok
+    assert (s.台数, s.Re_台数) == ("4", "")      # 4・4・4・1 を許す品
+    assert models.FLAG_SINGLE_SPLIT not in s.flags
+
+
+def test_1本積み不可で検入数1なら_手で入れた積数でも断る(conn):
+    s, r = run(conn, 検入数=1, 枚数=1)
+    s.積数 = "2"
+    again = calc_service.recalculate_from_stack(conn, s)
+    assert not again.ok and again.reason == "no_single_one_coil"
+    assert s.台数 == ""

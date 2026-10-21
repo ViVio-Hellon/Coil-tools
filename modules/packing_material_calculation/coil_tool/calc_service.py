@@ -19,7 +19,7 @@ from typing import Optional
 
 from . import pallet_service, ripla_service, stack_service, vba
 from .logging_utils import get_logger
-from .models import CalcState
+from .models import FLAG_NO_SINGLE, FLAG_SINGLE_SPLIT, CalcState
 
 log = get_logger("calc_service")
 
@@ -82,6 +82,23 @@ def calculate(conn: sqlite3.Connection, state: CalcState) -> CalcResult:
     return CalcResult(ok=True, total_ripla=total, shape=shape)
 
 
+def _units_for_stack(conn: sqlite3.Connection, state: CalcState) -> int:
+    """手で入れた積数から台数を出す。1本積み不可の品は、最後の1本の台を2台に分ける。"""
+    ins, stack = state.検入数値, state.積数値
+    spec = pallet_service.get_spec(conn, state.order.包装仕様NO) if state.order.包装仕様NO else None
+    if spec is None or not stack_service.no_single_by_rule(state.order, spec):
+        return vba.round_up(ins / stack)
+    state.mark(FLAG_NO_SINGLE)
+    count, _stack, equal = stack_service._split_for_no_single(state, stack, ins)
+    if count > 0 and FLAG_SINGLE_SPLIT in state.flags:
+        rest = int(ins - (0 if equal else count * stack))
+        big, small = (rest + 1) // 2, rest // 2
+        state.note("1本積み不可のため、最後の台が1本にならないように分けました("
+                   + (f"{rest}本を {big}本・{small}本 の2台)" if equal else
+                      f"{vba.int_text(stack)}本 × {count}台 + 別枠 {big}本・{small}本 の2台)"))
+    return count
+
+
 def recalculate_from_stack(conn: sqlite3.Connection, state: CalcState, *,
                            units: Optional[int] = None) -> CalcResult:
     """積数を手で直したときの再計算 (VBA `積数_AfterUpdate`)。
@@ -91,11 +108,15 @@ def recalculate_from_stack(conn: sqlite3.Connection, state: CalcState, *,
 
         台数 = 切り上げ(検入数 ÷ 積数)   (`units` を渡すとそれ。バリ揃えの結果転送)
 
+    【1本積み不可の品(統合 1.2.27・現場の指示)】手で入れた積数でも、最後の台が1本だけに
+    なるなら、計算Start と同じ振り分け(`stack_service._split_for_no_single`、VBA `台数計算`)
+    で1台戻して2台に分ける。例: 検入数13・積数4 → 4・4・4・1 ではなく 4・4 + 別枠 3・2(4台)。
+
     【VBA のバグを直した(統合 1.2.26・現場で確認)】VBA は前の計算の別枠(Re_積数・Re_台数)・
     印・断りを消さずに計算し直していた。1本積み不可で分けたあとに積数を直すと、チェック
-    リスト・HB・リプラで台数を二重に数えた(検入数13・枚数4 → 積数5 で3台のはずが5台)。
-    手で入れた積数のほかは全部消してから出し直す。分ける・高さで直すはしない(手で入れた
-    積数が最後の答え)
+    リスト・HB・リプラで台数を二重に数えた(検入数13・枚数4 → 2台+別枠2台 のあと積数5 にすると、5・5・3 の3台のはずが5台)。
+    手で入れた積数のほかは全部消してから出し直す。高さで直すはしない(手で入れた積数が
+    最後の答え)。ただし1本積み不可の品は、1本だけの台を作らないように分ける(上)
     """
     state.clear_results(keep_stack=True)
     if not str(state.積数).strip():
@@ -115,7 +136,11 @@ def recalculate_from_stack(conn: sqlite3.Connection, state: CalcState, *,
         return CalcResult(ok=False, reason="zero_stack")
 
     if units is None:
-        units = vba.round_up(state.検入数値 / state.積数値)
+        units = _units_for_stack(conn, state)
+        if units <= 0:
+            state.note("検入数が1本のため、1本積み不可の振り分けができません。積数を手で入れてください")
+            state.台数 = ""
+            return CalcResult(ok=False, reason="no_single_one_coil")
     state.台数 = vba.int_text(units)
 
     total = ripla_service.calculate(conn, state)

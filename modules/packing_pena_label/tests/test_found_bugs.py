@@ -130,3 +130,40 @@ class TarePrintStaleTest(HttpTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from .test_workflow import WorkflowTestBase  # noqa: E402
+
+
+class ClearOnSelect535Test(WorkflowTestBase):
+    """53.5mm のサイズを選ぶと、その丈のコイル高さ・NW・GW・TA を消す(足したサイズも同じ。統合 1.2.27)。"""
+
+    def _filled(self):
+        st = FormState()
+        st.coil_h = {1: "1", 2: "2", 3: "3", 4: "4"}
+        st.nw = {1: "10", 2: "20", 3: "30", 4: "40"}
+        st.gw = {1: "11", 2: "21", 3: "31", 4: "41"}
+        st.ta = {1: "5", 2: "6", 3: "7", 4: "8"}
+        return st
+
+    def test_同梱のサイズで消すのは前と同じ4つだけ(self):
+        got = {c.ob_idx for c in self.master.all() if c.ob_idx < SM.FIRST_EXTRA_OB
+               and c.clears_coil_on_select}
+        self.assertEqual(got, {5, 6, 13, 14})
+
+    def test_足した53_5mmのサイズも_選ぶとその丈を消す(self):
+        ob = SM.FIRST_EXTRA_OB
+        self.master.apply_extra([
+            {"obIdx": ob, "baseName": "1.2mm×53.5mm", "widthMm": 53.5, "kataban": "T1", "symbol": ""},
+            {"obIdx": ob + 2, "baseName": "1.2mm×45mm", "widthMm": 45.0, "kataban": "T2", "symbol": ""}])
+        st = self._filled()
+        self.assertTrue(self.wf.select_size(st, ob).ok)
+        self.assertEqual((st.coil_h[1], st.nw[2], st.gw[1], st.ta[2]), ("", "", "", ""))
+        self.assertEqual(st.coil_h[3], "3", "丈2の側は消さない")
+        st = self._filled()
+        self.assertTrue(self.wf.select_size(st, ob + 1).ok)
+        self.assertEqual((st.coil_h[3], st.nw[4]), ("", ""))
+        self.assertEqual(st.coil_h[1], "1", "丈1の側は消さない")
+        st = self._filled()
+        self.assertTrue(self.wf.select_size(st, ob + 2).ok)
+        self.assertEqual(st.coil_h[1], "1", "53.5mm でないサイズは消さない")

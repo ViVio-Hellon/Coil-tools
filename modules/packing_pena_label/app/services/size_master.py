@@ -130,6 +130,15 @@ class SizeConfig:
         return take_of(self.ob_idx)
 
     @property
+    def clears_coil_on_select(self) -> bool:
+        """選んだときに、その丈のコイル高さ・NW・GW・TA を消すか。
+
+        VBA は 53.5mm の 2 サイズ(OB5/6・lblSpec_08_53_1/2)を選んだときだけ消す。足したサイズも
+        巾 53.5mm なら同じ扱いにする(統合 1.2.27・現場の判断)。番号(5,6,13,14)で決め打ちしない。
+        """
+        return abs(self.width_mm - CLEAR_ON_SELECT_WIDTH_MM) < 1e-6
+
+    @property
     def sheet_name(self) -> str:
         """VBA BuildSheetName。"""
         return f"{self.base_name}{SHEET_NAME_JOINER}{self.take_type}"
@@ -146,6 +155,9 @@ class SizeConfig:
         }
         return d
 
+
+#: この巾のサイズは、選んだときにコイル高さ・NW・GW・TA を消す(`SizeConfig.clears_coil_on_select`)
+CLEAR_ON_SELECT_WIDTH_MM = 53.5
 
 #: VBA GetSizeConfig の内蔵定義（JSON が無い場合のフォールバック）
 #: (baseName, kataban, symbol, dataRow, extraRow, widthMm, cbKey)
