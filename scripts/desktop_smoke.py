@@ -94,15 +94,31 @@ def processes() -> dict:
     return found
 
 
+def _started(procs: dict, pid: int) -> int:
+    """起動した時刻(数として。読めなければ 0 = 分からない)。"""
+    text = str((procs.get(pid) or (0, "0", ""))[1]).strip()
+    return int(text) if text.isdigit() else 0
+
+
 def children(pid: int, procs: dict) -> list[int]:
-    """pid の子孫(孫も)。"""
+    """pid の子孫(孫も)。
+
+    **親より前に起動したものは子とみなさない。** 親の番号(ParentProcessId)は、親が終わっても
+    そのまま残る。終わった親の番号が使い回されて exe の番号と同じになると、昔の子
+    (Windows の wininit → services → svchost …)まで exe の子孫と読み違える(GitHub Actions で一度あった)。
+    """
     found, frontier = [], [pid]
     while frontier:
         parent = frontier.pop()
-        for child, (ppid, _started, _name) in procs.items():
-            if ppid == parent and child not in found:
-                found.append(child)
-                frontier.append(child)
+        parent_started = _started(procs, parent)
+        for child, (ppid, _started_text, _name) in procs.items():
+            if ppid != parent or child in found or child == pid:
+                continue
+            child_started = _started(procs, child)
+            if parent_started and child_started and child_started < parent_started:
+                continue
+            found.append(child)
+            frontier.append(child)
     return found
 
 
