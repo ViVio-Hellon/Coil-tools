@@ -11,6 +11,9 @@
     7. 印刷済フラグをOFFにする     SetPrinted False
     8. 積み上げだけリセットする     ClearGimmickC + BuildGimmickC
 
+1 はルート(`routes/meisai.output`)が、押したときの画面の重量欄の値でする
+(`read_weights`)。ここに来るときは `board.weights` が読み直したあとの値。
+
 【No指定は外した(VER 0.13.23・現場の判断)】
 出力済みを直したいときは、出力済みにチェックを入れて「出力済み修正」で積み直す
 (`begin_edit` → `output_edit`)。同じNoで出し直し、前の紙の履歴には「作り直し」の

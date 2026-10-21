@@ -521,19 +521,32 @@ async function openLot(lotNo, confirm = false, cancelEdit = false) {
   }
 }
 
-function sendWeights() {
-  const state = window.APP.state;
+/** いま画面の重量欄に入っている値(表示している丈の数だけ。打ったまま)。 */
+function screenWeights() {
+  const state = window.APP.state || {};
   const values = [];
-  for (let jou = 1; jou <= state.jou_su; jou += 1) {
-    values.push($(`weight${jou}`).value);
+  for (let jou = 1; jou <= (state.jou_su || 0); jou += 1) {
+    const input = $(`weight${jou}`);
+    values.push(input ? input.value : "");
   }
+  return values;
+}
+
+function sendWeights() {
+  const values = screenWeights();
   // 未入力があるうちは送らない(断られて赤帯が出続けるだけ)
   if (values.some((v) => String(v).trim() === "")) return;
   send("/api/weights", { weights: values });
 }
 
+/*
+  「条番号表示」「出力」は、押したときの重量欄の値を添えて送る(VBA は押すたびに画面の欄を
+  読み直していた)。欄を離れたときの送信(`sendWeights`)は空欄なら送らず、断られてもサーバは
+  前の値のまま ── 添えないと、画面は空なのに前の重量が紙に載った。断られたら赤帯で理由が出て、
+  画面は描き直さないので、欄は打った値のまま残る。
+*/
 async function buildStrands(confirm = false) {
-  const body = await send("/api/strands", { confirm });
+  const body = await send("/api/strands", { confirm, weights: screenWeights() });
   if (body && body.confirm === "overwrite_restored") {
     if (await confirmAsk(body.message)) buildStrands(true);
   }
@@ -551,7 +564,7 @@ function unstack(slotNo) {
 async function doOutput(confirm = false) {
   // 修正中なら、サーバがそのNoを積み直した並びで出し直す(確認は kind "edit")
   const editing = Boolean((window.APP.state || {}).edit);
-  const body = await send("/api/output", { confirm });
+  const body = await send("/api/output", { confirm, weights: screenWeights() });
   if (body && body.confirm === "output") {
     const first = body.confirms[0];
     const detail = body.confirms.flatMap((c) => c.detail || []);

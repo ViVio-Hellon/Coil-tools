@@ -249,7 +249,7 @@ Python を 3.12 から 3.13 に上げるなど **Store の Python の版を変�
 | | 版 | 出どころ |
 |---|---|---|
 | コイル梱包ツール(統合ツール) | 1.2.32 | `config/app.json`(デスクトップ版の `src-tauri/tauri.conf.json`・`Cargo.toml` もそろえる) |
-| 梱包明細 | 0.13.28 | `modules/packing_details/config/app.json` |
+| 梱包明細 | 0.13.29 | `modules/packing_details/config/app.json` |
 | ペナラベル | 1.5.33 | `modules/packing_pena_label/app/config.py` の `APP_VERSION` |
 | 資材計算 | 0.2.29 | `modules/packing_material_calculation/config/app.json` |
 

@@ -481,11 +481,11 @@ def set_jou_su():
 
 @bp.post("/api/weights")
 def set_weights():
-    """丈ごとの重量を入れる。
+    """丈ごとの重量を入れる(欄を離れたとき)。
 
-    VBA は出力の直前にも読み直していた(`cmdKettei_Click` の
-    `ReadWeights`)。ここで持っておけば、出力時に読み直したのと
-    同じことになる。
+    **これだけでは出力時の読み直しの代わりにならない。** 断ったときはサーバの値が
+    前のままで、画面は空欄を送らない。以前は欄を空にしても、出力・条番号表示が
+    前の値を使って紙に載せた(`_take_screen_weights`)。
     """
     conn = get_db()
     board = session.current()
@@ -493,11 +493,26 @@ def set_weights():
         return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
 
     values = (request.get_json(silent=True) or {}).get("weights", [])
+    refused = _take_screen_weights(board, values)
+    if refused:
+        return refused
+    return _ok(conn)
+
+
+def _take_screen_weights(board, values):
+    """画面の重量欄の値を読んで盤面に入れる (VBA `ReadWeights`)。断るときは応答を返す。
+
+    VBA は「出力」「条番号表示」を押すたびに、画面の欄を読み直していた。サーバに残っている
+    値で進めると、画面は空欄なのに前の重量が紙に載る。押したときの欄の値を添えて送らせ、
+    ここで読み直す。**読めなければ盤面は変えない**(`read_weights` が断ってから入れる)。
+    """
+    if not isinstance(values, list):
+        values = []         # 形が違うものは「未入力」として断る(1文字ずつ読まない)
     try:
         board.weights = meisai_service.read_weights(values, board.jou_su)
     except RefusedError as exc:
         return _refused(exc)
-    return _ok(conn)
+    return None
 
 
 # ==================================================================
@@ -515,6 +530,9 @@ def build_strands():
     **出力済みのコイルは使用済みのまま(VER 0.13.23)。** VBA は条番号を作り直すと
     使用済みが全部ほどけ、No1〜No3 で使ったコイルを No4 へまた積めた(副番履歴クリアと
     同じ穴)。紙に載っているコイルは、作り直したあとも使用済みに戻す。
+
+    **重量は画面の欄の値で確かめる**(`weights`。VBA も画面の欄を見ていた)。添えて
+    いない要求(古い画面)は、サーバに持っている値で確かめる。
     """
     conn = get_db()
     board = session.current()
@@ -540,6 +558,10 @@ def build_strands():
         return jsonify(error_body(
             "bad_zen_kotei",
             "前工程実績数が0以下です。正しい値を入力してください。")), 400
+    if "weights" in body:
+        refused = _take_screen_weights(board, body["weights"])
+        if refused:
+            return refused
     if any(w <= 0 for w in board.weights[:board.jou_su]):
         missing = next(i + 1 for i, w in enumerate(board.weights[:board.jou_su])
                        if w <= 0)
@@ -653,13 +675,22 @@ def discard():
 # ==================================================================
 @bp.post("/api/output")
 def output():
-    """明細を1枚出す。出力済みの修正中なら、そのNoを積み直した並びで出し直す。"""
+    """明細を1枚出す。出力済みの修正中なら、そのNoを積み直した並びで出し直す。
+
+    **最初に画面の重量欄を読み直す**(`weights`。VBA `cmdKettei_Click` の `ReadWeights`)。
+    空の丈・読めない値があれば、紙を出さずに止める。添えていない要求(古い画面)は、
+    サーバに持っている値で出す(以前と同じ)。
+    """
     conn = get_db()
     board = session.current()
     if board is None:
         return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
 
     body = request.get_json(silent=True) or {}
+    if "weights" in body:
+        refused = _take_screen_weights(board, body["weights"])
+        if refused:
+            return refused
     confirm = bool(body.get("confirm"))
     editing = board.editing
     run = meisai_service.output_edit if editing else meisai_service.output

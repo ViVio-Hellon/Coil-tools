@@ -456,6 +456,178 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(res.status_code, 400)
 
 
+class ScreenWeightsTest(unittest.TestCase):
+    """出力・条番号表示は、押したときの画面の重量欄で読み直す(VBA `ReadWeights`)。
+
+    以前はサーバに残っている前の値を使った。欄を空・0 にしても(画面は空欄を送らず、
+    0 は断られてサーバは前のまま)、紙には前の重量 `250.0Kg` が出た。
+    """
+
+    def setUp(self):
+        self.client, self.conn = _client(self)
+        _seed(self.conn)
+        _post(self.client, "/api/lot", {"lot_no": "L5160Z0"})
+        _post(self.client, "/api/weights", {"weights": ["250", "248"]})
+        _post(self.client, "/api/strands", {})
+        _post(self.client, "/api/stack-max", {"value": "2"})
+        _post(self.client, "/api/stack", {"key": "1-12"})
+        _post(self.client, "/api/stack", {"key": "2-12"})
+
+    def _paper(self, no=1):
+        return self.client.get(f"/report/L5160Z0/{no}?t={TOKEN}").get_data(as_text=True)
+
+    def _refused(self, res, message):
+        self.assertEqual(res.status_code, 400, res.get_json())
+        self.assertEqual(res.get_json()["error"]["code"], "no_weight")
+        self.assertEqual(res.get_json()["error"]["message"], message)
+
+    def _nothing_written(self):
+        self.assertEqual(meisai_service.list_outputs(self.conn, "L5160Z0"), [])
+        board = session.current()
+        self.assertEqual(board.slots, ["1-12", "2-12"])      # 積み上げは残る(進めない)
+        self.assertEqual(board.weights, [250, 248])          # 前の値のまま
+
+    # --- 出力 ---
+    def test_欄を空にして出力すると止まり_紙は出ない(self):
+        res = _post(self.client, "/api/output", {"confirm": True, "weights": ["", "248"]})
+        self._refused(res, "丈1の重量が未入力です。")
+        self._nothing_written()
+        self.assertEqual(history_repo.current_seq(self.conn), 0)
+
+    def test_空なのが2つ目の丈なら丈2と出す(self):
+        res = _post(self.client, "/api/output", {"confirm": True, "weights": ["250", " "]})
+        self._refused(res, "丈2の重量が未入力です。")
+        self._nothing_written()
+
+    def test_0や小数は欄を離れたときと同じ理由で止める(self):
+        for weights, message in (
+                (["0", "248"], "丈1の重量が0です。"),
+                (["250", "248.5"], "丈2の重量は整数(数字だけ)で入力してください: 248.5")):
+            with self.subTest(weights=weights):
+                res = _post(self.client, "/api/output", {"confirm": True, "weights": weights})
+                self._refused(res, message)
+                self._nothing_written()
+
+    def test_欄の数が足りなければ未入力として止める(self):
+        res = _post(self.client, "/api/output", {"confirm": True, "weights": ["250"]})
+        self._refused(res, "丈2の重量が未入力です。")
+        res = _post(self.client, "/api/output", {"confirm": True, "weights": "250,248"})
+        self._refused(res, "丈1の重量が未入力です。")
+        self._nothing_written()
+
+    def test_書き直した重量で出る(self):
+        body = _post(self.client, "/api/output",
+                     {"confirm": True, "weights": ["260", "２５８"]}).get_json()   # 全角も読む
+        self.assertTrue(body["ok"], body)
+        self.assertEqual(body["state"]["weights"], [260, 258])
+        self.assertEqual(meisai_service.find_output(self.conn, "L5160Z0", 1).weights,
+                         [260, 258])
+        html = self._paper()
+        self.assertIn("260.0Kg", html)
+        self.assertIn("258.0Kg", html)
+        self.assertNotIn("250.0Kg", html)
+        self.assertEqual(history_repo.load_snapshot(self.conn, "L5160Z0").weights, [260, 258])
+
+    def test_止めたあと入れ直せば出せる(self):
+        _post(self.client, "/api/output", {"confirm": True, "weights": ["", "248"]})
+        body = _post(self.client, "/api/output",
+                     {"confirm": True, "weights": ["251", "248"]}).get_json()
+        self.assertTrue(body["ok"], body)
+        self.assertEqual(body["seq_no"], 1)
+        self.assertIn("251.0Kg", self._paper())
+
+    def test_重量を添えない要求はサーバの値で出す(self):
+        """古い画面(重量を添えない)は以前と同じ。"""
+        body = _post(self.client, "/api/output", {"confirm": True}).get_json()
+        self.assertTrue(body["ok"], body)
+        self.assertIn("250.0Kg", self._paper())
+
+    def test_確認を挟んでも了解したときの欄の値で出る(self):
+        _post(self.client, "/api/output", {"confirm": True, "weights": ["250", "248"]})
+        _post(self.client, "/api/stack", {"key": "1-11"})       # 出したコイルは使用済み
+        _post(self.client, "/api/stack", {"key": "2-11"})
+        # 副番の重複で確認を挟ませる
+        history_repo.register_fuban(self.conn, history_repo.fuban_key("L5160Z0", "1-11"))
+        body = _post(self.client, "/api/output", {"weights": ["250", "248"]}).get_json()
+        self.assertEqual(body["confirm"], "output")
+        body = _post(self.client, "/api/output",
+                     {"confirm": True, "weights": ["", "248"]})
+        self._refused(body, "丈1の重量が未入力です。")
+        self.assertEqual(len(meisai_service.list_outputs(self.conn, "L5160Z0")), 1)
+        body = _post(self.client, "/api/output",
+                     {"confirm": True, "weights": ["270", "248"]}).get_json()
+        self.assertTrue(body["ok"], body)
+        self.assertIn("270.0Kg", self._paper(2))
+
+    def test_修正して出力も欄の値で読み直す(self):
+        _post(self.client, "/api/output", {"confirm": True})
+        _post(self.client, "/api/edit-output", {"no": 1})
+        res = _post(self.client, "/api/output", {"confirm": True, "weights": ["", "248"]})
+        self._refused(res, "丈1の重量が未入力です。")
+        self.assertEqual(session.current().edit_no, 1)       # 修正中のまま
+        body = _post(self.client, "/api/output",
+                     {"confirm": True, "weights": ["255", "248"]}).get_json()
+        self.assertTrue(body["ok"], body)
+        self.assertIn("255.0Kg", self._paper())
+
+    def test_ほかのロットの画面からの出力は重量ごと断る(self):
+        res = self.client.post("/api/output",
+                               json={"confirm": True, "weights": ["999", "999"]},
+                               headers={**HEADERS, "X-Screen-Lot": "A123456"})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"]["code"], "lot_changed")
+        self._nothing_written()
+
+
+class ScreenWeightsStrandsTest(unittest.TestCase):
+    """条番号表示も、押したときの画面の重量欄で確かめる(VBA `cmdShowJouTai_Click`)。"""
+
+    def setUp(self):
+        self.client, self.conn = _client(self)
+        _seed(self.conn)
+        _post(self.client, "/api/lot", {"lot_no": "L5160Z0"})
+        _post(self.client, "/api/weights", {"weights": ["250", "248"]})
+
+    def _refused(self, res, message):
+        self.assertEqual(res.status_code, 400, res.get_json())
+        self.assertEqual(res.get_json()["error"]["code"], "no_weight")
+        self.assertEqual(res.get_json()["error"]["message"], message)
+
+    def test_欄を空にして条番号表示すると止まる(self):
+        res = _post(self.client, "/api/strands", {"weights": ["250", ""]})
+        self._refused(res, "丈2の重量が未入力です。")
+        board = session.current()
+        self.assertEqual(board.strands, [])                   # 配らない
+        self.assertEqual(board.weights, [250, 248])
+        self.assertIsNone(history_repo.load_snapshot(self.conn, "L5160Z0"))
+
+    def test_0も止める(self):
+        res = _post(self.client, "/api/strands", {"weights": ["0", "248"]})
+        self._refused(res, "丈1の重量が0です。")
+        self.assertEqual(session.current().strands, [])
+
+    def test_書き直した重量を入れて保存する(self):
+        body = _post(self.client, "/api/strands", {"weights": ["240", "238"]}).get_json()
+        self.assertTrue(body["ok"], body)
+        self.assertEqual(body["state"]["strands"], [12, 12])
+        self.assertEqual(body["state"]["weights"], [240, 238])
+        self.assertEqual(history_repo.load_snapshot(self.conn, "L5160Z0").weights, [240, 238])
+
+    def test_添えなければサーバの値で確かめる(self):
+        """古い画面(重量を添えない)は以前と同じ。"""
+        _post(self.client, "/api/jou-su", {"value": "2"})     # 重量は 0 に戻る
+        res = _post(self.client, "/api/strands", {})
+        self._refused(res, "丈1の重量が未入力です。")
+        _post(self.client, "/api/weights", {"weights": ["250", "248"]})
+        self.assertTrue(_post(self.client, "/api/strands", {}).get_json()["ok"])
+
+    def test_前工程実績数が0なら重量より先にそれを言う(self):
+        """確かめる順は VBA と同じ(丈数 → 前工程実績数 → 重量)。"""
+        session.current().zen_kotei = 0
+        res = _post(self.client, "/api/strands", {"weights": ["", ""]})
+        self.assertEqual(res.get_json()["error"]["code"], "bad_zen_kotei")
+
+
 class PrintTest(unittest.TestCase):
     """帳票の経路。**明細1枚につき用紙1枚**(A4横の左半分、右は空ける)。"""
 
