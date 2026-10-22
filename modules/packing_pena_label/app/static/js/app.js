@@ -594,7 +594,9 @@
     var sel = $$("input[name=size]:checked")[0];
     var st = {
       selectedOb: 0, selectedCb: 0, namedCb: false,
-      tip: ($$("input[name=tip]:checked")[0] || {}).value || "TIP1000",
+      // 選んでいなければ空のまま送る(1000 で埋めない。サーバが「チップボールチェックがありません」で
+      // 止める。既定の 1000 は画面を開いたときに選んである。統合 1.2.32・現場の指示)
+      tip: ($$("input[name=tip]:checked")[0] || {}).value || "",
       kensaNo: $("#kensaNo").value,
       weight1: $("#weight1").value,
       weight2: $("#weight2").value,

@@ -167,3 +167,32 @@ class ClearOnSelect535Test(WorkflowTestBase):
         st = self._filled()
         self.assertTrue(self.wf.select_size(st, ob + 2).ok)
         self.assertEqual(st.coil_h[1], "1", "53.5mm でないサイズは消さない")
+
+
+class TipMustBeChosenTest(HttpTestCase):
+    """チップボールを選んでいなければ計算しない(統合 1.2.32・現場の指示)。
+
+    既定は 1000(画面を開いたときに選んである)。以前は選んでいなくても画面・サーバが 1000 や
+    前の値で埋め、「チップボールチェックがありません」の停止(VBA IsValidSettings)に届かなかった。"""
+
+    def _cur(self, tip):
+        return {"selectedOb": 14, "selectedCb": 0, "namedCb": False, "tip": tip,
+                "kensaNo": "Z987654", "weight1": "", "weight2": "22.0",
+                "coilH": {"1": "", "2": "", "3": "11", "4": "11"}}
+
+    def test_選んでいなければ止める(self):
+        self.post("/api/apply-weight", {"current": self._cur("TIP1000")})
+        _, j = self.post("/api/calc-tare", {"current": self._cur("")})
+        self.assertFalse(j["ok"], j)
+        self.assertIn("チップボールチェックがありません", j["message"])
+
+    def test_既定は1000(self):
+        from modules.packing_pena_label.app.models import FormState
+        self.assertEqual(FormState().tip, "TIP1000")
+        self.assertEqual(FormState.from_dict({"selectedOb": 1}).tip, "TIP1000")
+        self.assertEqual(FormState.from_dict({"tip": ""}).tip, "")
+
+    def test_選べば計算する(self):
+        self.post("/api/apply-weight", {"current": self._cur("TIP950")})
+        _, j = self.post("/api/calc-tare", {"current": self._cur("TIP950")})
+        self.assertTrue(j["ok"], j)

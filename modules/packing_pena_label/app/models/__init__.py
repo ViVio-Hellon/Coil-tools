@@ -128,7 +128,9 @@ class FormState:
         st.selected_ob = int(d.get("selectedOb") or 0)
         st.selected_cb = int(d.get("selectedCb") or 0)
         st.named_cb = bool(d.get("namedCb"))
-        st.tip = d.get("tip") or "TIP1000"
+        # 既定は 1000(画面を開いたときに選んである)。保存した値が空なら空のまま
+        # (選んでいない。計算で止める。統合 1.2.32)
+        st.tip = d["tip"] if "tip" in d else "TIP1000"
         st.kensa_no = d.get("kensaNo") or ""
         st.weight1 = d.get("weight1") or ""
         st.weight2 = d.get("weight2") or ""

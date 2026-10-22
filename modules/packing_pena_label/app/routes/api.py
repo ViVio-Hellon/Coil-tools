@@ -69,8 +69,12 @@ class ApiRoutes:
         state.selected_ob = int(cur.get("selectedOb") or 0)
         state.selected_cb = int(cur.get("selectedCb") or 0)
         state.named_cb = bool(cur.get("namedCb"))
-        tip = cur.get("tip") or state.tip
-        state.tip = tip
+        # 画面が送ってきたチップボールをそのまま使う(空なら空。前の値や 1000 で埋めない)。
+        # 選んでいなければ計算で「チップボールチェックがありません」と止める(VBA IsValidSettings と同じ。
+        # 以前は埋めていたので、この停止に届かなかった。統合 1.2.32・現場の指示)。
+        # 送ってこない古い画面だけ、保存してある値を使う
+        if "tip" in cur:
+            state.tip = str(cur.get("tip") or "")
 
         # 入力値は VBA の入力制限と同じ正規化をサーバー側でも行う
         state.kensa_no = V.filter_alnum_upper(cur.get("kensaNo") or "")
