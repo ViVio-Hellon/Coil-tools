@@ -1503,7 +1503,7 @@ def scenario_storage(app: App, ctx, sh: Shell, note: dict, shots: str = "") -> N
     shot(d, "details_storage")
     d.click("#tabPlace")
     badges = d.locator("#panelPlace .where-local").count()
-    check("保存先: 梱包明細 置き場所の欄ごとに「このPCに保存」の札", badges == 8, badges)   # 仕掛台帳(2つ目)で 7、起動時の自動取り込み(1.2.22)で 8
+    check("保存先: 梱包明細 置き場所の欄ごとに「このPCに保存」の札", badges == 11, badges)  # 仕掛台帳(2つ目)で 7、起動時の自動取り込み(1.2.22)で 8、記録の保存先・ライン名・テストモード(1.2.42)で 11
     shot(d, "details_place")
     d.click("#btnSettingsClose")
 
