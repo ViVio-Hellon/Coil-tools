@@ -68,7 +68,7 @@ DB処理・帳票は移植元のまま、それぞれ独立して動きます。
 | [`modules/packing_pena_label/docs/04_DB運用と同時実行の確認事項.md`](modules/packing_pena_label/docs/04_DB運用と同時実行の確認事項.md) | Access→SQLite、長時間起動、複数PC同時書込 |
 | [`modules/packing_pena_label/docs/05_設定ガイド.md`](modules/packing_pena_label/docs/05_設定ガイド.md) | ファイルパスの変更、設定の2層構成、配布手順 |
 | [`modules/packing_pena_label/docs/06_ラベル印刷の実寸化.md`](modules/packing_pena_label/docs/06_ラベル印刷の実寸化.md) | Excel台紙の採寸、mm絶対配置、バーコード、位置合わせ |
-| [`modules/packing_pena_label/docs/VBA元ソース/README.md`](modules/packing_pena_label/docs/VBA元ソース/README.md) | 移植元の VBA の元ソース(2026-10-22 受領。フォーム・計算・補助のモジュール) |
+| [`modules/packing_pena_label/docs/VBA元ソース/README.md`](modules/packing_pena_label/docs/VBA元ソース/README.md) | 移植元の VBA の元ソース(2026-10-22 受領。指定サイズ・全サイズのフォームと計算・補助のモジュール。移行の経緯) |
 | [`modules/packing_pena_label/docs/変更履歴.md`](modules/packing_pena_label/docs/変更履歴.md) | ペナラベルの変更履歴 |
 
 ### 資材計算(`modules/packing_material_calculation/`)
