@@ -586,7 +586,13 @@ def scenario_main(rig: Rig):
         w.type("#weight1", "10")
         w.type("#weight2", "12")
         w.click("button[data-act=applyWeight]")
-        check("ペナラベル: 重量反映", until(lambda: "重量を反映しました" in w.text("#toast .toast-body"), 10))
+        # 遅い CI の窓では 10 秒で届かなかったことがある(1.2.34)。待ちを長くし、NG のときは
+        # 実際に出ていた知らせと表示の重量を出す(何が起きたか後から分かるように)
+        applied = until(lambda: "重量を反映しました" in w.text("#toast .toast-body"), 25)
+        check("ペナラベル: 重量反映", applied,
+              "" if applied else {"知らせ": w.text("#toast .toast-body"),
+                                  "表示の重量": w.text("#lblWeight1"),
+                                  "接続": w.text("#conn")})
         for i, n in enumerate(("11", "11", "10", "10"), 1):
             w.type(f"#coilH{i}", n)
         w.click("button[data-act=calcTare]")
