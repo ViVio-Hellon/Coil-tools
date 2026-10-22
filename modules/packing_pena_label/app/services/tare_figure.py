@@ -4,8 +4,10 @@
 風袋計算の表(資材 9 項目・NW・風袋・GW と計算式)は、数と式しか出ていない。
 **どの資材を・どの寸法で数えているか**を、1 梱包ずつ 2 枚の図で出す。
 
-    断面図   梱包を横から見た模式図。高さは寸法どおりの縮尺(樹脂パレット・コイル・
-             チップボール・八角ハードボード)。薄い物(チップボール 0.7mm・ハードボード 2.35mm)は
+    断面図   梱包を横から見た模式図。左半分は外から見た所、右半分は断面。包装仕様書
+             (7C1175 4. 荷姿の「内装」「前」「横」)に合わせ、ピン(樹脂製丸棒)はハードボードの外に
+             立て、PET バンドは胴巻き 4 本と縦(十文字)に描く(統合 1.2.34 で描き直し)。
+             高さは寸法どおりの縮尺。薄い物(チップボール 0.7mm・ハードボード 2.35mm)は
              見えないので太く描き、寸法は数で添える。資材ごとに色を決め、重さを引き出して書く
     内訳     GW = NW + 風袋 の帯と、風袋 9 項目の帯(どれが重いか)。式は計算式の欄と同じもの
 
@@ -94,8 +96,30 @@ def hb_kind(p: dict) -> str:
 
 
 # ====================================================================== 断面図
+#: 胴巻き PET バンドの高さ(コイル積高の下からの割合)。包装仕様書 7C1175 の「前」「横」の図に合わせ、
+#: 下に 2 本・中ほどに 2 本。上の 3 割ほどはラベルを貼る所なのでバンドを掛けない
+#: (「全てのラベルは胴巻きペットバンドの上にのらないように貼ること」)
+BAND_LEVELS = (0.12, 0.26, 0.51, 0.64)
+#: 縦の PET バンド(十文字に 2 本ずつ)の位置。中心からコイル外径の何割か(仕様書の図に合わせる)
+TATE_OFFSET = 0.15
+
+
 def section_svg(p: dict) -> str:
-    """梱包を横から見た模式図。高さは寸法どおり(薄い物は太く描く)。"""
+    """梱包を横から見た模式図。左半分は外から見た所、右半分は断面(中の重なり)。
+
+    包装仕様書(7C1175「包装仕様書」4. 荷姿)の「内装」「前」「横」に合わせて描く。
+
+    - 樹脂パレット: 上下 2 台(上は裏返し)。フォーク爪の差し込み口がある
+    - 八角形緩衝材(八角ハードボード): 下のパレットの上と、上のパレットの下
+    - チップボール: いちばん下・コイルの間・いちばん上
+    - ストレッチフィルム → ポリシート → エサフォーム(発泡ポリシート)→ ハードボード の順に外周を包む
+    - ピン(樹脂製丸棒)4 本: ハードボードの外に立て、下のパレットの穴に差す
+      (フォーク爪の差し込み口より下に出さない・上のパレットより上に突き出さない)
+    - PET バンド: 胴巻き 4 本(ハードボード用・丸棒用)と、上下のパレットを十文字に 2 本ずつ締める縦 4 本
+    - 乾燥剤: コイルの内径部に入れる
+
+    高さは寸法どおりの縮尺。薄い物(チップボール 0.7mm・ハードボード 2.35mm)は見えないので太く描く。
+    """
     disp = p.get("display") or {}
     n = int(round(_num(p.get("coilText"))))
     width = _num(p.get("width"))
@@ -108,132 +132,154 @@ def section_svg(p: dict) -> str:
     hb_t = TC.HB_THICKNESS_MM
     wraps = 2 if ta / 1000.0 > TC.ESA_DOUBLE_LIMIT_M else 1
 
-    W, H = 600, 486
-    top, bottom = 52, H - 58
+    W, H = 640, 500
+    top, bottom = 56, H - 62
     avail = bottom - top
     # 薄い物は最低の太さで描く。そのぶんを除いた高さで縮尺を決める
     n_chip = max(n + TC.CHIP_EXTRA_SHEETS, 0)
     thin_px = (n_chip + 2) * MIN_PX
     scale = max((avail - thin_px) / max(kta_raw - n_chip * chip - 2 * hb_t, 1.0), 0.05)
-    body_w = min(diam * scale, 230.0)
-    cx = 168
+    body_w = min(diam * scale, 220.0)
+    cx = 190.0
     x0, x1 = cx - body_w / 2, cx + body_w / 2
+    # 外周を包む物の厚み(模式): フィルム・ポリシート・エサフォーム(周回ぶん)・ハードボード
+    sut_x, por_x, esa_x = 1.0, 3.5, 6.0
+    hb_x = esa_x + 3.0 * wraps + 1.0
+    hb_w = 4.0
+    side = hb_x + hb_w                 # コイルの縁からハードボードの外側まで
+    bar_w = 6.0
+    bar_x = side + 1.0                 # 丸棒の内側
+    band_x = bar_x + bar_w             # 胴巻きバンドの外側(丸棒を締める)
+    pw = body_w + 2 * (band_x + 12)
+    px = cx - pw / 2
 
     out: List[str] = []
     add = out.append
     add(f'<svg class="tfig-sec" viewBox="0 0 {W} {H}" role="img" '
         f'aria-label="梱包の断面図: {n}本・梱包高さ{_esc(kta_disp)}mm">')
-    add('<defs><pattern id="tfFilm" width="6" height="6" patternUnits="userSpaceOnUse" '
-        'patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" '
-        f'stroke="{COLOR["SUT"]}" stroke-width="1.2" opacity=".55"/></pattern></defs>')
-
-    y = float(bottom)
-    labels: List[Tuple[float, str, str, str]] = []   # (y, key, 名, 値)
 
     def rect(x, yy, w, h, fill, extra=""):
-        add(f'<rect x="{x:.1f}" y="{yy:.1f}" width="{w:.1f}" height="{max(h, 0.6):.1f}" '
+        add(f'<rect x="{x:.1f}" y="{yy:.1f}" width="{max(w, 0.6):.1f}" height="{max(h, 0.6):.1f}" '
             f'fill="{fill}" {extra}/>')
 
-    # --- 下の樹脂パレット(脚つき) ---
+    def pallet_at(y_top: float, h: float) -> None:
+        """樹脂パレット 1 台(横から見た所)。フォーク爪の差し込み口が 2 つ。"""
+        rect(px, y_top, pw, h, COLOR["PAR"], 'rx="2"')
+        for f in (0.17, 0.61):
+            rect(px + pw * f, y_top + h * 0.3, pw * 0.22, h * 0.42, "currentColor",
+                 'class="tf-hole" rx="1"')
+
+    # ------------------------------------------------ 高さ(下から積む)
     ph = pallet * scale
-    pw = body_w + 26
-    px = cx - pw / 2
-    for i in range(3):
-        fx = px + 6 + i * (pw - 30) / 2
-        rect(fx, y - ph * 0.68, 18, ph * 0.68, COLOR["PAR"], 'rx="1.5" opacity=".85"')
-    rect(px, y - ph, pw, ph * 0.32, COLOR["PAR"], 'rx="2"')
-    deck_bottom = y - ph
-    labels.append((y - ph * 0.5, "PAR", "樹脂パレット 上下2台", disp.get("PAR", "")))
-    y -= ph
-    # --- 下の八角ハードボード ---
     hpx = max(hb_t * scale, MIN_PX)
-    rect(x0 - 6, y - hpx, body_w + 12, hpx, COLOR["HB"])
-    y -= hpx
-    coil_bottom = y
-    # --- コイルとチップボール(本数 + 1 枚) ---
     cpx = max(chip * scale, MIN_PX)
     coil_px = width * scale
+    deck_top = bottom - ph                       # 下のパレットの上面
+    coil_bottom = deck_top - hpx                 # 下の八角の上 = 積みの下端
+    coil_top = coil_bottom - (n * coil_px + n_chip * cpx)
+    top_pallet_bottom = coil_top - hpx
+    top_pallet_top = top_pallet_bottom - ph
+    band_h = coil_bottom - coil_top
+
+    # ------------------------------------------------ パレット・八角形緩衝材
+    pallet_at(deck_top, ph)
+    pallet_at(top_pallet_top, ph)
+    for yy in (deck_top - hpx, coil_top - hpx):
+        rect(px + 6, yy, pw - 12, hpx, COLOR["HB"])
+
+    # ------------------------------------------------ 右半分: 断面
+    # コイルとチップボール(いちばん下・コイルの間・いちばん上)。内径部は空けて乾燥剤を置く
+    hole = body_w * 0.16
+    y = coil_bottom
+    chips_left = n_chip
     for i in range(n):
-        rect(x0, y - cpx, body_w, cpx, COLOR["TIP"])
+        rect(cx, y - cpx, body_w / 2, cpx, COLOR["TIP"])
+        chips_left -= 1
         y -= cpx
         fill = COIL if i % 2 == 0 else COIL_ALT
-        rect(x0, y - coil_px, body_w, coil_px, fill, 'stroke="#56616c" stroke-width=".6"')
-        # コイルの穴(内径)を模式で
-        add(f'<line x1="{cx:.1f}" y1="{y - coil_px + 1:.1f}" x2="{cx:.1f}" y2="{y - 1:.1f}" '
-            'stroke="#56616c" stroke-width=".5" stroke-dasharray="2 2" opacity=".6"/>')
+        rect(cx + hole, y - coil_px, body_w / 2 - hole, coil_px, fill,
+             'stroke="#56616c" stroke-width=".6"')
         y -= coil_px
-    for _ in range(max(n_chip - n, 0)):
-        rect(x0, y - cpx, body_w, cpx, COLOR["TIP"])
+    for _ in range(max(chips_left, 0)):
+        rect(cx, y - cpx, body_w / 2, cpx, COLOR["TIP"])
         y -= cpx
-    coil_top = y
-    # --- 上の八角ハードボード・樹脂パレット ---
-    rect(x0 - 6, y - hpx, body_w + 12, hpx, COLOR["HB"])
-    y -= hpx
-    for i in range(3):
-        fx = px + 6 + i * (pw - 30) / 2
-        rect(fx, y - ph, 18, ph * 0.68, COLOR["PAR"], 'rx="1.5" opacity=".85"')
-    rect(px, y - ph * 0.32, pw, ph * 0.32, COLOR["PAR"], 'rx="2"')
-    rect(px, y - ph, pw, ph * 0.32, COLOR["PAR"], 'rx="2"')
-    top_pallet_top = y - ph
-    y -= ph
-
-    # --- 胴巻きハードボード(コイルの両脇) ---
-    band_h = coil_bottom - coil_top            # 上ほど y が小さい
-    rect(x0 - 5, coil_top, 4, coil_bottom - coil_top, COLOR["HB"], 'opacity=".9"')
-    rect(x1 + 1, coil_top, 4, coil_bottom - coil_top, COLOR["HB"], 'opacity=".9"')
-    # --- ポリシート・エサフォーム・ストレッチ(外側を包む。模式) ---
-    add(f'<rect x="{x0 - 9:.1f}" y="{coil_top - 6:.1f}" width="{body_w + 18:.1f}" '
-        f'height="{band_h + 12:.1f}" fill="none" stroke="{COLOR["POR"]}" stroke-width="1.6" '
-        'stroke-dasharray="5 3" rx="3"/>')
+    add(f'<line x1="{cx + hole:.1f}" y1="{coil_top:.1f}" x2="{cx + hole:.1f}" y2="{coil_bottom:.1f}" '
+        'stroke="#56616c" stroke-width=".6" stroke-dasharray="2 2"/>')
+    dry_y = coil_bottom - band_h * 0.5
+    rect(cx + 2, dry_y - 6, hole - 4, 12, COLOR["DRY"], 'rx="2"')
+    # 外周を包む物(右の縁)
+    film = f'stroke="{COLOR["SUT"]}" stroke-width="1.6"'
+    add(f'<line x1="{x1 + sut_x:.1f}" y1="{coil_top:.1f}" x2="{x1 + sut_x:.1f}" y2="{coil_bottom:.1f}" {film}/>')
+    # ポリシートは上下も包む
+    add(f'<polyline points="{cx:.1f},{coil_top - 1.2:.1f} {x1 + por_x:.1f},{coil_top - 1.2:.1f} '
+        f'{x1 + por_x:.1f},{coil_bottom + 1.2:.1f} {cx:.1f},{coil_bottom + 1.2:.1f}" fill="none" '
+        f'stroke="{COLOR["POR"]}" stroke-width="1.4" stroke-dasharray="4 2"/>')
     for k in range(wraps):
-        add(f'<rect x="{x0 - 13 - k * 3:.1f}" y="{coil_top + band_h * 0.18:.1f}" '
-            f'width="{body_w + 26 + k * 6:.1f}" height="{band_h * 0.64:.1f}" fill="none" '
-            f'stroke="{COLOR["ESA"]}" stroke-width="2.2" rx="3" opacity=".9"/>')
-    add(f'<rect x="{px - 4:.1f}" y="{top_pallet_top + ph * 0.4:.1f}" width="{pw + 8:.1f}" '
-        f'height="{deck_bottom + ph * 0.6 - top_pallet_top - ph * 0.4:.1f}" fill="url(#tfFilm)" '
-        f'stroke="{COLOR["SUT"]}" stroke-width="1" rx="4" opacity=".75"/>')
-    # --- PET バンド: 縦 4 本 ×2(見えるのは 2 本)・胴巻き 4 本 ---
-    for fx in (cx - body_w * 0.28, cx + body_w * 0.28):
-        rect(fx - 2, top_pallet_top - 2, 4, deck_bottom - top_pallet_top + ph + 4, COLOR["PET"],
-             'opacity=".85"')
-    for i in range(4):
-        by = coil_top + band_h * (0.14 + 0.24 * i)
-        rect(px - 6, by - 1.6, pw + 12, 3.2, COLOR["PET"], 'opacity=".85"')
-    # --- ピン(パレットの角。4 本) ---
-    for fx in (px + 3, px + pw - 7):
-        for fy in (top_pallet_top + ph * 0.5, deck_bottom + ph * 0.18):
-            rect(fx, fy - 5, 4, 10, COLOR["PI"], 'rx="1"')
-    # --- 乾燥剤(上の段に 1 つ。模式) ---
-    rect(cx - 9, coil_top - hpx - 12, 18, 9, COLOR["DRY"], 'rx="2"')
+        xe = x1 + esa_x + 3.0 * k
+        add(f'<line x1="{xe:.1f}" y1="{coil_top:.1f}" x2="{xe:.1f}" y2="{coil_bottom:.1f}" '
+            f'stroke="{COLOR["ESA"]}" stroke-width="2.2"/>')
+    rect(x1 + hb_x, coil_top, hb_w, band_h, COLOR["HB"])
+    # 丸棒(右)。下のパレットの穴に差す(差し込み口より下に出さない)・上のパレットの下まで
+    bar_bottom = deck_top + ph * 0.3
+    rect(x1 + bar_x, top_pallet_bottom, bar_w, bar_bottom - top_pallet_bottom, COLOR["PI"], 'rx="1.5"')
+    # 胴巻きバンドの切り口(丸棒の外)
+    band_ys = [coil_bottom - band_h * f for f in BAND_LEVELS]
+    for by in band_ys:
+        rect(x1 + band_x, by - 1.6, 3, 3.2, COLOR["PET"])
 
-    # --- 引き出し線と重さ(右側) ---
-    labels += [
-        (coil_top - 6, "DRY", "乾燥剤", disp.get("DRY", "")),
-        (top_pallet_top + ph * 0.5 + 0.1, "PI", "ピン 4本", disp.get("PI", "")),
-        (coil_top + band_h * 0.14, "PET", "PETバンド", disp.get("PET", "")),
-        (coil_top + band_h * 0.30, "SUT", "ストレッチフィルム 5周", disp.get("SUT", "")),
-        (coil_top + band_h * 0.46, "ESA", f"エサフォーム {wraps}周", disp.get("ESA", "")),
-        (coil_top + band_h * 0.62, "POR", "ポリシート", disp.get("POR", "")),
-        (coil_top + band_h * 0.78, "HB", "ハードボード(胴巻き+八角)", disp.get("HB", "")),
-        (coil_bottom - cpx * 0.5 - 0.1, "TIP", f"チップボール {n_chip}枚", disp.get("TIP", "")),
+    # ------------------------------------------------ 左半分: 外から見た所
+    rect(x0 - side, coil_top, cx - x0 + side, band_h, COLOR["HB"], 'opacity=".72"')
+    rect(x0 - bar_x - bar_w, top_pallet_bottom, bar_w, bar_bottom - top_pallet_bottom, COLOR["PI"],
+         'rx="1.5"')
+    for by in band_ys:
+        rect(x0 - band_x - 3, by - 1.6, cx - x0 + band_x + 3, 3.2, COLOR["PET"])
+    # 縦のバンド(上下のパレットを十文字に締める。フォーク爪の差し込み口の内側を通す)
+    xt = cx - body_w * TATE_OFFSET
+    rect(xt - 1.6, top_pallet_top - 1.6, 3.2, bottom - top_pallet_top + 1.6, COLOR["PET"])
+    rect(xt, top_pallet_top - 1.6, cx - xt + body_w * TATE_OFFSET, 1.6, COLOR["PET"])
+    # 真ん中の線(左右の境)
+    add(f'<line x1="{cx:.1f}" y1="{top_pallet_top - 8:.1f}" x2="{cx:.1f}" y2="{bottom + 4:.1f}" '
+        'class="tf-center"/>')
+    add(f'<text x="{(px + cx) / 2:.1f}" y="{top_pallet_top - 6:.1f}" class="tf-sm" '
+        'text-anchor="middle">外から見た所</text>')
+    add(f'<text x="{(cx + px + pw) / 2:.1f}" y="{top_pallet_top - 6:.1f}" class="tf-sm" '
+        'text-anchor="middle">断面</text>')
+
+    # --- 引き出し線と重さ(右側)。線は描いた物から出す ---
+    side_y = lambda f: coil_bottom - band_h * f   # noqa: E731
+    labels = [
+        (deck_top + ph * 0.5, "PAR", "樹脂パレット 上下2台", disp.get("PAR", ""), px + pw),
+        (coil_bottom - cpx * 0.5 - 0.1, "TIP", f"チップボール {n_chip}枚", disp.get("TIP", ""),
+         x1 - 4),
+        (side_y(0.92), "HB", "ハードボード(胴巻き+八角)", disp.get("HB", ""), x1 + hb_x + hb_w / 2),
+        (side_y(0.84), "ESA", f"エサフォーム {wraps}周", disp.get("ESA", ""), x1 + esa_x),
+        (side_y(0.76), "POR", "ポリシート", disp.get("POR", ""), x1 + por_x),
+        (side_y(0.70), "SUT", "ストレッチフィルム 5周", disp.get("SUT", ""), x1 + sut_x),
+        (band_ys[2], "PET", "PETバンド 胴巻き4・縦4本", disp.get("PET", ""), x1 + band_x + 3),
+        (side_y(0.38), "PI", "ピン(樹脂製丸棒) 4本", disp.get("PI", ""), x1 + bar_x + bar_w),
+        (dry_y, "DRY", "乾燥剤(内径部)", disp.get("DRY", ""), cx + hole - 2),
     ]
-    _leaders(add, labels, x_from=px + pw + 8, x_text=W - 222, top=top, bottom=bottom)
+    _leaders(add, labels, x_out=px + pw + 8, x_text=W - 226, top=top, bottom=bottom)
 
     # --- 寸法(左側): コイル積高・梱包高さ ---
     _dim(add, 38, coil_top, coil_bottom, f"{ta:.1f}", "コイル積高")
     _dim(add, 14, top_pallet_top, float(bottom), f"{kta_disp}", "梱包高さ")
-    add(f'<text x="{cx:.1f}" y="{coil_top + band_h / 2:.1f}" class="tf-in" text-anchor="middle">'
-        f'コイル {n}本</text>')
-    add(f'<text x="{cx:.1f}" y="{coil_top + band_h / 2 + 15:.1f}" class="tf-in tf-sm" '
-        f'text-anchor="middle">NW {_esc(disp.get("NW", ""))}kg</text>')
+    # 本数と NW は外から見た所の上の方(ラベルを貼る所。バンドの無い所)に札で書く
+    tx = (x0 - side + xt) / 2
+    ty = coil_bottom - band_h * 0.84
+    rect(tx - 44, ty - 13, 88, 32, "#fffdf6", 'stroke="#56616c" stroke-width=".6" rx="2"')
+    add(f'<text x="{tx:.1f}" y="{ty + 1:.1f}" class="tf-in" text-anchor="middle">コイル {n}本</text>')
+    add(f'<text x="{tx:.1f}" y="{ty + 14:.1f}" class="tf-in tf-sm" text-anchor="middle">'
+        f'NW {_esc(disp.get("NW", ""))}kg</text>')
     # 床と外径
     add(f'<line x1="{px - 14:.1f}" y1="{bottom + .5}" x2="{px + pw + 14:.1f}" y2="{bottom + .5}" '
         'class="tf-floor"/>')
-    add(f'<text x="{cx:.1f}" y="{bottom + 18}" class="tf-sm" text-anchor="middle">'
+    add(f'<text x="{cx:.1f}" y="{bottom + 17}" class="tf-sm" text-anchor="middle">'
         f'外径 Φ{_esc(p.get("tempDiameter", ""))}mm ・ 外周 {_esc(p.get("gai", ""))}m</text>')
+    add(f'<text x="{W / 2:.0f}" y="{H - 24}" class="tf-note" text-anchor="middle">'
+        '模式図。左半分は外から見た所・右半分は断面。高さは寸法どおり(薄い物は太く描く)</text>')
     add(f'<text x="{W / 2:.0f}" y="{H - 10}" class="tf-note" text-anchor="middle">'
-        '模式図。高さは寸法どおり(チップボール・ハードボードは見えるよう太く描いています)。'
-        '包む物の位置は目安</text>')
+        '丸棒・バンドの位置は包装仕様書 7C1175 の図に合わせた目安(上の方はラベルの場所)</text>')
     add(f'<text x="8" y="16" class="tf-sm">コイル積高 = {n}本 × {width:g}mm + '
         f'チップボール {n_chip}枚 × {chip:g}mm = {ta:.1f}mm</text>')
     add(f'<text x="8" y="32" class="tf-sm">梱包高さ = 積高 + 樹脂パレット {pallet:g}×2 + '
@@ -250,8 +296,11 @@ def _dim(add, x: float, y_top: float, y_bot: float, value: str, label: str) -> N
         f'text-anchor="middle" class="tf-sm">{_esc(label)} {_esc(value)}mm</text></g>')
 
 
-def _leaders(add, labels, *, x_from: float, x_text: float, top: float, bottom: float) -> None:
-    """重さの札を右に縦に並べ、描いた物から線で結ぶ(札どうしが重ならないよう間を空ける)。"""
+def _leaders(add, labels, *, x_out: float, x_text: float, top: float, bottom: float) -> None:
+    """重さの札を右に縦に並べ、描いた物から線で結ぶ(札どうしが重ならないよう間を空ける)。
+
+    labels: (y, キー, 名, 値, 線を出す x)。線は描いた物の点(小さな丸)から右へ出て、札へ折れる。
+    """
     items = sorted(labels, key=lambda t: t[0])
     if not items:
         return
@@ -264,9 +313,11 @@ def _leaders(add, labels, *, x_from: float, x_text: float, top: float, bottom: f
         slots[-1] = hi
         for i in range(len(slots) - 2, -1, -1):
             slots[i] = min(slots[i], slots[i + 1] - gap)
-    for (want, key, name, value), y in zip(items, slots):
+    for (want, key, name, value, x_from), y in zip(items, slots):
         color = COLOR.get(key, "#888")
-        add(f'<polyline points="{x_from:.1f},{want:.1f} {x_text - 14:.1f},{y:.1f} {x_text - 6:.1f},{y:.1f}" '
+        add(f'<circle cx="{x_from:.1f}" cy="{want:.1f}" r="1.8" fill="{color}" class="tf-pt"/>')
+        add(f'<polyline points="{x_from:.1f},{want:.1f} {x_out:.1f},{want:.1f} '
+            f'{x_text - 14:.1f},{y:.1f} {x_text - 6:.1f},{y:.1f}" '
             f'fill="none" stroke="{color}" stroke-width="1.1"/>')
         add(f'<rect x="{x_text - 4:.1f}" y="{y - 6:.1f}" width="10" height="10" rx="2" fill="{color}"/>')
         val = f' <tspan class="tf-v">{_esc(value)}kg</tspan>' if value else ""

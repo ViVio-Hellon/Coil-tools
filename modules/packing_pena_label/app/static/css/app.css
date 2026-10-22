@@ -760,3 +760,5 @@ body.print-only{background:#fff; color:var(--ink)}
   border:1px solid var(--accent); color:var(--accent); vertical-align:1px}
 /* カード直下の表は左右の余白の内側に収める(width:100% のままだと右へ 20px はみ出していた) */
 .card>.tbl:not(.sizetbl){width:calc(100% - 20px)}
+.tfig .tf-hole{fill:var(--panel); opacity:.9}
+.tfig .tf-center{stroke:currentColor; stroke-width:.8; stroke-dasharray:8 3 2 3; opacity:.55}

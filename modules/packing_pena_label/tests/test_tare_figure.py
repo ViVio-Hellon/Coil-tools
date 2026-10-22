@@ -95,6 +95,37 @@ class TareFigureTest(unittest.TestCase):
             gaps = [b - a for a, b in zip(sorted(ys), sorted(ys)[1:])]
             self.assertTrue(all(g >= 12 for g in gaps), (n, gaps))
 
+    def test_pins_and_bands_follow_the_packing_spec(self):
+        """包装仕様書 7C1175 の図のとおり(1.5.35): ピン(樹脂製丸棒)はハードボードの外に立って
+        上下のパレットの間に渡り、胴巻きバンドは 4 本で上の方(ラベルの場所)には掛けない。"""
+        self.assertEqual(len(TF.BAND_LEVELS), 4)
+        self.assertTrue(all(0 < f <= 0.7 for f in TF.BAND_LEVELS), TF.BAND_LEVELS)
+        for n in (1, 11, 20):
+            p, _ = _payload(n)
+            svg = TF.section_svg(p)
+            self.assertIn("外から見た所", svg)
+            self.assertIn("断面", svg)
+            root = ET.fromstring(svg)
+            rects = [r for r in root.iter("{http://www.w3.org/2000/svg}rect") if r.get("fill")]
+            rects += [r for r in root.iter("rect") if r.get("fill")]
+            box = lambda r: (float(r.get("x")), float(r.get("y")),            # noqa: E731
+                             float(r.get("width")), float(r.get("height")))
+            pallets = sorted((box(r) for r in rects if r.get("fill") == TF.COLOR["PAR"] and box(r)[2] > 50),
+                             key=lambda b: b[1])
+            top_pallet, bottom_pallet = pallets[0], pallets[-1]
+            # 札の色見本(10×10)を除いた、縦長のピン
+            pins = [box(r) for r in rects if r.get("fill") == TF.COLOR["PI"] and box(r)[3] > 12]
+            self.assertEqual(len(pins), 2, n)          # 左右に見える 2 本(4 本のうち手前)
+            for x, y, w, h in pins:
+                self.assertAlmostEqual(y, top_pallet[1] + top_pallet[3], delta=0.2)   # 上のパレットの下から
+                self.assertGreater(y + h, bottom_pallet[1])                            # 下のパレットの穴へ差す
+                self.assertLess(y + h, bottom_pallet[1] + bottom_pallet[3])            # 下には突き抜けない
+                self.assertTrue(top_pallet[0] < x < top_pallet[0] + top_pallet[2], (n, x))
+            # 胴巻きバンド(外から見た所の横長の帯)は 4 本
+            wide = [box(r) for r in rects if r.get("fill") == TF.COLOR["PET"] and box(r)[2] > 20
+                    and box(r)[3] < 4]
+            self.assertEqual(len([b for b in wide if b[1] > top_pallet[1] + 2]), 4, n)
+
     def test_small_shares_are_not_shown_as_zero(self):
         self.assertEqual(TF._pct(0.5, 100), "0.5%")
         self.assertEqual(TF._pct(0.02, 100), "0.1%未満")
