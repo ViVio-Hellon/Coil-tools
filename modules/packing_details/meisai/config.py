@@ -87,6 +87,11 @@ def db_path_problem(path: Optional[Path] = None) -> str:
 # 残っていれば起動時のログで知らせる(`start_app.log_module_environment`)
 LOG_DIR = _common_logging.log_dir()
 
+# 作業の記録(出力・印刷画面・全クリアなど)の控え。月ごとのファイルに足すだけ
+# (`work_record`)。ローカル領域の records(ペナラベルと同じフォルダ。ファイル名で分ける)
+RECORDS_DIR = Path(os.environ.get("PACKING_DETAILS_RECORDS_DIR",
+                                  str(app_config.local_root() / "records")))
+
 # 利用者ごとの設定(取り込み元の置き場所など)
 USER_CONFIG_PATH = Path(os.environ.get(
     "PACKING_DETAILS_CONFIG_PATH",
@@ -214,6 +219,11 @@ KEY_EXPORT_DIR = "export_dir"           # CSV の出力先(マスタ管理・明
 # 現場の指摘: 梱包明細履歴.sqlite3 と 梱包明細打ち出し.json をそれぞれ設定できるように)
 KEY_HISTORY_DIR = "history_dir"         # 明細の履歴(梱包明細履歴.sqlite3)
 KEY_SHARED_JSON_DIR = "shared_json_dir"  # 管理者パスワード・右上の文字の控え(梱包明細打ち出し.json)
+# 作業の記録(VER 0.13.30。ペナラベルと同じ)。どれもこの PC だけの設定
+KEY_RECORD_DIR = "record_dir"           # 記録の保存先フォルダー(<PC名> を作って PC ごとに書く)
+KEY_LINE_NAME = "line_name"             # ライン名(記録・編集履歴に PC 名と一緒に残す)
+KEY_TEST_MODE = "test_mode"             # テストモード(実機の試験中。記録に印を付ける)
+LINE_NAME_MAX = 40
 
 # 管理者パスワードの既定(一度も変えていない端末で通る値)。
 #

@@ -21,7 +21,7 @@ from common import app_config as _common_app_config
 from common import logging_utils as _common_logging
 from common import storage_places
 from modules.packing_details.meisai import (admin_password, config, data_sync, distribution, printing,
-                    qa_mark, shared_settings, source_db, user_settings)
+                    qa_mark, shared_settings, source_db, user_settings, work_record)
 from modules.packing_details.meisai.logging_utils import get_logger
 
 from .. import error_body, get_db
@@ -101,6 +101,21 @@ def _local_state() -> dict:
         "json_setting": user_settings.get(config.KEY_SHARED_JSON_DIR, "") or "",
         "distribution": distribution.summary(),
         "storage": _storage(),
+        **_record_state(),
+    }
+
+
+def _record_state() -> dict:
+    """作業の記録の設定(この PC。VER 0.13.30)と、控えをどこに書いているか。"""
+    st = work_record.status()
+    return {
+        "record_dir_setting": work_record.record_dir_setting(),
+        "record_dir": st["shared"],
+        "records_local": st["local"],
+        "record_problem": " / ".join(x for x in (st["local_problem"], st["shared_problem"]) if x),
+        "line_name": work_record.line_name(),
+        "line_name_max": config.LINE_NAME_MAX,
+        "test_mode": work_record.test_mode(),
     }
 
 
@@ -117,6 +132,7 @@ def _storage() -> dict:
     jdir = shared_settings.json_dir()
     hdir = shared_settings.history_dir()
     config_path = config.USER_CONFIG_PATH
+    record_shared = work_record.status()["shared"]
     return storage_places.Places(
         local=[
             P("設定ファイル", str(config_path),
@@ -128,6 +144,9 @@ def _storage() -> dict:
               "取り込んだ台帳の写し・副番履歴・作業の途中（直近5ロット）・出力した明細・"
               "共有へ送る前の明細の履歴（届かないときはここに残して、あとで送る）"),
             storage_places.log_place(),
+            P("作業の記録", str(config.RECORDS_DIR),
+              "出力・出力し直し・全クリア・印刷画面などの記録（月ごとのファイル。足すだけで消さない）。"
+              "「作業の記録」の画面で見られます"),
         ],
         shared=[
             P("紙面の右上の文字", str(share / config.MASTER_DB_NAME),
@@ -142,6 +161,9 @@ def _storage() -> dict:
             P("梱包課共有の仕掛(第1パス)", str(config.konpo_db_dir()),
               "取り込み元（" + " / ".join(config.konpo_db_files().values()) + "）",
               "読むだけ（このツールは書き換えません）"),
+            *([P("作業の記録（設定の保存先）", record_shared,
+                 "作業の記録の控え（この PC の名前のフォルダに、月ごとのファイル）")]
+              if record_shared else []),
         ],
         dist=[
             P("配布設定", str(distribution.settings_path()),
@@ -527,6 +549,88 @@ def reapply_distribution():
     """置いてある配布設定を読み込み直す(この端末の設定も上書き)。"""
     body = request.get_json(silent=True) or {}
     return _distribution_reply(distribution.reapply(str(body.get("password", ""))))
+
+
+# ------------------------------------------------------------------
+# 作業の記録(VER 0.13.30。ペナラベルと同じ)。どれもこの PC だけの設定
+# ------------------------------------------------------------------
+def _record_reply(message: str):
+    return jsonify({"ok": True, "message": message, **_record_state(),
+                    "storage": _storage()})
+
+
+@bp.post("/api/settings/record-dir")
+def set_record_dir():
+    """記録の保存先フォルダー。**管理者パスワードが要る**(記録の行き先が変わるため)。
+
+    空なら使わない(この PC の records にだけ書く)。書けるかはその場で確かめて言うが、
+    書けなくても保存する(共有がいま届かないだけのことがある。書けない間は記録の画面に出す)。
+    """
+    body = request.get_json(silent=True) or {}
+    if not admin_password.verify(str(body.get("password", ""))):
+        log.warning("記録の保存先フォルダーの変更を断りました(管理者パスワード)")
+        return jsonify(error_body(
+            "need_password", "記録の保存先フォルダーを変えるには管理者パスワードが要ります。",
+            "password")), 403
+    value = str(body.get("value", "")).strip()
+    target = None
+    if value:
+        try:
+            target = config.resolve_dir(value) / work_record.pc_folder_name()
+        except ValueError as exc:
+            return jsonify(error_body("bad_path", str(exc), "value")), 400
+    if not user_settings.save(config.KEY_RECORD_DIR, value):
+        return jsonify(error_body("write_failed", "設定ファイルに書けませんでした。")), 500
+    if target is None:
+        message = "記録の保存先フォルダーを空にしました。記録はこの PC の records にだけ書きます。"
+    else:
+        problem = _writable_problem(target)
+        message = (f"記録の保存先フォルダーを保存しました。この PC の記録は {target} にも書きます。"
+                   + (f"\nただし、いまは書けません({problem})。届くようになれば書きます。"
+                      if problem else ""))
+    work_record.append("設定", {"what": "記録の保存先フォルダー", "value": value})
+    return _record_reply(message)
+
+
+@bp.post("/api/settings/line-name")
+def set_line_name():
+    """ライン名(この PC)。記録と編集履歴に PC 名と一緒に残す。パスワードは要らない。"""
+    body = request.get_json(silent=True) or {}
+    value = qa_mark.clean(body.get("value", ""))
+    if len(value) > config.LINE_NAME_MAX:
+        return jsonify(error_body(
+            "too_long", f"ライン名は{config.LINE_NAME_MAX}文字までです(いま{len(value)}文字)。",
+            "value")), 400
+    if not user_settings.save(config.KEY_LINE_NAME, value):
+        return jsonify(error_body("write_failed", "設定ファイルに書けませんでした。")), 500
+    return _record_reply(f"ライン名を「{value}」にしました。" if value
+                         else "ライン名を空にしました(記録には PC 名だけを残します)。")
+
+
+@bp.post("/api/settings/test-mode")
+def set_test_mode():
+    """テストモード(実機の試験中)。入れるにも切るにも**管理者パスワードが要る。**
+
+    入れている間は、作業の記録・明細の履歴・編集履歴に「テストモード」と残し、
+    画面の上に赤い札を出す(本番の記録と見分けられるように)。
+    """
+    body = request.get_json(silent=True) or {}
+    if not admin_password.verify(str(body.get("password", ""))):
+        log.warning("テストモードの切り替えを断りました(管理者パスワード)")
+        return jsonify(error_body(
+            "need_password", "テストモードを切り替えるには管理者パスワードが要ります。",
+            "password")), 403
+    enabled = body.get("enabled") is True
+    before = work_record.test_mode()
+    if not user_settings.save(config.KEY_TEST_MODE, enabled):
+        return jsonify(error_body("write_failed", "設定ファイルに書けませんでした。")), 500
+    if enabled != before:
+        log.info("テストモードを%sました", "入れ" if enabled else "切り")
+        work_record.append("設定", {"what": "テストモード", "value": "入" if enabled else "切"})
+    return _record_reply(
+        "テストモードを入れました。記録と明細の履歴に「テストモード」と残します。"
+        "試験が終わったら必ず切ってください。" if enabled
+        else "テストモードを切りました(本番)。")
 
 
 @bp.post("/api/settings/auto-import")

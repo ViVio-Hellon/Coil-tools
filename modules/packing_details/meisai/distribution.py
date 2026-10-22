@@ -84,6 +84,8 @@ ITEMS: tuple[tuple[str, str, bool], ...] = (
     (config.KEY_HISTORY_DIR, "明細の履歴のフォルダ", True),
     (config.KEY_SHARED_JSON_DIR, "管理者パスワード・控えのフォルダ", True),
     (config.KEY_EXPORT_DIR, "CSVの出力先", True),
+    # 共有フォルダはどの PC も同じ(書くのは <PC名> の下。VER 0.13.30)
+    (config.KEY_RECORD_DIR, "記録の保存先フォルダー", True),
     (config.KEY_AUTO_IMPORT, "起動時の自動取り込み", True),
 )
 ITEM_KEYS = frozenset(key for key, _, _ in ITEMS)
@@ -94,13 +96,16 @@ NOT_INCLUDED: tuple[tuple[str, str], ...] = (
     ("管理者パスワード", "全ラインで共有しています（梱包資材マスタのフォルダ）。"
                         "そのフォルダを配れば、配った先も同じパスワードです"),
     ("紙面の右上の文字", "同じく全ラインで共有しています"),
+    ("ライン名", "PC ごとに違う値です（その PC の設定で入れてください）"),
+    ("テストモード", "その PC の試験のときだけ入れるものです（配った先で入ったままにしない）"),
 )
 
 # 項目ごとの値の形。**手で直した 設定.json の型違いを通さない**(文字の "false" を
 # 自動取り込みに入れると、`bool("false")` で「する」になる)
 _PATH_KEYS = frozenset({config.KEY_LOT_DB_DIR, config.KEY_KONPO_DB_DIR, config.KEY_SHARED_DIR,
                         config.KEY_EXPORT_DIR, config.KEY_HISTORY_DIR,
-                        config.KEY_SHARED_JSON_DIR, config.KEY_LOT_DB_DIR2})
+                        config.KEY_SHARED_JSON_DIR, config.KEY_LOT_DB_DIR2,
+                        config.KEY_RECORD_DIR})
 # 仕掛のファイル名(第2パスの4つ・第1パスの LS4LOT。文字。フォルダの区切りなど使えない文字は断る)
 _NAME_KEYS = frozenset(config.KEY_LOT_DB2_FILES.values()) | {config.KEY_KONPO_DB_FILE}
 _BOOL_KEYS = frozenset({config.KEY_AUTO_IMPORT})

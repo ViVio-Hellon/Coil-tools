@@ -62,7 +62,8 @@ class DetailsStorageTest(unittest.TestCase):
         self.assertIn(str(config.USER_CONFIG_PATH), _paths(local))
         self.assertIn(str(config.DB_PATH), _paths(local))
         names = [r["name"] for r in local["rows"]]
-        self.assertEqual(names, ["設定ファイル", "手元のDB", "ログ"])
+        # 作業の記録の控え(梱包明細 0.13.30)
+        self.assertEqual(names, ["設定ファイル", "手元のDB", "ログ", "作業の記録"])
         self.assertIn("CSVの出力先", local["rows"][0]["holds"])
 
     def test_shared_files_are_in_the_master_folder(self):
@@ -88,9 +89,10 @@ class DetailsStorageTest(unittest.TestCase):
         html = self.client.get(f"/details/meisai?t={TOKEN}").get_data(as_text=True)
         self.assertIn('id="tabStore"', html)
         self.assertIn('id="panelStore"', html)
-        # 置き場所の欄はこのPC(仕掛台帳の2つ目を統合 1.2.6 で、起動時の自動取り込みを 1.2.22 で足した)、
+        # 置き場所の欄はこのPC(仕掛台帳の2つ目を統合 1.2.6 で、起動時の自動取り込みを 1.2.22 で、
+        # 記録の保存先フォルダー・ライン名・テストモードを梱包明細 0.13.30 で足した)、
         # 右上の文字・管理者パスワードは共有
-        self.assertEqual(html.count('class="where where-local"'), 8)
+        self.assertEqual(html.count('class="where where-local"'), 11)
         self.assertEqual(html.count('class="where where-shared"'), 2)
         self.assertIn("どのフォルダを見るかは<b>このPCに保存</b>", html)
 

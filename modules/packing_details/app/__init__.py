@@ -311,13 +311,14 @@ def get_db():
 # ルーティング
 # ------------------------------------------------------------------
 def _register_routes(bp: Blueprint) -> None:
-    from .routes import health, history, master, meisai, settings
+    from .routes import health, history, master, meisai, records, settings
 
     bp.register_blueprint(health.bp)
     bp.register_blueprint(meisai.bp)
     bp.register_blueprint(settings.bp)
     bp.register_blueprint(history.bp)
     bp.register_blueprint(master.bp)
+    bp.register_blueprint(records.bp)
 
     @bp.errorhandler(db.WriteError)
     def _write_failed(exc):                     # noqa: ANN202 - Flaskのフック

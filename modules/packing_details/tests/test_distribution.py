@@ -296,7 +296,7 @@ class WebTest(_Base):
         self.assertTrue(items[config.KEY_LOT_DB_DIR]["set"])
         self.assertFalse(items[config.KEY_KONPO_DB_DIR]["set"])
         self.assertEqual([n["label"] for n in dist["not_included"]],
-                         ["管理者パスワード", "紙面の右上の文字"])
+                         ["管理者パスワード", "紙面の右上の文字", "ライン名", "テストモード"])
         self.assertNotIn(PASSWORD, json.dumps(body, ensure_ascii=False))
 
     def test_書き出す_読み込み直す_消す(self):

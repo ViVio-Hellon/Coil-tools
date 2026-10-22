@@ -101,6 +101,9 @@ table.form th { background: #f0f0f0; font-weight: bold; }
   .notice { border-left: 4px solid #b85400; background: #fbe8d8;
             color: #7a3800; padding: 6px 10px; font-weight: bold; }
   .notice[hidden] { display: none; }
+  .testmode { display: inline-block; padding: 2px 10px; border-radius: 999px;
+              background: #b3261e; color: #fff; font-size: 12px; font-weight: bold;
+              letter-spacing: .05em; }
 }
 @media print { .screen-only { display: none; } }
 """
@@ -241,7 +244,7 @@ _EDIT_SCRIPT = """
 
 def render_html(report: Report, *, edit_url: str = "",
                 edit_hint: str = "", script: str = "",
-                notice: str = "", bar: str = "") -> str:
+                notice: str = "", bar: str = "", badge: str = "") -> str:
     """帳票をHTML文字列にする。
 
     `edit_url` を渡すと、`editable()` で作った欄がその場で直せるように
@@ -254,6 +257,7 @@ def render_html(report: Report, *, edit_url: str = "",
     枠だけ隠して置く(あとからスクリプトが出せるように)。
     `bar` は直せない紙面の上に出す案内(HTML。画面のときだけ)。直せる
     紙面では `edit_hint` の帯がこの役をする。
+    `badge` は画面のときだけ一番上に出す札(テストモード。HTML)。
     """
     sheets = "\n".join(f'<div class="sheet">{s}</div>' for s in report.sheets)
     extra_css = _EDIT_CSS if (edit_url or bar) else ""
@@ -266,7 +270,7 @@ def render_html(report: Report, *, edit_url: str = "",
         f"<title>{escape(report.title)}</title>"
         f"<style>{report.setup.to_css()}\n{BASE_CSS}\n{extra_css}\n"
         f"{report.setup.extra_css}</style>"
-        f"</head><body>{_PRINT_HINT}{_notice(notice)}{hint}{sheets}{script}"
+        f"</head><body>{badge}{_PRINT_HINT}{_notice(notice)}{hint}{sheets}{script}"
         "</body></html>"
     )
 

@@ -353,8 +353,17 @@ EDIT_HINT = (
 )
 
 
+def test_mode_badge() -> str:
+    """テストモードの札(紙面の画面だけ。紙には出ない)。切なら空(VER 0.13.30)。"""
+    from . import work_record
+    if not work_record.test_mode():
+        return ""
+    return ('<div class="screen-only"><span class="testmode" title="記録に「テストモード」と'
+            '残しています。試験が終わったら設定で切ってください">テストモード</span></div>')
+
+
 def render(outputs: Iterable[Output], *, title: Optional[str] = None,
-           edit_url: str = "", resolved: Optional[tuple] = None) -> str:
+           edit_url: str = "", resolved: Optional[tuple] = None, badge: str = "") -> str:
     """印刷用のHTML。ブラウザの印刷(Ctrl+P)でそのまま出せる。
 
     `edit_url` を渡すと、印刷の前にサイズと LOTNO を書き足せる
@@ -367,7 +376,7 @@ def render(outputs: Iterable[Output], *, title: Optional[str] = None,
     return printing.render_html(
         build_report(outputs, title=title, edit=bool(edit_url), qa=qa),
         edit_url=edit_url, edit_hint=EDIT_HINT, script=_qa_script(),
-        notice=qa_mark.notice(snapshot))
+        notice=qa_mark.notice(snapshot), badge=badge)
 
 
 # ------------------------------------------------------------------
@@ -397,7 +406,8 @@ def _from_history(slip: dict) -> Output:
                   history_id=str(head["送信ID"]))
 
 
-def render_history(slips: list[dict], *, current_qa: str, source: str = "shared") -> str:
+def render_history(slips: list[dict], *, current_qa: str, source: str = "shared",
+                   badge: str = "") -> str:
     """履歴から明細票を作り直す。**読むだけ**(履歴も明細も書き換えない)。
 
     右上の文字は**その紙を開いたときに刷られた文字**(履歴の記録)。記録が
@@ -435,7 +445,7 @@ def render_history(slips: list[dict], *, current_qa: str, source: str = "shared"
     title = outputs[0].sheet_name if len(outputs) == 1 else f"{outputs[0].lot_no} ほか"
     report = build_report(outputs, title=f"履歴 {title}", qas=qas)
     return printing.render_html(report, script=_qa_script(sync=False),
-                                notice=" ".join(notes), bar=HISTORY_BAR)
+                                notice=" ".join(notes), bar=HISTORY_BAR, badge=badge)
 
 
 # 紙面の右上の文字を、刷る前に整える。**帳票は独立したページ**で、

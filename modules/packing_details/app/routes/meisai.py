@@ -42,7 +42,7 @@ from flask import (Blueprint, Response, current_app, jsonify, render_template,
 
 from modules.packing_details.meisai import (config, data_sync, db, history_repo, idle_exit,
                     meisai_service, qa_mark, report, screen, session, slip_history,
-                    strand_service)
+                    strand_service, work_record)
 from modules.packing_details.meisai.logging_utils import get_logger
 from modules.packing_details.meisai.strand_service import RefusedError
 
@@ -122,6 +122,8 @@ def page():
         # (届かない・遅い共有のぶんだけ画面が出るのが遅れるため)
         stamps=data_sync.stamps(conn, check=False),
         state=_state(conn),
+        # テストモードの札(VER 0.13.30。入れたまま本番に戻らないよう、上の帯に出す)
+        test_mode=work_record.test_mode(),
     )
 
 
@@ -726,7 +728,21 @@ def output():
                     result.seq_no, exc)
         message += "(途中経過の保存に失敗しました。次の操作で保存し直します)"
     slip_history.kick()                 # 履歴を共有へ(裏で)
+    _record_output("出力し直し" if editing else "出力", conn, board.lot_no, result.seq_no)
     return _ok(conn, seq_no=result.seq_no, message=message)
+
+
+def _record_output(kind: str, conn, lot_no: str, seq_no: int) -> None:
+    """出力した 1 枚を作業の記録に残す(VER 0.13.30)。**止めない**(`work_record`)。"""
+    payload: dict = {"lot": lot_no, "no": seq_no}
+    try:
+        found = meisai_service.find_output(conn, lot_no, seq_no)
+        if found is not None:
+            payload.update(coils=found.keys, weights=found.weights,
+                           historyId=found.history_id)
+    except Exception as exc:                            # noqa: BLE001 - 記録のために出力を止めない
+        log.warning("作業の記録に出力の中身を添えられません: %s", exc)
+    work_record.append(kind, payload)
 
 
 # ==================================================================
@@ -755,6 +771,7 @@ def edit_output():
         meisai_service.begin_edit(conn, board, seq_no)
     except RefusedError as exc:
         return _refused(exc, 409 if exc.reason == strand_service.REFUSE_EDITING else 400)
+    work_record.append("修正を始めた", {"lot": board.lot_no, "no": seq_no})
     return _ok(conn, message=(f"No{seq_no}を修正します。積み直して「修正して出力」を"
                               "押してください。"))
 
@@ -769,6 +786,8 @@ def edit_cancel():
     no = board.edit_no
     note = _weights_note(board) if no else ""
     board.end_edit(committed=False)
+    if no:
+        work_record.append("修正の取り消し", {"lot": board.lot_no, "no": no})
     return _ok(conn, message=f"No{no}の修正をやめました。{note}" if no else "")
 
 
@@ -782,6 +801,14 @@ def mark_printed():
     """
     conn = get_db()
     history_repo.set_printed(conn, True)
+    # 作業の記録(VER 0.13.30)。**刷った証拠ではない**(印刷の画面を開いただけ。
+    # ブラウザは、刷ったか・やめたかを教えない)
+    body = request.get_json(silent=True) or {}
+    board = session.current()
+    nos = body.get("nos") if isinstance(body.get("nos"), list) else []
+    work_record.append("印刷画面", {
+        "lot": str(body.get("lot") or (board.lot_no if board else "")),
+        "nos": [n for n in nos if isinstance(n, int)]})
     return _ok(conn)
 
 
@@ -851,11 +878,14 @@ def _render_report(conn, outputs, lot_no: str) -> Response:
     """紙面を組む。**開いたことを明細の履歴に残す**(刷るために開くので、
     何回開いたか・そのとき刷られる右上の文字は、あとから追う手がかり)。"""
     resolved = qa_mark.resolve()
-    html = report.render(outputs, edit_url=_edit_url(lot_no), resolved=resolved)
+    html = report.render(outputs, edit_url=_edit_url(lot_no), resolved=resolved,
+                         badge=report.test_mode_badge())
     ids = [o.history_id for o in outputs if o.history_id]
     if ids:
         slip_history.note_opened(conn, ids, resolved[0])
         slip_history.kick()
+    work_record.append("紙面を開いた", {"lot": lot_no.upper(),
+                                       "nos": [o.seq_no for o in outputs], "qa": resolved[0]})
     return Response(html, mimetype="text/html")
 
 
@@ -931,6 +961,8 @@ def clear_all():
         session.clear()
     slip_history.kick()
     log.info("clear_all: %s を全クリアしました (取り消し %s枚)", lot_no, cancelled)
+    work_record.append("全クリア", {"lot": lot_no, "nos": [o.seq_no for o in outputs],
+                                   "cancelled": cancelled})
     return _ok(conn, message=f"ロット {lot_no} を全クリアしました。初めからやり直してください。")
 
 

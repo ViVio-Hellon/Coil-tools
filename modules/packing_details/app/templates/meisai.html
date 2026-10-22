@@ -16,6 +16,11 @@
         止まる。押せば出どころ(実行フォルダ)と変更履歴まで辿れる -#}
     <button type="button" class="ver" id="btnAbout"
             title="バージョン情報">VER {{ version }}</button>
+    {#- テストモードの札(VER 0.13.30)。入れたまま本番に戻らないよう、いつも見える所に出す。
+        設定で切り替えたらその場で出し入れする(settings.js) -#}
+    <span class="testmode" id="testModeBadge"
+          title="記録と明細の履歴に「テストモード」と残しています。試験が終わったら設定で切ってください"
+          {% if not test_mode %}hidden{% endif %}>テストモード</span>
     <span class="spacer"></span>
     {#- 届くかどうかではなく、**取り込んであるか**を出す。
         共有が切れていても手元のぶんは使えるので、`found` で分けると
@@ -350,6 +355,56 @@
           <button type="button" class="primary" id="btnJsonSave">保存</button>
         </div>
         <p class="set-note" id="setJsonNote" role="status" hidden></p>
+      </section>
+
+      {#- 作業の記録(VER 0.13.30。ペナラベルと同じ)。出力・印刷画面・全クリアなどを月ごとの
+          ファイルに足す。3つともこの PC だけの設定(配布するのは保存先フォルダーだけ) -#}
+      <section class="set-box" id="setRecordBox" aria-labelledby="setRecordHead">
+        <div class="set-box-head"><span id="setRecordHead">記録の保存先フォルダー</span><span class="where where-local">このPCに保存</span>
+          <span class="stamp">変えるには管理者パスワードが要ります</span></div>
+        <span class="stamp">出力・出力し直し・全クリア・印刷画面などの作業の記録を、月ごとのファイル（足すだけ・消さない）にして、
+          この PC の records に加えてここにも書きます（この PC の名前のフォルダーを作って PC ごとに）。
+          共有フォルダーを入れると、PC の入れ替えでも記録が残ります。空ならこの PC の records にだけ書きます。</span>
+        <input type="text" id="setRecordDir" spellcheck="false" autocomplete="off" aria-labelledby="setRecordHead"
+               placeholder="空ならこの PC の records にだけ書きます">
+        <span class="stamp" id="setRecordNow"></span>
+        <div class="set-row set-row-inline">
+          <label for="setRecordPassword">管理者パスワード</label>
+          <input type="password" id="setRecordPassword" autocomplete="off">
+        </div>
+        <div class="set-qa-buttons">
+          <button type="button" class="primary" id="btnRecordSave">保存</button>
+          <a id="recordsLink" href="#" target="_blank" rel="noopener"><button type="button">作業の記録を見る</button></a>
+        </div>
+        <p class="set-note" id="setRecordNote" role="status" hidden></p>
+      </section>
+
+      <section class="set-box" aria-labelledby="setLineHead">
+        <div class="set-box-head"><span id="setLineHead">ライン名（このPC）</span><span class="where where-local">このPCに保存</span></div>
+        <span class="stamp">作業の記録・資材マスタの編集履歴に、PC 名と一緒に残します。空なら PC 名だけを残します。</span>
+        <input type="text" id="setLineName" spellcheck="false" autocomplete="off" aria-labelledby="setLineHead"
+               placeholder="例: 2ライン">
+        <div class="set-qa-buttons">
+          <button type="button" class="primary" id="btnLineSave">保存</button>
+        </div>
+        <p class="set-note" id="setLineNote" role="status" hidden></p>
+      </section>
+
+      <section class="set-box" id="setTestBox" aria-labelledby="setTestHead">
+        <div class="set-box-head"><span id="setTestHead">テストモード（実機の試験中）</span><span class="where where-local">このPCに保存</span>
+          <span class="stamp">切り替えには管理者パスワードが要ります</span></div>
+        <span class="stamp">実機の試験のときに入れます。入れている間は、作業の記録・明細の履歴・資材マスタの編集履歴に
+          「テストモード」と残し、画面の上に赤い「テストモード」の札を出します（本番の記録と見分けられるように）。
+          <b>試験が終わったら必ず切ってください。</b></span>
+        <label class="set-check"><input type="checkbox" id="setTestMode"> テストモードにする</label>
+        <div class="set-row set-row-inline">
+          <label for="setTestPassword">管理者パスワード</label>
+          <input type="password" id="setTestPassword" autocomplete="off">
+        </div>
+        <div class="set-qa-buttons">
+          <button type="button" class="primary" id="btnTestSave">切り替える</button>
+        </div>
+        <p class="set-note" id="setTestNote" role="status" hidden></p>
       </section>
 
       <p class="stamp" style="margin-top:4px">

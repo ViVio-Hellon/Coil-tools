@@ -30,7 +30,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Optional
 
-from . import admin_password, shared_settings
+from . import admin_password, edit_history, shared_settings
 from .logging_utils import get_logger
 from .sqlite_toolkit import sanitize_for_db
 
@@ -154,8 +154,11 @@ def _gate(password: str) -> tuple[Optional[Result], shared_settings.Snapshot]:
     return None, snap
 
 
-def _write(value: str) -> tuple[Optional[Result], str]:
-    """共有へ書く。断りか、**どこに書いたか**の一言を返す。"""
+def _write(value: str, before: str, action: str) -> tuple[Optional[Result], str]:
+    """共有へ書く。断りか、**どこに書いたか**の一言を返す。
+
+    書けたら資材マスタの編集履歴にも残す(VER 0.13.30。誰が・いつ・何から何に)。
+    """
     try:
         written = shared_settings.update({KEY: value})
     except shared_settings.SharedError as exc:
@@ -163,6 +166,10 @@ def _write(value: str) -> tuple[Optional[Result], str]:
         return Result(False, f"共有に書けないので変えていません。{exc}", REFUSE_SHARED), ""
     where = ("梱包資材マスタ(表「梱包明細打ち出し」)に書きました。" if written.to_master
              else "梱包資材マスタに表が無いので、控えのJSONに書きました。")
+    table = (shared_settings.MASTER_TABLE if written.to_master
+             else shared_settings.FILE_NAME)
+    edit_history.write(table, shared_settings.MASTER_QA_ID, "紙面の右上の文字", action,
+                       [(shared_settings.MASTER_VALUE_COLUMN, before, value)])
     return None, where + written.note
 
 
@@ -177,7 +184,7 @@ def change(value: object, password: str) -> Result:
     before = _from(snap)
     if checked.value == before:
         return Result(True, "いまと同じです(変えていません)。", value=before)
-    refused, where = _write(checked.value)
+    refused, where = _write(checked.value, before, "変更")
     if refused:
         return refused
     log.info("紙面の右上の文字を変えました(全ライン): %r → %r", before, checked.value)
@@ -193,7 +200,7 @@ def reset(password: str) -> Result:
     before = _from(snap)
     # **既定の文字をそのまま書く。** マスタの表を空にすると、表が無いのと
     # 見分けがつかず控えのJSONを見に行く(JSONに古い値が残っていればそれが出る)
-    refused, where = _write(DEFAULT)
+    refused, where = _write(DEFAULT, before, "既定に戻す")
     if refused:
         return refused
     log.info("紙面の右上の文字を既定に戻しました(全ライン): %r → %r", before, DEFAULT)

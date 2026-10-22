@@ -34,6 +34,8 @@ config.SHARED_DIR = Path(_SETTINGS_DIR.name) / "share" / "【■】_参照用フ
 config.EXPORT_DIR = Path(_SETTINGS_DIR.name) / "export"
 # 手元のDBも。裏の送り(`slip_history`)は自分の接続で `config.DB_PATH` を開く
 config.DB_PATH = Path(_SETTINGS_DIR.name) / "local" / "packing_details.db"
+# 作業の記録の控えも。**本物のローカル領域に試験の記録を足さない**
+config.RECORDS_DIR = Path(_SETTINGS_DIR.name) / "local" / "records"
 # 配布設定も。**本物のアプリのフォルダに `配布設定\` を作ると、配ったときに混ざる**
 from modules.packing_details.meisai import distribution  # noqa: E402  (config を差し替えてから読む)
 distribution.DIR = Path(_SETTINGS_DIR.name) / "app" / "配布設定"

@@ -246,7 +246,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_shutsuryoku ON 明細出力(ロット番号
 -- 書いたら共有の `梱包明細履歴.sqlite3` へ送る(全ライン・3年)。
 -- 送れるまでここに残る(ネットワークが切れても失わない)。
 --
--- 列は共有の表と同じ。最後の3列(要送信・変更回数・送信日時)だけ手元用
+-- 列は共有の表と同じ。要送信・変更回数・送信日時の3列だけ手元用(モードはそのあとに足した列)
 -- ------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS 明細履歴 (
     送信ID            TEXT    PRIMARY KEY,   -- 1枚ごとの一意の番号(送り直しても二重にならない)
@@ -277,7 +277,10 @@ CREATE TABLE IF NOT EXISTS 明細履歴 (
     更新日時           TEXT    NOT NULL DEFAULT '',
     要送信            INTEGER NOT NULL DEFAULT 1,
     変更回数           INTEGER NOT NULL DEFAULT 0,
-    送信日時           TEXT    NOT NULL DEFAULT ''
+    送信日時           TEXT    NOT NULL DEFAULT '',
+    -- テストモード(実機の試験中)で出した紙は「テストモード」(VER 0.13.30)。
+    -- 後から足した列なので最後(古いDBには db._ADDED_COLUMNS が足す。共有の表と同じ並び)
+    モード            TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_rireki_pending ON 明細履歴(要送信);
 CREATE INDEX IF NOT EXISTS idx_rireki_date ON 明細履歴(出力日時);

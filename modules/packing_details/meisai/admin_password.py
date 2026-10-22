@@ -41,7 +41,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from . import config, shared_settings
+from . import config, edit_history, shared_settings
 from .logging_utils import get_logger
 
 log = get_logger("admin_password")
@@ -130,6 +130,15 @@ def _save(value: str) -> Optional[Result]:
     return None
 
 
+def _note_history(action: str) -> None:
+    """資材マスタの編集履歴に、**変えたことだけ**を残す(VER 0.13.30)。
+
+    値は撹拌したものも書かない(前・後は「(伏せる)」)。
+    """
+    edit_history.write_secret(shared_settings.FILE_NAME, KEY, "管理者パスワード", action,
+                              "管理者パスワード")
+
+
 def change(current: str, new: str, confirm: str) -> Result:
     """変える。**いまのパスワードを知っている人だけ。**
 
@@ -156,6 +165,7 @@ def change(current: str, new: str, confirm: str) -> Result:
     if refused:
         return refused
     log.info("管理者パスワードを変更しました(全ライン)")
+    _note_history("変更")
     return Result(True, "管理者パスワードを変えました(全ラインで共有)。")
 
 
@@ -176,4 +186,5 @@ def reset(current: str) -> Result:
     if refused:
         return refused
     log.info("管理者パスワードを既定に戻しました(全ライン)")
+    _note_history("初期化")
     return Result(True, "既定のパスワードに戻しました。")

@@ -59,7 +59,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
-from . import app_config, config, db, shared_settings, source_db, strand_service
+from . import app_config, config, db, shared_settings, source_db, strand_service, work_record
 from .logging_utils import get_logger
 
 log = get_logger("slip_history")
@@ -72,6 +72,8 @@ HEADER_COLUMNS: tuple[str, ...] = (
     "手入力サイズ", "手入力ロット番号", "右上の文字",
     "状態", "作り直し日時", "紙面を開いた回数", "最後に紙面を開いた日時",
     "出力PC", "ログインID", "版", "更新日時",
+    # テストモードで出したら「テストモード」(VER 0.13.30。足した列なので最後)
+    "モード",
 )
 DETAIL_COLUMNS: tuple[str, ...] = ("送信ID", "順", "ロット番号", "副番", "丈", "条", "重量")
 # 手元だけの列(送ったか・何回変わったか)
@@ -118,7 +120,8 @@ CREATE TABLE IF NOT EXISTS 明細履歴 (
     出力PC            TEXT    NOT NULL DEFAULT '',
     ログインID         TEXT    NOT NULL DEFAULT '',
     版                TEXT    NOT NULL DEFAULT '',
-    更新日時           TEXT    NOT NULL DEFAULT ''
+    更新日時           TEXT    NOT NULL DEFAULT '',
+    モード            TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_rireki_lot ON 明細履歴(ロット番号);
 CREATE INDEX IF NOT EXISTS idx_rireki_date ON 明細履歴(出力日時);
@@ -212,6 +215,8 @@ def record_output(conn: sqlite3.Connection, *, lot_no: str, seq_no: int,
         "包装仕様NO": ",".join(o.spec_no for o in orders if getattr(o, "spec_no", "")),
         "出力PC": shared_settings.pc_name(), "ログインID": shared_settings.login_id(),
         "版": app_config.version(), "更新日時": now,
+        # テストモード(実機の試験中)で出した紙は印を付ける(VER 0.13.30)
+        "モード": work_record.mode_mark(),
         # 出力済みの修正では、前の紙で書き足したサイズ・LOTNO を引き継ぐ
         "手入力サイズ": hand_size or "", "手入力ロット番号": hand_lotno or "",
     }
@@ -743,6 +748,7 @@ LOAD_LIMIT = 20                 # 一度に作り直す紙の上限
 SEARCH_COLUMNS: tuple[str, ...] = (
     "送信ID", "ロット番号", "No", "出力日時", "本数", "重量合計", "状態",
     "作り直し日時", "手入力サイズ", "手入力ロット番号", "紙面を開いた回数", "出力PC",
+    "モード",
 )
 
 
@@ -880,7 +886,7 @@ DETAIL_CSV_COLUMNS: tuple[str, ...] = (
     "設計_設備コース", "実績_設備コース", "受注番号", "包装仕様NO",
     "手入力サイズ", "手入力ロット番号", "右上の文字",
     "紙面を開いた回数", "最後に紙面を開いた日時", "作り直し日時",
-    "出力PC", "ログインID", "版", "送信ID",
+    "出力PC", "ログインID", "版", "送信ID", "モード",
 )
 SUMMARY_CSV_COLUMNS: tuple[str, ...] = (
     "出力日", "出力PC", "枚数", "本数", "重量合計", "作り直した枚数", "取り消した枚数",

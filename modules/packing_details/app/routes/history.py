@@ -16,7 +16,7 @@ import threading
 
 from flask import Blueprint, Response, jsonify, request
 
-from modules.packing_details.meisai import printing, qa_mark, report, slip_history
+from modules.packing_details.meisai import printing, qa_mark, report, slip_history, work_record
 from modules.packing_details.meisai.logging_utils import get_logger
 
 from .. import error_body, get_db
@@ -115,6 +115,10 @@ def history_sheets():
             "<title>履歴の紙面</title></head><body>"
             f"<h1>紙面を作り直せませんでした</h1><p>{printing.escape(exc)}</p>"
             "</body></html>", mimetype="text/html", status=404)
-    html = report.render_history(slips, current_qa=qa_mark.current(), source=source)
+    html = report.render_history(slips, current_qa=qa_mark.current(), source=source,
+                                 badge=report.test_mode_badge())
     log.info("履歴から紙面を作り直しました: %s枚(%s)", len(slips), source)
+    work_record.append("履歴の紙面を開いた", {
+        "slips": [f'{s["head"]["ロット番号"]}-No{s["head"]["No"]}' for s in slips],
+        "historyIds": [str(s["head"]["送信ID"]) for s in slips]})
     return Response(html, mimetype="text/html")

@@ -15,7 +15,7 @@
 
   **判断はサーバ。** ここは受け取ったものを並べ、押されたら送るだけ。
 */
-import { api, ApiError } from "./api.js";
+import { api, ApiError, BASE } from "./api.js";
 import { importWithProgress, showNote, waiting } from "./ui.js";
 
 const $ = (id) => document.getElementById(id);
@@ -67,6 +67,10 @@ export function wire(given) {
   $("btnJsonSave").addEventListener("click", () => savePlace("json"));
   $("btnExportSave").addEventListener("click", saveExportDir);
   $("setAutoImport").addEventListener("change", saveAutoImport);
+  // 作業の記録(VER 0.13.30)。保存先フォルダー・テストモードは管理者パスワード
+  $("btnRecordSave").addEventListener("click", saveRecordDir);
+  $("btnLineSave").addEventListener("click", saveLineName);
+  $("btnTestSave").addEventListener("click", saveTestMode);
   $("btnQaSave").addEventListener("click", () => saveQa(false));
   $("btnQaReset").addEventListener("click", () => saveQa(true));
   $("setQaValue").addEventListener("input", countQa);
@@ -75,6 +79,8 @@ export function wire(given) {
                           ["setSharePassword", saveShareDir],
                           ["setHistoryPassword", () => savePlace("history")],
                           ["setJsonPassword", () => savePlace("json")],
+                          ["setRecordPassword", saveRecordDir],
+                          ["setTestPassword", saveTestMode],
                           ["setAdminConfirm", saveAdminPassword]]) {
     $(id).addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); fn(); }
@@ -108,11 +114,12 @@ export async function open({ tab = "", focus = "" } = {}) {
   const dialog = $("settingsDialog");
   for (const id of ["setQaValue", "setQaPassword", "setAdminCurrent", "setAdminNew",
                     "setAdminConfirm", "setSharePassword", "setHistoryPassword",
-                    "setJsonPassword", "distPassword"]) {
+                    "setJsonPassword", "distPassword", "setRecordPassword", "setTestPassword"]) {
     $(id).value = "";
   }
   for (const id of ["setLotResult", "setKonpoResult", "setExportResult", "setShareNote", "setQaNote",
-                    "setAdminNote", "distNote", "setHistoryNote", "setJsonNote"]) {
+                    "setAdminNote", "distNote", "setHistoryNote", "setJsonNote",
+                    "setRecordNote", "setLineNote", "setTestNote"]) {
     showNote(id, "");
   }
   selectTab(tab || lastTab);
@@ -187,7 +194,8 @@ function renderStamps(stamps, tables, boxId, problem = "") {
 const PLACE_FIELDS = [["setLotDir", "lot_db_dir_setting"], ["setLot2Dir", "lot_db_dir2_setting"],
                       ["setKonpoDir", "konpo_db_dir_setting"], ["setKonpoFile", "konpo_file_setting"],
                       ["setShareDir", "share_setting"], ["setHistoryDir", "history_setting"],
-                      ["setJsonDir", "json_setting"], ["setExportDir", "export_dir_setting"]];
+                      ["setJsonDir", "json_setting"], ["setExportDir", "export_dir_setting"],
+                      ["setRecordDir", "record_dir_setting"], ["setLineName", "line_name"]];
 
 /**
  * 設定の、まだ保存していない欄の名前(統合 1.2.5)。統合画面の「終了」・窓の × ・
@@ -210,6 +218,7 @@ export function unsaved() {
     }
   }
   if (($("setQaValue").value || "").trim()) out.push("設定: QAマークの新しい文字");
+  if ($("setTestMode").checked !== !!local.test_mode) out.push("設定: テストモード");
   return out;
 }
 
@@ -229,8 +238,12 @@ function renderLocal(body, { fill = false } = {}) {
     $("setHistoryDir").value = body.history_setting || "";
     $("setJsonDir").value = body.json_setting || "";
     $("setExportDir").value = body.export_dir_setting || "";
+    $("setRecordDir").value = body.record_dir_setting || "";
+    $("setLineName").value = body.line_name || "";
+    $("setTestMode").checked = !!body.test_mode;
   }
   $("setAutoImport").checked = !!body.auto_import;
+  renderRecord(body);
   // **このフォルダに何を探しているか。** 道だけ出しても、そこへ
   // 何を置けばよいかが分からない
   $("setLotFiles").textContent = `探すファイル: ${body.lot_files.join(" / ")}`;
@@ -570,6 +583,92 @@ async function savePlace(which) {
     }
   } finally {
     stop();
+    button.disabled = false;
+  }
+}
+
+// ------------------------------------------------------------------
+// 作業の記録(VER 0.13.30。ペナラベルと同じ)
+// ------------------------------------------------------------------
+/** 記録の設定のいま。テストモードの札もここで出し入れする(開き直さなくても出る) */
+function renderRecord(body) {
+  if (!("test_mode" in body)) return;
+  $("setRecordNow").textContent = (body.record_dir
+    ? `この PC の記録は ${body.records_local} と ${body.record_dir} に書きます`
+    : `この PC の記録は ${body.records_local} にだけ書きます`)
+    + (body.record_problem ? `\n※ 書けていません: ${body.record_problem}` : "");
+  $("setRecordNow").style.whiteSpace = "pre-line";
+  $("recordsLink").href = `${BASE}/report/records?t=${encodeURIComponent(window.APP.token)}`;
+  $("testModeBadge").hidden = !body.test_mode;
+}
+
+function afterRecordSaved(body) {
+  if (local) local = { ...local, ...body };
+  renderRecord(body);
+  if (body.storage) renderStore(body.storage);
+}
+
+async function saveRecordDir() {
+  const button = $("btnRecordSave");
+  button.disabled = true;
+  showNote("setRecordNote", "");
+  try {
+    const body = await api.post("/api/settings/record-dir", {
+      value: $("setRecordDir").value,
+      password: $("setRecordPassword").value,
+    });
+    $("setRecordPassword").value = "";
+    afterRecordSaved(body);
+    showNote("setRecordNote", body.message, /書けません/.test(body.message));
+  } catch (err) {
+    if (!refused(err, "setRecordNote")) return;
+    if (err.field === "password") {
+      $("setRecordPassword").value = "";
+      $("setRecordPassword").focus();
+    } else {
+      $("setRecordDir").focus();
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveLineName() {
+  const button = $("btnLineSave");
+  button.disabled = true;
+  showNote("setLineNote", "");
+  try {
+    const body = await api.post("/api/settings/line-name", { value: $("setLineName").value });
+    $("setLineName").value = body.line_name || "";
+    afterRecordSaved(body);
+    showNote("setLineNote", body.message);
+  } catch (err) {
+    if (refused(err, "setLineNote")) $("setLineName").focus();
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveTestMode() {
+  const button = $("btnTestSave");
+  button.disabled = true;
+  showNote("setTestNote", "");
+  try {
+    const body = await api.post("/api/settings/test-mode", {
+      enabled: $("setTestMode").checked,
+      password: $("setTestPassword").value,
+    });
+    $("setTestPassword").value = "";
+    $("setTestMode").checked = !!body.test_mode;
+    afterRecordSaved(body);
+    showNote("setTestNote", body.message);
+  } catch (err) {
+    if (!refused(err, "setTestNote")) return;
+    if (err.field === "password") {
+      $("setTestPassword").value = "";
+      $("setTestPassword").focus();
+    }
+  } finally {
     button.disabled = false;
   }
 }

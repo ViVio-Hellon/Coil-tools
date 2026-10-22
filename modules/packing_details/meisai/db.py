@@ -210,6 +210,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("明細出力", "手入力サイズ", "TEXT NOT NULL DEFAULT ''"),
     ("明細出力", "手入力ロット番号", "TEXT NOT NULL DEFAULT ''"),
     ("明細出力", "履歴ID", "TEXT NOT NULL DEFAULT ''"),
+    ("明細履歴", "モード", "TEXT NOT NULL DEFAULT ''"),
 )
 
 

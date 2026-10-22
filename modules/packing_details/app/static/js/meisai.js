@@ -602,7 +602,8 @@ async function doPrint() {
   const lotNo = window.APP.state.lot_no;
   // 先に印刷済みを記録してから帳票を開く。ブラウザの印刷は
   // 押されたかどうかを確実には拾えない
-  await send("/api/printed", {});
+  // 作業の記録に「印刷画面」と残す(どのロットのどの No か。VER 0.13.30)
+  await send("/api/printed", { lot: lotNo, nos });
   const token = encodeURIComponent(window.APP.token);
   const url = nos.length === 1
     ? `${BASE}/report/${encodeURIComponent(lotNo)}/${nos[0]}?t=${token}`
@@ -783,7 +784,14 @@ function renderHistoryRows(body) {
     cell(String(row["本数"]), "num");
     cell(row["副番の並び"] || "", "fuban").title = row["副番の並び"] || "";
     cell(row["状態"], "state");
-    cell(row["出力PC"]);
+    const pc = cell(row["出力PC"]);
+    // テストモードで出した紙(VER 0.13.30)。列は増やさず PC の欄に札を付ける
+    if (row["モード"]) {
+      const mark = document.createElement("span");
+      mark.className = "testmode";
+      mark.textContent = row["モード"];
+      pc.appendChild(mark);
+    }
     // 行のどこを押しても選べる(小さな四角だけを狙わせない)
     tr.addEventListener("click", (e) => {
       if (e.target !== pick) { pick.checked = !pick.checked; updatePicked(); }

@@ -22,8 +22,8 @@ import time
 import unittest
 from unittest import mock
 
-from modules.packing_details.meisai import (admin_password, config, qa_mark, report, shared_settings,
-                    user_settings)
+from modules.packing_details.meisai import (admin_password, config, edit_history, qa_mark, report,
+                                           shared_settings, user_settings)
 from modules.packing_details.meisai.meisai_service import Output
 
 from . import _db
@@ -179,8 +179,10 @@ class MasterTest(unittest.TestCase):
         qa_mark.change("NLM.TEST.QA", PASSWORD)
         qa_mark.reset(PASSWORD)
         conn = sqlite3.connect(str(path))
-        self.assertEqual(conn.execute(
-            "SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall(), before)
+        # 足すのは編集履歴の表だけ(VER 0.13.30。ペナラベルと同じ表)
+        after = conn.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall()
+        self.assertEqual([r for r in after if r[1] != edit_history.TABLE], before)
+        self.assertIn(edit_history.TABLE, [r[1] for r in after])
         self.assertEqual(conn.execute("SELECT * FROM PalletMaster ORDER BY ID").fetchall(), pallets)
         self.assertEqual(conn.execute("SELECT * FROM ツールで足した表").fetchall(), registry)
         self.assertEqual(conn.execute("PRAGMA journal_mode").fetchone()[0], "delete")
