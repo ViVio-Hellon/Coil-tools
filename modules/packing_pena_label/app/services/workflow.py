@@ -10,7 +10,7 @@ VBA -> Python 対応
     CommandButton2  (小ラベル印刷)       -> print_targets() + clear_all()
     CommandButton9/11 (羅列計算)          -> calc_list()
     CommandButton13 (積み高さ)           -> quick_height()
-    CommandButton8  (全角→半角)          -> convert_fullwidth_cells()
+    CommandButton8  (文字分け)           -> 移植しない(VBA では要ったが、今は不要。現場の判断)
     クリア()                              -> clear_all()
     ラベル転記OP / ラベル転記CK           -> _transfer_coil_info()
 """
@@ -985,21 +985,3 @@ class Workflow:
         data = LC.quick_height(coil_count, width)
         data["width"] = fmt(width, "0.0")
         return Result(True, data["message"], "info", {"quick": data})
-
-    def convert_fullwidth_cells(self, ob_idx: int) -> Result:
-        """VBA ``CommandButton8_Click``（全角→半角変換）。
-
-        VBA はアクティブシートの B〜M 列（2〜13）× 2行〜最終行 を対象にしていた。
-        移植では対象台紙の保存済みセルのうち同じ列範囲に適用する。
-        """
-        cells = self.store.get_cells(ob_idx)
-        changed = {}
-        for (r, c), v in cells.items():
-            if r >= 2 and 2 <= c <= 13:
-                nv = V.convert_fullwidth(v)
-                if nv != v:
-                    changed[(r, c)] = nv
-        if changed:
-            self.store.put_cells(ob_idx, changed)
-        return Result(True, "%d セルを変換しました" % len(changed), "info",
-                      {"changed": len(changed)})

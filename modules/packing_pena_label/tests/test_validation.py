@@ -6,7 +6,7 @@ import sys
 import unittest
 
 from modules.packing_pena_label.app.models import FormState
-from modules.packing_pena_label.app.services.validation import (check_weight_inputs, convert_fullwidth,
+from modules.packing_pena_label.app.services.validation import (check_weight_inputs,
                                      filter_alnum_upper, inp_check,
                                      normalize_kensa_no, num_extract,
                                      validate_kensa_no)
@@ -87,12 +87,6 @@ class TestInpCheck(unittest.TestCase):
 class TestFilters(unittest.TestCase):
     def test_alnum_upper(self):
         self.assertEqual(filter_alnum_upper("w11-11 1x"), "W11111X")
-
-    def test_convert_fullwidth(self):
-        # VBA CommandButton8 の置換表どおり
-        self.assertEqual(convert_fullwidth("1.0x53.5"), "1.0Ｘ53.5")
-        self.assertEqual(convert_fullwidth("１０"), "10")
-        self.assertEqual(convert_fullwidth("（A）"), "(A)")
 
     def test_num_extract(self):
         self.assertEqual(num_extract("1.0/2M"), "1.0")

@@ -233,24 +233,6 @@ def filter_coil_text(raw: str) -> str:
     return str(int(n)) if n.is_integer() and n >= 0 else ""
 
 
-#: VBA CommandButton8（全角→半角変換）の置換表。**順序も VBA のまま**
-FULLWIDTH_REPLACEMENTS: List[tuple] = [
-    ("Ｘ", "Ｘ"), ("ｘ", "Ｘ"), ("X", "Ｘ"), ("x", "Ｘ"), ("×", "Ｘ"),
-    ("（", "("), ("）", ")"),
-    ("０", "0"), ("５", "5"), ("８", "8"), ("４", "4"), ("１", "1"),
-    ("２", "2"), ("３", "3"), ("６", "6"), ("７", "7"), ("９", "9"),
-]
-
-
-def convert_fullwidth(text: str) -> str:
-    """VBA ``CommandButton8_Click`` の置換を 1 セル分に適用。"""
-    s = text if text is not None else ""
-    s = str(s)
-    for old, new in FULLWIDTH_REPLACEMENTS:
-        s = s.replace(old, new)
-    return s
-
-
 def num_extract(value) -> str:
     """VBA ``numExtract``。数字と小数点だけを抽出。"/" があれば前半のみ。"""
     s = "" if value is None else str(value)
