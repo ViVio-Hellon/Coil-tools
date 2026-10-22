@@ -19,6 +19,7 @@ from modules.packing_pena_label.app.config import APP_VERSION
 from modules.packing_pena_label.app.repositories.material_repo import MaterialRepository
 from modules.packing_pena_label.app.services import master_admin as MA
 from modules.packing_pena_label.app.services import size_extra as SX
+from common import record_file
 from modules.packing_pena_label.app.services import work_record as WR
 from modules.packing_pena_label.app.services.size_master import SizeMaster
 from modules.packing_pena_label.app.services.workflow import Workflow
@@ -67,22 +68,47 @@ class RecordTest(HttpTestCase):
         self.assertEqual(w["line"], "2ライン")
 
     def test_消えない控えをこのPCと共有へ月ごとに足す(self):
+        """既定は Excel で開ける CSV(統合 1.2.44・現場の指摘: .jsonl は普通は開けない)。"""
         self._calc()
-        local = glob.glob(os.path.join(self.cfg.local_dir, "records", "ペナラベル記録_*.jsonl"))
-        shared = glob.glob(os.path.join(self.shared, WR.pc_name(), "ペナラベル記録_*.jsonl"))
+        local = glob.glob(os.path.join(self.cfg.local_dir, "records", "ペナラベル記録_*.csv"))
+        shared = glob.glob(os.path.join(self.shared, WR.pc_name(), "ペナラベル記録_*.csv"))
         self.assertEqual(len(local), 1)
         self.assertEqual(len(shared), 1)
         for path in (local[0], shared[0]):
-            with open(path, encoding="utf-8") as f:
-                last = json.loads(f.read().splitlines()[-1])
-            self.assertEqual((last["kind"], last["title"]), ("計算", "風袋計算"))
-            self.assertEqual(last["kensaNo"], "Z987654")
-            self.assertEqual(last["who"]["line"], "2ライン")
-            self.assertEqual(last["version"]["pena"], APP_VERSION)
+            with open(path, "rb") as f:
+                self.assertTrue(f.read(3) == b"\xef\xbb\xbf", "Excel が文字化けしないよう BOM つき")
+            last = record_file.read_csv(path)[-1]
+            self.assertEqual(last["種類"], "計算")
+            self.assertIn("画面: 風袋計算", last["内容"])
+            self.assertIn("検査番号: Z987654", last["内容"])
+            self.assertEqual(last["ライン"], "2ライン")
+            self.assertEqual(last["機能の版"], APP_VERSION)
+            full = json.loads(last["詳しい中身"])
+            self.assertEqual(full["kensaNo"], "Z987654")
+            self.assertEqual(full["version"]["pena"], APP_VERSION)
         _, html = self.get("/print-log")
         self.assertIn("消えない控え", html)
         self.assertIn(self.shared, html)
         self.assertIn("2ライン", html)
+        self.assertIn("CSV(Excel で開ける)", html)
+        self.assertIn("ペナラベル記録_", html)
+
+    def test_形式をJSONL_両方に変えられる(self):
+        try:
+            self.cfg.record_format = "jsonl"
+            self._calc(kensaNo="Y111111")
+            path = glob.glob(os.path.join(self.shared, WR.pc_name(), "ペナラベル記録_*.jsonl"))[0]
+            with open(path, encoding="utf-8") as f:
+                last = json.loads(f.read().splitlines()[-1])
+            self.assertEqual(last["kensaNo"], "Y111111")
+            self.cfg.record_format = "both"
+            self._calc(kensaNo="X222222")
+            csv_path = glob.glob(os.path.join(self.shared, WR.pc_name(), "ペナラベル記録_*.csv"))[0]
+            self.assertIn("X222222", record_file.read_csv(csv_path)[-1]["内容"])
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(json.loads(f.read().splitlines()[-1])["kensaNo"], "X222222")
+        finally:
+            self.cfg.record_format = "csv"
 
     def test_印刷画面と止めた印刷(self):
         self._calc()
@@ -181,6 +207,23 @@ class TestModeToggleTest(HttpTestCase):
         self.assertTrue(j["ok"], j)
         _, home = self.get("/")
         self.assertNotIn('class="testmode"', home)
+
+
+class RecordFormatSettingTest(HttpTestCase):
+    """記録ファイルの形式(統合 1.2.44)。設定を保存すると読み直すので、ほかの試験と分ける。"""
+
+    def test_設定画面で選べる_合言葉は要らない_知らない値は断る(self):
+        _, page = self.get("/settings")
+        self.assertIn('<select id="set_record_format" data-key="record_format" data-kind="choice">', page)
+        self.assertIn('<option value="csv" selected>CSV(Excel で開ける)</option>', page)
+        _, j = self.post("/api/settings/save", {"values": {"record_format": "both"}})
+        self.assertTrue(j["ok"], j)
+        self.assertEqual(self.ctx.wf.cfg.record_format, "both")
+        _, j = self.post("/api/settings/save", {"values": {"record_format": "xlsx"}})
+        self.assertFalse(j.get("ok"), j)
+        self.assertEqual(self.ctx.wf.cfg.record_format, "both")
+        _, j = self.post("/api/settings/save", {"values": {"record_format": "csv"}})
+        self.assertTrue(j["ok"], j)
 
 
 class TestModeTest(HttpTestCase):

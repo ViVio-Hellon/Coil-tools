@@ -121,8 +121,11 @@ def _records_card() -> str:
             f'<td class="nowrap">{_version(item)}</td>'
             f'<td>{_detail(item)}</td></tr>')
     st = work_record.status()
-    keep = ('<p class="hint"><b>消えない控え</b>: 1 件ごとに月ごとのファイル'
-            f'（{esc(work_record.FILE_PREFIX)}_年-月.jsonl）へ足しています（消さない・書き換えない）。'
+    keep = ('<p class="hint"><b>消えない控え</b>: 1 件ごとに月ごとのファイルへ足しています（消さない・書き換えない）。'
+            f'形式: <b>{esc(st["format_label"])}</b>（設定「記録ファイルの形式」）。今月のファイル: '
+            + "・".join(f'<code>{esc(n)}</code>' for n in st["files"])
+            + '。CSV は Excel でそのまま開けます（見るときは写しを開くか、読み取り専用で開いてください。'
+              '開いている間に書けなかった分は「追記待ち」に足し、閉じたあと次の記録で書き足します）。'
             f'<br>この PC: <code>{esc(st["local"])}</code>')
     if st["local_problem"]:
         keep += f'<br><span class="bad">書けていません: {esc(st["local_problem"])}</span>'

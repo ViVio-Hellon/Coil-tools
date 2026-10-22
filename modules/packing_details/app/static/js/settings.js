@@ -70,6 +70,7 @@ export function wire(given) {
   // 作業の記録(VER 0.13.30)。保存先フォルダー・テストモードは管理者パスワード
   $("btnRecordSave").addEventListener("click", saveRecordDir);
   $("btnLineSave").addEventListener("click", saveLineName);
+  $("btnFormatSave").addEventListener("click", saveRecordFormat);
   $("btnTestSave").addEventListener("click", saveTestMode);
   $("btnQaSave").addEventListener("click", () => saveQa(false));
   $("btnQaReset").addEventListener("click", () => saveQa(true));
@@ -240,6 +241,7 @@ function renderLocal(body, { fill = false } = {}) {
     $("setExportDir").value = body.export_dir_setting || "";
     $("setRecordDir").value = body.record_dir_setting || "";
     $("setLineName").value = body.line_name || "";
+    $("setRecordFormat").value = body.record_format || "csv";
     $("setTestMode").checked = !!body.test_mode;
   }
   $("setAutoImport").checked = !!body.auto_import;
@@ -596,6 +598,7 @@ function renderRecord(body) {
   $("setRecordNow").textContent = (body.record_dir
     ? `この PC の記録は ${body.records_local} と ${body.record_dir} に書きます`
     : `この PC の記録は ${body.records_local} にだけ書きます`)
+    + (body.record_files ? `（形式: ${body.record_format_label}。今月のファイル: ${body.record_files.join("・")}）` : "")
     + (body.record_problem ? `\n※ 書けていません: ${body.record_problem}` : "");
   $("setRecordNow").style.whiteSpace = "pre-line";
   $("recordsLink").href = `${BASE}/report/records?t=${encodeURIComponent(window.APP.token)}`;
@@ -628,6 +631,22 @@ async function saveRecordDir() {
     } else {
       $("setRecordDir").focus();
     }
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveRecordFormat() {
+  const button = $("btnFormatSave");
+  button.disabled = true;
+  showNote("setFormatNote", "");
+  try {
+    const body = await api.post("/api/settings/record-format", { value: $("setRecordFormat").value });
+    $("setRecordFormat").value = body.record_format || "csv";
+    afterRecordSaved(body);
+    showNote("setFormatNote", body.message);
+  } catch (err) {
+    if (refused(err, "setFormatNote")) $("setRecordFormat").focus();
   } finally {
     button.disabled = false;
   }

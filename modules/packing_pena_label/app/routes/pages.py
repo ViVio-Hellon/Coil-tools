@@ -1801,6 +1801,11 @@ class PageRoutes:
         elif it["kind"] == "int":
             control = (f'<input type="number" id="set_{esc(key)}" data-key="{esc(key)}" '
                        f'data-kind="int" value="{esc(it["value"])}">')
+        elif it["kind"] == "choice":
+            opts = "".join(f'<option value="{esc(v)}"{" selected" if str(it["value"]) == v else ""}>'
+                           f'{esc(label)}</option>' for v, label in it.get("choices") or [])
+            control = (f'<select id="set_{esc(key)}" data-key="{esc(key)}" data-kind="choice">'
+                       f'{opts}</select>')
         else:
             control = (f'<input type="text" id="set_{esc(key)}" data-key="{esc(key)}" '
                        f'data-kind="{esc(it["kind"])}" value="{esc(it["value"])}" '
@@ -2590,6 +2595,10 @@ class PageRoutes:
                 f'<td>{"<br>".join(detail)}</td></tr>')
         st = WR.status(self.cfg)
         keep = (f'<p class="hint"><b>消えない控え</b>: 1 件ごとに月ごとのファイルへ足しています(消さない・書き換えない)。'
+                f'形式: <b>{esc(st["formatLabel"])}</b>(設定「記録ファイルの形式」)。今月のファイル: '
+                + "・".join(f'<code>{esc(n)}</code>' for n in st["files"])
+                + '。CSV は Excel でそのまま開けます(見るときは写しを開くか、読み取り専用で開いてください。'
+                  '開いている間に書けなかった分は「追記待ち」に足し、閉じたあと次の記録で書き足します)。<br>'
                 f'この PC: <code>{esc(st["local"])}</code>'
                 + (f'<br><b class="logstale">書けていません: {esc(st["localProblem"])}</b>' if st["localProblem"] else "")
                 + ('<br>設定の保存先: <code>%s</code>' % esc(st["shared"]) if st["shared"] else

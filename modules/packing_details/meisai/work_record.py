@@ -1,12 +1,16 @@
 """作業の記録の「消えない控え」と、記録に添える素性(VER 0.13.30。ペナラベルと同じ)
 
 出力・出力し直し・修正の取り消し・全クリア・印刷画面・紙面を開いた、を 1 件ごとに
-**月ごとのファイルへ 1 行ずつ足す**(JSON Lines。足すだけで、消さない・書き換えない):
+**月ごとのファイルへ 1 行ずつ足す**(足すだけで、消さない・書き換えない):
 
-    この PC     <ローカル領域>/records/梱包明細記録_YYYY-MM.jsonl      (いつも)
-    設定の場所  <記録の保存先フォルダー>/<PC名>/梱包明細記録_YYYY-MM.jsonl
+    この PC     <ローカル領域>/records/梱包明細記録_YYYY-MM.csv      (いつも)
+    設定の場所  <記録の保存先フォルダー>/<PC名>/梱包明細記録_YYYY-MM.csv
                 (設定「記録の保存先フォルダー」= record_dir があるときだけ。PC ごとに
                  ファイルを分けるので、複数のラインが同じファイルを取り合わない)
+
+形式は設定「記録ファイルの形式」(この PC)で選ぶ: **CSV(既定。Excel で開ける)**・JSONL・両方
+(統合 1.2.44・現場の指摘: .jsonl は普通は開けない)。書き方・読み方は `common/record_file.py`
+(Excel で開いていて書けないときは「追記待ち」に足し、次に書けたときに書き足す)。
 
 記録に添える素性(どの記録からも言えるように):
 
@@ -25,6 +29,8 @@ import re
 import threading
 from pathlib import Path
 from typing import Any, Optional
+
+from common import record_file
 
 from . import app_config, config, shared_settings, user_settings
 from .logging_utils import get_logger
@@ -57,6 +63,16 @@ def mode_mark() -> str:
 def line_name() -> str:
     value = user_settings.get(config.KEY_LINE_NAME)
     return value.strip() if isinstance(value, str) else ""
+
+
+def record_format() -> str:
+    """記録ファイルの形式(csv / jsonl / both)。知らない値・未設定は CSV。"""
+    return record_file.normalize_format(user_settings.get(config.KEY_RECORD_FORMAT))
+
+
+#: CSV の「内容」の列に出すときの項目名(梱包明細の記録の中身)
+LABELS = {"lot": "ロット", "no": "No", "nos": "No", "seq": "副番", "what": "項目", "value": "値",
+          "weights": "重量", "title": "画面"}
 
 
 def record_dir_setting() -> str:
@@ -96,10 +112,6 @@ def versions() -> dict[str, str]:
 # ==================================================================
 # 書く
 # ==================================================================
-def _month_file(folder: Path, when: datetime.datetime) -> Path:
-    return folder / f"{FILE_PREFIX}_{when:%Y-%m}.jsonl"
-
-
 def folders() -> dict[str, Optional[Path]]:
     """書く場所(この PC・設定の場所)。設定の場所は設定が無ければ None。"""
     shared: Optional[Path] = None
@@ -122,7 +134,7 @@ def append(kind: str, payload: Optional[dict[str, Any]] = None, *,
     try:
         entry = {"at": when.strftime("%Y-%m-%d %H:%M:%S"), "kind": kind,
                  **(payload or {}), "version": versions(), "who": who()}
-        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        fmt = record_format()
         where = folders()
     except Exception as exc:                            # noqa: BLE001 - 止めない
         log.warning("作業の記録を組めません(続けます): %s", exc)
@@ -136,12 +148,11 @@ def append(kind: str, payload: Optional[dict[str, Any]] = None, *,
                                   if key == "shared" and record_dir_setting() else "")
                 continue
             try:
-                folder.mkdir(parents=True, exist_ok=True)
-                with open(_month_file(folder, when), "a", encoding="utf-8", newline="\n") as f:
-                    f.write(line)
-                out[key] = ""
+                out[key] = record_file.append(str(folder), FILE_PREFIX, entry, fmt,
+                                              feature_version_key="details", labels=LABELS, when=when)
             except OSError as exc:
                 out[key] = f"{folder} に書けません({exc.strerror or exc})"
+            if out[key]:
                 log.warning("作業の記録の控えを書けません: %s", out[key])
             _problems[key] = out[key]
     log.info("[記録] %s %s", kind, json.dumps(payload or {}, ensure_ascii=False))
@@ -155,6 +166,9 @@ def status() -> dict[str, str]:
         return {"local": str(where["local"]),
                 "shared": str(where["shared"]) if where["shared"] else "",
                 "shared_setting": record_dir_setting(),
+                "format": record_format(),
+                "format_label": record_file.format_label(record_format()),
+                "files": record_file.file_names(FILE_PREFIX, datetime.datetime.now(), record_format()),
                 "local_problem": _problems.get("local", ""),
                 "shared_problem": _problems.get("shared", "")}
 
@@ -170,23 +184,13 @@ def recent(limit: int = 300, *, today: Optional[datetime.date] = None) -> list[d
     folder = Path(config.RECORDS_DIR)
     out: list[dict[str, Any]] = []
     for month in months:
-        path = folder / f"{FILE_PREFIX}_{month:%Y-%m}.jsonl"
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except FileNotFoundError:
-            continue
+            items = record_file.read_month(str(folder), FILE_PREFIX, month)
         except OSError as exc:
-            log.warning("作業の記録を読めません: %s (%s)", path, exc)
+            log.warning("作業の記録を読めません: %s (%s)", folder, exc)
             continue
-        for text in reversed(lines):
-            if not text.strip():
-                continue
-            try:
-                item = json.loads(text)
-            except ValueError:
-                continue                                # 書きかけの行は飛ばす
-            if isinstance(item, dict):
-                out.append(item)
+        for item in reversed(items):
+            out.append(item)
             if len(out) >= limit:
                 return out
     return out

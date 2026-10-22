@@ -3,12 +3,16 @@
 
 画面の「計算・印刷の記録」は、この PC の状態DB(`work_log`)に 5,000 件まで持ち、古いものから消える。
 PC の入れ替えや状態DB の破損でも消える。そこで 1 件ごとに、**月ごとのファイルへ 1 行ずつ足す**
-(JSON Lines。足すだけで、消さない・書き換えない):
+(足すだけで、消さない・書き換えない):
 
-    この PC     <ローカル領域>/records/ペナラベル記録_YYYY-MM.jsonl      (いつも)
-    設定の場所  <記録の保存先フォルダー>/<PC名>/ペナラベル記録_YYYY-MM.jsonl
+    この PC     <ローカル領域>/records/ペナラベル記録_YYYY-MM.csv      (いつも)
+    設定の場所  <記録の保存先フォルダー>/<PC名>/ペナラベル記録_YYYY-MM.csv
                 (設定「計算・印刷の記録の保存先フォルダー」= record_dir があるときだけ。PC ごとに
                  ファイルを分けるので、複数のラインが同じファイルを取り合わない)
+
+形式は設定「記録ファイルの形式」(PC ごと)で選ぶ: **CSV(既定。Excel で開ける)**・JSONL・両方
+(統合 1.2.44・現場の指摘: .jsonl は普通は開けない)。書き方は `common/record_file.py`
+(Excel で開いていて書けないときは「追記待ち」に足し、次に書けたときに書き足す)。
 
 記録に添える素性(どの記録からも言えるように):
 
@@ -22,13 +26,14 @@ from __future__ import annotations
 
 import datetime
 import getpass
-import json
 import logging
 import os
 import re
 import socket
 import threading
 from typing import Any, Dict, Optional
+
+from common import record_file
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +42,12 @@ _lock = threading.Lock()
 _problems: Dict[str, str] = {"local": "", "shared": ""}
 
 FILE_PREFIX = "ペナラベル記録"
+#: CSV の「内容」の列に出すときの項目名(ペナラベルの記録の中身)
+LABELS = {"title": "画面", "kensaNo": "検査番号", "sizes": "サイズ", "size": "サイズ",
+          "weights": "1条重量", "weight": "1条重量", "coils": "梱包", "notOnLabel": "ラベルに載らない梱包",
+          "sheets": "ラベル台紙", "labels": "枚数", "inputChanged": "入力が変わったまま",
+          "material": "資材重量", "source": "取得元の種類", "readAt": "読んだ時刻",
+          "changes": "変わった資材"}
 
 
 def pc_name() -> str:
@@ -80,10 +91,6 @@ def versions() -> Dict[str, str]:
     return out
 
 
-def _month_file(folder: str, when: datetime.datetime) -> str:
-    return os.path.join(folder, "%s_%s.jsonl" % (FILE_PREFIX, when.strftime("%Y-%m")))
-
-
 def folders(cfg) -> Dict[str, str]:
     """書く場所(この PC・設定の場所)。設定の場所は設定が無ければ空。"""
     local = os.path.join(str(cfg.local_dir), "records")
@@ -92,10 +99,15 @@ def folders(cfg) -> Dict[str, str]:
     return {"local": local, "shared": shared}
 
 
+def record_format(cfg) -> str:
+    """記録ファイルの形式(csv / jsonl / both)。知らない値は CSV。"""
+    return record_file.normalize_format(getattr(cfg, "record_format", ""))
+
+
 def append(cfg, entry: Dict[str, Any], when: Optional[datetime.datetime] = None) -> Dict[str, str]:
     """1 件を月ごとのファイルへ足す。戻り値は書けなかった理由(書けたら空)。"""
     when = when or datetime.datetime.now()
-    line = json.dumps(entry, ensure_ascii=False, sort_keys=False) + "\n"
+    fmt = record_format(cfg)
     out = {}
     with _lock:
         for key, folder in folders(cfg).items():
@@ -104,12 +116,11 @@ def append(cfg, entry: Dict[str, Any], when: Optional[datetime.datetime] = None)
                 _problems[key] = ""
                 continue
             try:
-                os.makedirs(folder, exist_ok=True)
-                with open(_month_file(folder, when), "a", encoding="utf-8", newline="\n") as f:
-                    f.write(line)
-                out[key] = ""
+                out[key] = record_file.append(folder, FILE_PREFIX, entry, fmt,
+                                              feature_version_key="pena", labels=LABELS, when=when)
             except OSError as exc:
                 out[key] = "%s に書けません(%s)" % (folder, exc.strerror or exc)
+            if out[key]:
                 log.warning("計算・印刷の記録の控えを書けません: %s", out[key])
             _problems[key] = out[key]
     return out
@@ -120,5 +131,7 @@ def status(cfg) -> Dict[str, str]:
     where = folders(cfg)
     with _lock:
         return {"local": where["local"], "shared": where["shared"],
+                "format": record_format(cfg), "formatLabel": record_file.format_label(record_format(cfg)),
+                "files": record_file.file_names(FILE_PREFIX, datetime.datetime.now(), record_format(cfg)),
                 "localProblem": _problems.get("local", ""),
                 "sharedProblem": _problems.get("shared", "")}

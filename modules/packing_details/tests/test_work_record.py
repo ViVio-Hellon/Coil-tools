@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import re
 import secrets
@@ -18,6 +19,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from common import record_file
 from modules.packing_details.meisai import (config, db, distribution, edit_history, shared_settings,
                                            slip_history, user_settings, work_record)
 
@@ -39,7 +41,10 @@ def _records_dir(case: unittest.TestCase) -> Path:
 
 
 def _lines(folder: Path) -> list[dict]:
+    """控え(既定は CSV。統合 1.2.44)の中身。CSV の「詳しい中身」の列に 1 件の全部が入っている。"""
     out = []
+    for path in sorted(folder.glob(f"{work_record.FILE_PREFIX}_*.csv")):
+        out += [json.loads(r["詳しい中身"]) for r in record_file.read_csv(str(path))]
     for path in sorted(folder.glob(f"{work_record.FILE_PREFIX}_*.jsonl")):
         out += [json.loads(t) for t in path.read_text(encoding="utf-8").splitlines() if t.strip()]
     return out
@@ -130,6 +135,23 @@ class SettingsTest(_Base):
         self.assertIn(config.KEY_RECORD_DIR, keys)
         self.assertNotIn(config.KEY_LINE_NAME, keys)
         self.assertNotIn(config.KEY_TEST_MODE, keys)
+
+    def test_記録ファイルの形式は既定CSV_選べる_パスワードは要らない(self):
+        """統合 1.2.44・現場の指摘: .jsonl は普通は開けない。既定は Excel で開ける CSV。"""
+        self.assertEqual(work_record.record_format(), "csv")
+        body = self.client.get("/api/settings", headers=HEADERS).get_json()
+        self.assertEqual(body["record_format"], "csv")
+        self.assertEqual([c[0] for c in body["record_format_choices"]], ["csv", "jsonl", "both"])
+        res = _post(self.client, "/api/settings/record-format", {"value": "both"})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(work_record.record_format(), "both")
+        self.assertIn("CSV と JSONL の両方", res.get_json()["message"])
+        res = _post(self.client, "/api/settings/record-format", {"value": "xlsx"})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(work_record.record_format(), "both")
+        self.assertIn(config.KEY_RECORD_FORMAT, {k for k, _l, _d in distribution.ITEMS})
+        user_settings.save(config.KEY_RECORD_FORMAT, "へん")
+        self.assertEqual(work_record.record_format(), "csv", "知らない値は CSV")
 
     def test_文字のfalseはテストモードにしない(self):
         user_settings.save(config.KEY_TEST_MODE, "false")
@@ -306,12 +328,31 @@ class EditHistoryTest(_Base):
         # 値はどこにも無い(編集履歴・記録・記録の画面)
         dumped = json.dumps(rows, ensure_ascii=False)
         records = "".join(p.read_text(encoding="utf-8")
-                          for p in config.RECORDS_DIR.glob("*.jsonl"))
+                          for p in config.RECORDS_DIR.glob("*.*"))
         page = self.client.get(f"/report/records?t={TOKEN}").get_data(as_text=True)
         for secret in (PASSWORD, new):
             self.assertNotIn(secret, dumped)
             self.assertNotIn(secret, records)
             self.assertNotIn(secret, page)
+
+    def test_控えはCSV_月の途中で形式を変えても記録の画面に全部出る(self):
+        local = config.RECORDS_DIR
+        work_record.append("出力", {"lot": "N6X0945", "no": 1}, when=_dt.datetime.now().replace(second=1))
+        user_settings.save(config.KEY_RECORD_FORMAT, "jsonl")
+        work_record.append("出力", {"lot": "N6X0945", "no": 2}, when=_dt.datetime.now().replace(second=2))
+        user_settings.save(config.KEY_RECORD_FORMAT, "both")
+        work_record.append("出力", {"lot": "N6X0945", "no": 3}, when=_dt.datetime.now().replace(second=3))
+        names = sorted(p.name for p in local.iterdir())
+        self.assertEqual([n.rsplit(".", 1)[1] for n in names], ["csv", "jsonl"])
+        rows = record_file.read_csv(str(next(local.glob("*.csv"))))
+        self.assertEqual([json.loads(r["詳しい中身"])["no"] for r in rows], [1, 3])
+        self.assertEqual(rows[0]["種類"], "出力")
+        self.assertIn("ロット: N6X0945", rows[0]["内容"])
+        self.assertEqual(rows[0]["PC名"], shared_settings.pc_name())
+        self.assertEqual([x["no"] for x in work_record.recent()], [3, 2, 1], "両方に書いた分も 1 回だけ")
+        page = self.client.get(f"/report/records?t={TOKEN}").get_data(as_text=True)
+        self.assertIn("CSV と JSONL の両方", page)
+        self.assertIn(".csv", page)
 
     def test_記録の画面に出る(self):
         self._output_one()

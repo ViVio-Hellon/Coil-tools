@@ -19,6 +19,7 @@ from flask import Blueprint, Response, jsonify, request
 
 from common import app_config as _common_app_config
 from common import logging_utils as _common_logging
+from common import record_file
 from common import storage_places
 from modules.packing_details.meisai import (admin_password, config, data_sync, distribution, printing,
                     qa_mark, shared_settings, source_db, user_settings, work_record)
@@ -116,6 +117,10 @@ def _record_state() -> dict:
         "line_name": work_record.line_name(),
         "line_name_max": config.LINE_NAME_MAX,
         "test_mode": work_record.test_mode(),
+        "record_format": st["format"],
+        "record_format_label": st["format_label"],
+        "record_files": st["files"],
+        "record_format_choices": [list(c) for c in record_file.FORMAT_CHOICES],
     }
 
 
@@ -605,6 +610,26 @@ def set_line_name():
         return jsonify(error_body("write_failed", "設定ファイルに書けませんでした。")), 500
     return _record_reply(f"ライン名を「{value}」にしました。" if value
                          else "ライン名を空にしました(記録には PC 名だけを残します)。")
+
+
+@bp.post("/api/settings/record-format")
+def set_record_format():
+    """記録ファイルの形式(この PC。統合 1.2.44)。CSV(既定。Excel で開ける)/ JSONL / 両方。
+
+    パスワードは要らない(記録の中身・行き先は変わらない。前のファイルもそのまま残る)。
+    """
+    body = request.get_json(silent=True) or {}
+    value = str(body.get("value", "")).strip().lower()
+    if value not in record_file.FORMATS:
+        return jsonify(error_body(
+            "bad_format", "形式は CSV・JSONL・両方 のどれかを選んでください。", "value")), 400
+    before = work_record.record_format()
+    if not user_settings.save(config.KEY_RECORD_FORMAT, value):
+        return jsonify(error_body("write_failed", "設定ファイルに書けませんでした。")), 500
+    if value != before:
+        work_record.append("設定", {"what": "記録ファイルの形式", "value": value})
+    return _record_reply(f"記録ファイルの形式を「{record_file.format_label(value)}」にしました。"
+                         "これからの記録をこの形式で書きます(前のファイルはそのまま残ります)。")
 
 
 @bp.post("/api/settings/test-mode")

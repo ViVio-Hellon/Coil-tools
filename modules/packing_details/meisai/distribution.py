@@ -53,6 +53,8 @@ from typing import Any, Optional
 
 from common import dist_settings as _dist_settings
 
+from common import record_file
+
 from . import admin_password, app_config, config, user_settings
 from .logging_utils import get_logger
 
@@ -86,6 +88,7 @@ ITEMS: tuple[tuple[str, str, bool], ...] = (
     (config.KEY_EXPORT_DIR, "CSVの出力先", True),
     # 共有フォルダはどの PC も同じ(書くのは <PC名> の下。VER 0.13.30)
     (config.KEY_RECORD_DIR, "記録の保存先フォルダー", True),
+    (config.KEY_RECORD_FORMAT, "記録ファイルの形式", True),
     (config.KEY_AUTO_IMPORT, "起動時の自動取り込み", True),
 )
 ITEM_KEYS = frozenset(key for key, _, _ in ITEMS)
@@ -143,6 +146,8 @@ def _check(key: str, value: Any) -> str:
             return problem
     if key in _BOOL_KEYS and not isinstance(value, bool):
         return "true か false で書いてください（引用符なし）"
+    if key == config.KEY_RECORD_FORMAT and value not in record_file.FORMATS:
+        return "csv・jsonl・both のどれかで書いてください"
     return ""
 
 

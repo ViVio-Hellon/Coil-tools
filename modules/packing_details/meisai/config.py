@@ -223,6 +223,7 @@ KEY_SHARED_JSON_DIR = "shared_json_dir"  # 管理者パスワード・右上の�
 KEY_RECORD_DIR = "record_dir"           # 記録の保存先フォルダー(<PC名> を作って PC ごとに書く)
 KEY_LINE_NAME = "line_name"             # ライン名(記録・編集履歴に PC 名と一緒に残す)
 KEY_TEST_MODE = "test_mode"             # テストモード(実機の試験中。記録に印を付ける)
+KEY_RECORD_FORMAT = "record_format"     # 記録ファイルの形式 csv(既定)/jsonl/both(統合 1.2.44)
 LINE_NAME_MAX = 40
 
 # 管理者パスワードの既定(一度も変えていない端末で通る値)。

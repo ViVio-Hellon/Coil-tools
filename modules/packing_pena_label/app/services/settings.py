@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+from common import record_file
 
 from ..config import (LAYER_LABEL, Config, clear_local_overrides,
                       load_local_overrides, save_local_overrides)
@@ -28,7 +30,7 @@ class SettingSpec:
     """設定 1 項目の定義。画面はこの定義から生成する。"""
     key: str
     label: str
-    kind: str                  # dir / file / text / bool / int
+    kind: str                  # dir / file / text / bool / int / choice
     group: str
     help: str = ""
     placeholder: str = ""
@@ -47,6 +49,8 @@ class SettingSpec:
     must_contain: str = ""
     #: 変えるのに合言葉が要るか(パス以外。テストモードなど。統合 1.2.40)
     need_password: bool = False
+    #: kind="choice" の選択肢 ((値, 見出し), ...)。統合 1.2.44
+    choices: Tuple[Tuple[str, str], ...] = ()
 
 
 GROUP_REF = "参照先（外部ファイル）"
@@ -82,6 +86,13 @@ SETTINGS: List[SettingSpec] = [
               "この PC のローカル領域の records に加えてここにも書く(<PC名> のフォルダーを作って PC ごとに)。"
               "共有フォルダーを入れると、PC の入れ替えや状態DB の破損でも記録が残る。"),
         default_hint="未設定(この PC の records にだけ書く)"),
+    SettingSpec(
+        key="record_format", label="記録ファイルの形式", kind="choice",
+        group=GROUP_REF, choices=record_file.FORMAT_CHOICES,
+        help=("計算・印刷の記録を月ごとのファイルに書くときの形式(この PC の records と、上の保存先フォルダー)。"
+              "CSV は Excel でそのまま開ける(Excel で開いている間は「追記待ち」に足し、閉じたあと次の記録で書き足す)。"
+              "見るときは写しを開くか読み取り専用で開く。形式を変えても前のファイルはそのまま残る。"),
+        default_hint="CSV(Excel で開ける)"),
     SettingSpec(
         key="test_mode", label="テストモード（実機の試験中）", kind="bool",
         group=GROUP_REF, need_password=True,
@@ -375,6 +386,13 @@ def coerce(spec: SettingSpec, raw: Any) -> Any:
             raise ValueError("%s 以下にしてください" % spec.maximum)
         return f
 
+    if spec.kind == "choice":
+        value = str(raw or "").strip()
+        allowed = [v for v, _ in spec.choices]
+        if value not in allowed:
+            raise ValueError("選べる値は %s です" % "・".join(label for _, label in spec.choices))
+        return value
+
     if spec.kind == "int":
         s = str(raw).strip()
         if s == "":
@@ -433,6 +451,7 @@ def describe(cfg: Config) -> List[dict]:
             "layer": layer,
             "layerLabel": LAYER_LABEL.get(layer, layer),
             "overridden": spec.key in overrides,
+            "choices": [list(c) for c in spec.choices],
         }
         if spec.kind in ("dir", "file"):
             r = field_check(spec, str(value))

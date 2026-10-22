@@ -390,6 +390,22 @@
         <p class="set-note" id="setLineNote" role="status" hidden></p>
       </section>
 
+      <section class="set-box" id="setFormatBox" aria-labelledby="setFormatHead">
+        <div class="set-box-head"><span id="setFormatHead">記録ファイルの形式</span><span class="where where-local">このPCに保存</span></div>
+        <span class="stamp">作業の記録を月ごとのファイルに書くときの形式です。CSV は Excel でそのまま開けます
+          （Excel で開いている間に書けなかった分は「追記待ち」に足し、閉じたあと次の記録で書き足します）。
+          見るときは写しを開くか、読み取り専用で開いてください。形式を変えても前のファイルはそのまま残ります。</span>
+        <select id="setRecordFormat" aria-labelledby="setFormatHead">
+          <option value="csv">CSV(Excel で開ける)</option>
+          <option value="jsonl">JSONL(1 行 1 件の JSON)</option>
+          <option value="both">CSV と JSONL の両方</option>
+        </select>
+        <div class="set-qa-buttons">
+          <button type="button" class="primary" id="btnFormatSave">保存</button>
+        </div>
+        <p class="set-note" id="setFormatNote" role="status" hidden></p>
+      </section>
+
       <section class="set-box" id="setTestBox" aria-labelledby="setTestHead">
         <div class="set-box-head"><span id="setTestHead">テストモード（実機の試験中）</span><span class="where where-local">このPCに保存</span>
           <span class="stamp">切り替えには管理者パスワードが要ります</span></div>
