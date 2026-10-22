@@ -107,6 +107,14 @@ class AppContext:
             refresh_sec=cfg.material_refresh_sec,
             db_path=cfg.material_db_file)
         self.wf = Workflow(self.store, self.master, self.materials, cfg)
+        # 資材マスタ(SQLite)に、直されたら自動で編集履歴を書く仕掛けを入れる(統合 1.2.41)。
+        # 読み取り専用・届かないときは入れずに続ける(理由はログ)
+        try:
+            from .app.services import master_admin as _MA
+            if _MA.can_edit(self.materials):
+                _MA.install_triggers(_MA.source_path(self.materials))
+        except Exception:                               # noqa: BLE001
+            logging.getLogger(__name__).warning("編集履歴の仕掛けを入れられませんでした", exc_info=True)
         #: 入力画面を 1 つに限る(タブを 2 枚開かせない)
         self.screens = ScreenGuard()
         self.pages = PageRoutes(self.wf, cfg, started_at=self.started_at,

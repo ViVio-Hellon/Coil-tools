@@ -2620,7 +2620,7 @@ class PageRoutes:
         hist = MA.history(self.wf.materials, 300)
         hrows = "".join(
             f'<tr><td class="nowrap">{esc(h.get("日時", ""))}</td>'
-            f'<td class="nowrap">{esc(h.get("PC", ""))}'
+            f'<td class="nowrap">{esc(h.get("PC", "")) or "<span class=logold>(ツールの外で直した)</span>"}'
             + (f'<br><span class="logsub">{esc(h.get("ライン", ""))}</span>' if h.get("ライン") else "")
             + (f'<br><b class="logtest">{esc(h.get("モード", ""))}</b>' if h.get("モード") else "")
             + f'</td><td>{esc(h.get("利用者", ""))}</td><td class="nowrap">{esc(h.get("表", ""))}</td>'
@@ -2628,11 +2628,13 @@ class PageRoutes:
             f'<td>{esc(h.get("列", ""))}</td><td>{esc(h.get("前", ""))}</td><td>{esc(h.get("後", ""))}</td></tr>'
             for h in hist["rows"])
         body += ('<div class="card"><h2>資材マスタの編集履歴(全ライン)</h2>'
-                 '<p class="hint">マスタ管理・サイズを足す で資材マスタを直したときに、<b>誰が(PC・ライン・Windows の利用者名)'
-                 '・いつ・どの表のどの行の・どの値を何から何に</b>変えたかを、資材マスタの中(表「'
-                 + esc(MA.HISTORY_TABLE) + '」)に残しています(新しい順に 300 件)。'
+                 '<p class="hint">資材マスタ(SQLite)が直されると、<b>資材マスタ自身が自動で</b>(仕掛け=トリガー)'
+                 '<b>直した日時・どの表のどの行の・どの値を何から何に</b>を、表「'
+                 + esc(MA.HISTORY_TABLE) + '」に書きます(新しい順に 300 件)。このツールのマスタ管理で直しても、'
+                 'DB を直に開く道具で直しても残ります。このツールから直したときは、<b>誰が(PC・ライン・Windows の利用者名)</b>'
+                 'も同じ行に入ります(ツールの外で直したときは入りません)。'
                  '上の記録の「資材マスタの時点」が変わった理由は、ここで追えます。'
-                 'このツールの外(Access など)で直したものは残りません。</p>'
+                 '資材マスタが Access(.accdb)・CSV のときは残りません(上の「資材重量の変化」で、変わったことだけ分かります)。</p>'
                  + (f'<p class="hint logstale">{esc(hist["note"])}</p>' if hist.get("note") else "")
                  + ('<div class="scroll"><table class="tbl"><thead><tr><th>日時</th><th>PC・ライン</th>'
                     '<th>利用者</th><th>表</th><th>行</th><th>操作</th><th>列</th><th>前</th><th>後</th>'

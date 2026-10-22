@@ -212,11 +212,12 @@ def add(repo, master, thickness, width, kataban, symbol="", note="", who=None) -
         backup = MA._backup(path)
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         values = (ob, name, width_mm, kata, sym, memo, stamp)
-        cur = conn.execute('INSERT INTO "%s" (%s) VALUES (?,?,?,?,?,?,?)'
-                           % (TABLE_NAME, ", ".join('"%s"' % c for c in COLUMNS)), values)
-        # 資材マスタの編集履歴にも残す(統合 1.2.39)
-        MA.write_history(conn, who, TABLE_NAME, cur.lastrowid, "サイズ名=%s 管理番号=%d" % (name, ob),
-                         "追加", list(zip(COLUMNS, [""] * len(COLUMNS), values)))
+        # 資材マスタの編集履歴は資材マスタ自身(トリガー)が書く。この PC の名前などを足す(統合 1.2.41)
+        MA.ensure_triggers(conn)
+        mark = MA._history_mark(conn)
+        conn.execute('INSERT INTO "%s" (%s) VALUES (?,?,?,?,?,?,?)'
+                     % (TABLE_NAME, ", ".join('"%s"' % c for c in COLUMNS)), values)
+        MA.fill_who(conn, mark, who)
         conn.commit()
     except MA.Refused:
         conn.rollback()

@@ -183,6 +183,126 @@ def write_history(conn: sqlite3.Connection, who: Optional[Dict[str, str]], table
     return len(rows)
 
 
+# ---------------------------------------------------------------- 自動の編集履歴(トリガー)
+#: 直されたら資材マスタ自身が履歴を書く表(統合 1.2.41・現場の指示: 自分で入れるのではなく、
+#: 編集のあった日時を自動で記録する仕組みに)。SQLite のトリガーなので、このツールのマスタ管理でも、
+#: DB を直に開く道具で直しても、**直した瞬間の日時と前・後**が残る。このツールから直したときだけ、
+#: 同じ行に PC 名・ライン・利用者・モードを足す(`fill_who`)。Access(.accdb)は対象外
+TRIGGER_TABLES = ("資材重量", "ラベル台紙一覧", "ペナラベル追加サイズ", "型番")
+TRIGGER_PREFIX = "編集履歴_"
+
+
+def _sql_text(text: str) -> str:
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+def _trigger_sqls(table: str, cols: List[str]) -> Dict[str, str]:
+    """その表の 追加・更新・削除 のトリガー(名前 → CREATE 文)。列ごとに 1 行ずつ書く。"""
+    names = [c for c in _ROW_NAME_COLUMNS if c in cols][:2]
+
+    def row_name(ref: str) -> str:
+        if not names:
+            return "''"
+        return " || ' ' || ".join("%s || IFNULL(%s.%s, '')" % (_sql_text(c + "="), ref, _quote(c))
+                                  for c in names)
+
+    hist = "INSERT INTO %s (%s) " % (_quote(HISTORY_TABLE), ", ".join(
+        _quote(c) for c in ("日時", "表", "行", "行の名前", "操作", "列", "前", "後")))
+    now = "datetime('now','localtime')"
+    t = _sql_text(table)
+    out = {}
+    body = "".join("%s SELECT %s, %s, NEW.rowid, %s, '追加', %s, '', NEW.%s WHERE NEW.%s IS NOT NULL;"
+                   % (hist, now, t, row_name("NEW"), _sql_text(c), _quote(c), _quote(c)) for c in cols)
+    out[TRIGGER_PREFIX + table + "_追加"] = "AFTER INSERT ON %s BEGIN %s END" % (_quote(table), body)
+    body = "".join("%s SELECT %s, %s, NEW.rowid, %s, '更新', %s, OLD.%s, NEW.%s WHERE OLD.%s IS NOT NEW.%s;"
+                   % (hist, now, t, row_name("NEW"), _sql_text(c), _quote(c), _quote(c),
+                      _quote(c), _quote(c)) for c in cols)
+    out[TRIGGER_PREFIX + table + "_更新"] = "AFTER UPDATE ON %s BEGIN %s END" % (_quote(table), body)
+    body = "".join("%s SELECT %s, %s, OLD.rowid, %s, '削除', %s, OLD.%s, '' WHERE OLD.%s IS NOT NULL;"
+                   % (hist, now, t, row_name("OLD"), _sql_text(c), _quote(c), _quote(c)) for c in cols)
+    out[TRIGGER_PREFIX + table + "_削除"] = "AFTER DELETE ON %s BEGIN %s END" % (_quote(table), body)
+    return {name: "CREATE TRIGGER %s %s" % (_quote(name), sql) for name, sql in out.items()}
+
+
+def ensure_triggers(conn: sqlite3.Connection) -> int:
+    """編集履歴のトリガーを入れる(無い・列が変わったときだけ作り直す)。作った数を返す。commit は呼ぶ側。"""
+    _ensure_history(conn)
+    have = {r[0]: r[1] for r in conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type='trigger'")}
+    made = 0
+    for table in TRIGGER_TABLES:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                            (table,)).fetchone():
+            continue
+        missing = changed = 0
+        for name, sql in _trigger_sqls(table, columns(conn, table)).items():
+            if have.get(name) == sql:
+                continue
+            if name in have:
+                conn.execute("DROP TRIGGER %s" % _quote(name))
+                changed += 1
+            else:
+                missing += 1
+            conn.execute(sql)
+            made += 1
+        if missing or changed:
+            # ここから自動で記録する、という印を残す。表を入れ替える(作り直す)と仕掛けも消えるので、
+            # 入れ直した時点が分かるように(その間の編集は残っていない。統合 1.2.41)
+            rows = conn.execute("SELECT COUNT(*) FROM %s" % _quote(table)).fetchone()[0]
+            why = ("仕掛けが無かった(初めて入れた・表を作った/入れ替えた)" if missing
+                   else "列が変わったので仕掛けを作り直した")
+            conn.execute(
+                "INSERT INTO %s (%s) VALUES (datetime('now','localtime'), ?, ?, '', '', ?, ?, '', ?)"
+                % (_quote(HISTORY_TABLE), ", ".join(_quote(c) for c in
+                   ("日時", "PC", "表", "行", "行の名前", "操作", "前", "列", "後"))),
+                (_pc_name(), table, "自動記録を開始", "", "%s。行数 %d" % (why, rows)))
+    return made
+
+
+def _pc_name() -> str:
+    try:
+        from .work_record import pc_name
+        return pc_name()
+    except Exception:                                   # noqa: BLE001
+        return ""
+
+
+def install_triggers(path: str) -> str:
+    """起動時に、書ける資材マスタ(SQLite)へ編集履歴のトリガーを入れる。入れられなければ理由(業務は止めない)。"""
+    if not path or not os.path.exists(path):
+        return "資材マスタ(SQLite)がありません"
+    try:
+        conn = _connect(path, write=True)
+        try:
+            made = ensure_triggers(conn)
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        log.info("資材マスタに編集履歴の仕掛けを入れられません(読み取り専用など): %s", exc)
+        return "編集履歴の仕掛けを入れられません: %s" % exc
+    if made:
+        log.info("資材マスタに編集履歴の仕掛け(トリガー)を %d 個入れました: %s", made, path)
+    return ""
+
+
+def _history_mark(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT MAX(rowid) FROM %s" % _quote(HISTORY_TABLE)).fetchone()
+    return int(row[0] or 0)
+
+
+def fill_who(conn: sqlite3.Connection, mark: int, who: Optional[Dict[str, str]]) -> int:
+    """このツールから直したとき、トリガーが書いた行(``mark`` より後)に PC 名・ライン・利用者・モードを足す。"""
+    who = who or {}
+    cur = conn.execute(
+        "UPDATE %s SET %s=?, %s=?, %s=?, %s=? WHERE rowid > ? AND IFNULL(%s, '') = ''"
+        % (_quote(HISTORY_TABLE), _quote("PC"), _quote("ライン"), _quote("利用者"), _quote("モード"),
+           _quote("PC")),
+        (who.get("pc", "") or "このツール", who.get("line", ""), who.get("user", ""),
+         who.get("mode", ""), int(mark)))
+    return cur.rowcount
+
+
 def history(repo, limit: int = 300) -> Dict[str, Any]:
     """編集履歴(新しい順)。表が無ければ空。"""
     path = source_path(repo)
@@ -287,7 +407,7 @@ def columns(conn: sqlite3.Connection, table: str) -> List[str]:
     rows = conn.execute("PRAGMA table_info(%s)" % _quote(table)).fetchall()
     if not rows:
         raise Refused(REFUSE_NO_SOURCE, "表が見つかりません: %s" % table)
-    return [r["name"] for r in rows]
+    return [r[1] for r in rows]                # PRAGMA table_info の 2 番目が列名(row_factory に寄らない)
 
 
 def tables(repo) -> List[dict]:
@@ -471,6 +591,8 @@ def save_row(repo, table: str, row_id: Optional[int],
             raise Refused(REFUSE_BAD_VALUE, "書き込む内容がありません")
 
         backup = _backup(path)
+        ensure_triggers(conn)                 # 編集履歴は資材マスタ自身が書く(統合 1.2.41)
+        mark = _history_mark(conn)
         if row_id is None:
             names = list(data)
             sql = ("INSERT INTO %s (%s) VALUES (%s)"
@@ -479,8 +601,6 @@ def save_row(repo, table: str, row_id: Optional[int],
             cur = conn.execute(sql, [data[c] for c in names])
             new_id = cur.lastrowid
             action = "追加"
-            write_history(conn, who, table, new_id, _row_name(data), action,
-                          [(c, "", data[c]) for c in names])
         else:
             hit = conn.execute("SELECT * FROM %s WHERE rowid=?"
                                % _quote(table), (int(row_id),)).fetchone()
@@ -496,8 +616,11 @@ def save_row(repo, table: str, row_id: Optional[int],
             conn.execute(sql, [data[c] for c in names] + [int(row_id)])
             new_id = int(row_id)
             action = "更新"
-            write_history(conn, who, table, new_id, _row_name(dict(before, **data)), action,
-                          [(c, before.get(c), data[c]) for c in names])
+        if table not in TRIGGER_TABLES:       # トリガーの無い表だけ、ここで書く
+            write_history(conn, who, table, new_id,
+                          _row_name(data if row_id is None else dict(before, **data)), action,
+                          [(c, "" if row_id is None else before.get(c), data[c]) for c in names])
+        fill_who(conn, mark, who)
         conn.commit()
     except Refused:
         conn.rollback()
@@ -538,17 +661,22 @@ def delete_row(repo, table: str, row_id: int, who: Optional[Dict[str, str]] = No
             if str(done or "").strip():
                 raise Refused(REFUSE_NO_ROW, "その行はもう消してあります(%s)。" % done)
         backup = _backup(path)
+        ensure_triggers(conn)                 # 列を足したあとに作り直す(統合 1.2.41)
+        mark = _history_mark(conn)
         if soft:
             stamp = time.strftime("%Y-%m-%d %H:%M:%S")
             conn.execute("UPDATE %s SET %s=? WHERE rowid=?" % (_quote(table), _quote(soft)),
                          (stamp, int(row_id)))
-            write_history(conn, who, table, row_id, _row_name(before), "削除",
-                          [(soft, "", stamp)])
+            if table not in TRIGGER_TABLES:
+                write_history(conn, who, table, row_id, _row_name(before), "削除",
+                              [(soft, "", stamp)])
         else:
             conn.execute("DELETE FROM %s WHERE rowid=?" % _quote(table),
                          (int(row_id),))
-            write_history(conn, who, table, row_id, _row_name(before), "削除",
-                          [(c, v, "") for c, v in before.items()])
+            if table not in TRIGGER_TABLES:
+                write_history(conn, who, table, row_id, _row_name(before), "削除",
+                              [(c, v, "") for c, v in before.items()])
+        fill_who(conn, mark, who)
         conn.commit()
     except Refused:
         conn.rollback()

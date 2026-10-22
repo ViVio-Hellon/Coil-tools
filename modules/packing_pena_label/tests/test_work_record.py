@@ -131,7 +131,7 @@ class MasterHistoryTest(unittest.TestCase):
 
     def test_誰が_いつ_どの値を何から何に(self):
         MA.save_row(self.repo, "資材重量", self._rowid("テスラピン"), {"単位質量": "0.6"}, who=self.who)
-        h = MA.history(self.repo)["rows"]
+        h = [r for r in MA.history(self.repo)["rows"] if r["操作"] != "自動記録を開始"]
         self.assertEqual(len(h), 1, "変わった列だけ")
         r = h[0]
         self.assertEqual((r["表"], r["操作"], r["列"], r["前"], r["後"]),
@@ -265,3 +265,99 @@ class MaterialChangeTest(HttpTestCase):
         self.assertIn("0.99", ch[0]["後"])
         _, html = self.get("/print-log")
         self.assertIn("資材重量の変化", html)
+
+
+class AutoHistoryTest(unittest.TestCase):
+    """編集のあった日時を資材マスタ自身が自動で記録する(トリガー。統合 1.2.41・現場の指示)。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, "梱包資材マスタ.sqlite3")
+        make_master(self.db)
+        self.repo = MaterialRepository(accdb_dir="", csv_path="", prefer_access=False,
+                                       db_path=self.db, refresh_sec=0)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_ツールの外で直しても日時と前後が残る(self):
+        self.assertEqual(MA.install_triggers(self.db), "")
+        with sqlite3.connect(self.db) as c:            # DB を直に開く道具で直した
+            c.execute("UPDATE 資材重量 SET 単位質量='0.8' WHERE 梱包資材名='テスラピン'")
+            c.execute("INSERT INTO 資材重量 VALUES (9, '新しい資材', '2', '1')")
+            c.execute("DELETE FROM 資材重量 WHERE 梱包資材名='ｽﾄﾚｯﾁ'")
+        rows = MA.history(self.repo)["rows"]
+        upd = [r for r in rows if r["操作"] == "更新"]
+        self.assertEqual(len(upd), 1, "変わった列だけ")
+        self.assertEqual((upd[0]["列"], upd[0]["前"], upd[0]["後"]), ("単位質量", "0.5", "0.8"))
+        self.assertIn("梱包資材名=テスラピン", upd[0]["行の名前"])
+        self.assertRegex(upd[0]["日時"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertEqual(upd[0]["PC"], "", "ツールの外で直したときは誰かは分からない")
+        self.assertTrue(any(r["操作"] == "追加" and r["列"] == "梱包資材名" and r["後"] == "新しい資材"
+                            for r in rows))
+        self.assertTrue(any(r["操作"] == "削除" and r["前"] == "ｽﾄﾚｯﾁ" for r in rows))
+
+    def test_ツールから直すと誰かも入る_2重にならない(self):
+        with sqlite3.connect(self.db) as c:
+            rid = c.execute("SELECT rowid FROM 資材重量 WHERE 梱包資材名='テスラピン'").fetchone()[0]
+        MA.save_row(self.repo, "資材重量", rid, {"単位質量": "0.6"},
+                    who={"pc": "LINE2-PC", "line": "2ライン", "user": "tanaka"})
+        rows = [r for r in MA.history(self.repo)["rows"] if r["操作"] != "自動記録を開始"]
+        self.assertEqual(len(rows), 1, "トリガーとツールで 2 重に書かない")
+        self.assertEqual((rows[0]["PC"], rows[0]["ライン"], rows[0]["前"], rows[0]["後"]),
+                         ("LINE2-PC", "2ライン", "0.5", "0.6"))
+
+    def test_列が増えたら仕掛けを作り直す_何度入れても同じ(self):
+        MA.install_triggers(self.db)
+        with sqlite3.connect(self.db) as c:
+            c.execute("ALTER TABLE 資材重量 ADD COLUMN 備考 TEXT")
+            n = MA.ensure_triggers(c)
+            self.assertEqual(n, 3, "追加・更新・削除の 3 つを作り直す")
+            self.assertEqual(MA.ensure_triggers(c), 0, "変わっていなければ何もしない")
+            c.execute("UPDATE 資材重量 SET 備考='x' WHERE 梱包資材名='テスラピン'")
+        self.assertEqual(MA.history(self.repo)["rows"][0]["列"], "備考")
+
+    def test_起動したら仕掛けが入る(self):
+        from modules.packing_pena_label import server
+        from modules.packing_pena_label.app.config import Config
+        from .test_master_admin import free_port
+        cfg = Config()
+        cfg.port = free_port()
+        cfg.prefer_access = False
+        cfg.material_db_file = self.db
+        saved = Config.__dict__["local_dir"]
+        cfg.__class__.local_dir = property(lambda s, d=self.tmp: d)
+        try:
+            httpd, ctx = server.create_server(cfg)
+            httpd.server_close()
+            ctx.store.close()
+        finally:
+            Config.local_dir = saved
+        with sqlite3.connect(self.db) as c:
+            names = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger'")]
+        self.assertIn("編集履歴_資材重量_更新", names)
+
+
+class TableReplacedTest(unittest.TestCase):
+    def test_表を入れ替えたら_自動記録を開始の印を残して入れ直す(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            db = os.path.join(tmp, "梱包資材マスタ.sqlite3")
+            make_master(db)
+            repo = MaterialRepository(accdb_dir="", csv_path="", prefer_access=False,
+                                      db_path=db, refresh_sec=0)
+            MA.install_triggers(db)
+            starts = [r for r in MA.history(repo)["rows"] if r["操作"] == "自動記録を開始"]
+            self.assertTrue(any(r["表"] == "資材重量" and "行数 3" in r["後"] for r in starts))
+            make_master(db)                      # 表の入れ替え(作り直す。仕掛けも消える)
+            MA.install_triggers(db)
+            starts = [r for r in MA.history(repo)["rows"]
+                      if r["操作"] == "自動記録を開始" and r["表"] == "資材重量"]
+            self.assertEqual(len(starts), 2, "入れ直した時点が分かる")
+            self.assertIn("入れ替えた", starts[0]["後"])
+            self.assertEqual(MA.install_triggers(db), "")
+            self.assertEqual(len([r for r in MA.history(repo)["rows"]
+                                  if r["操作"] == "自動記録を開始" and r["表"] == "資材重量"]), 2,
+                             "変わっていなければ印を足さない")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
