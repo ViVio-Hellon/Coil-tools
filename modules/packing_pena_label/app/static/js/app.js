@@ -544,10 +544,10 @@
         if (out !== "-" && out !== "" && !/^[+-]?(\d+\.?\d*|\.\d+)$/.test(out)) { out = ""; }
       }
     } else if (kind === "coil") {
-      // CoilH1..4: 数値でなければ空（"-" の例外なし）
-      if (v !== "" && !/^\d+\.?\d*$/.test(v)) {
-        out = v.slice(0, -1);
-        if (out !== "" && !/^\d+\.?\d*$/.test(out)) { out = ""; }
+      // CoilH1..4: 数字だけ(VBA の KeyPress は 0-9 しか通さない。「.」「-」は打てない。統合 1.2.35)。
+      // 以前は「11.5」が打てて、サーバが黙って空にしていた
+      if (v !== "" && !/^\d+$/.test(v)) {
+        out = v.replace(/[^0-9]/g, "");
       }
     }
     if (out !== v) { input.value = out; }
@@ -646,6 +646,12 @@
       if (ch && state.coilH && typeof state.coilH[i] === "string") { ch.value = state.coilH[i]; }
     });
     if (typeof state.kensaNo === "string") { $("#kensaNo").value = state.kensaNo; }
+    // チップボール: サーバがコイル外径から選び直すことがある(統合 1.2.35)。選んだわけを下に出す
+    if (typeof state.tip === "string") {
+      $$("input[name=tip]").forEach(function (r) { r.checked = r.value === state.tip; });
+    }
+    var tipNote = $("#tipNote");
+    if (tipNote && typeof state.tipNote === "string") { tipNote.textContent = state.tipNote; }
     applyTakeVisibility(state);
   }
 

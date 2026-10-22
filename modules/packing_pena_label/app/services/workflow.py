@@ -25,6 +25,7 @@ from typing import Dict, List, Optional, Tuple
 from ..models import FormState, TIP_CHOICES
 from ..repositories import material_repo as M
 from ..repositories.access_bridge import AccessError
+from . import coil_outer
 from . import label_layout as LL
 from . import list_calc as LC
 from . import size_master as SM
@@ -285,6 +286,14 @@ class Workflow:
         if msg:
             return Result(False, msg, "warn")
 
+        # 次のロット(前に計算したときと違う検番)の重量反映なら、前のロットの NW・GW・高さと
+        # 台紙の本数欄を消す(統合 1.2.35・現場の指示)。小ラベルを刷ったあとは消さずに残し
+        # (刷り直せるように)、消すのは次のロットの処理が走ったとき。
+        # VBA は刷ったあと「いいえ」でも必ずクリアしていた
+        # 消すのは台紙へ書くと決まってから(サイズ未選択などで書かずに戻るときは何も消さない)
+        saved = self.store.get_kv(self._CALC_INPUT_KEY, None)
+        lot_changed = bool(saved and saved.get("kensaNo") and saved.get("kensaNo") != ken)
+
         written: List[dict] = []
 
         # --- CB モード（VBA チェック入力）---
@@ -294,6 +303,8 @@ class Workflow:
             else:
                 ob1, ob2 = self.master.cb_to_pair(state.selected_cb)
             log.info("[チェック入力] ob1=%s ob2=%s", ob1, ob2)
+            if lot_changed:
+                self.clear_all(state, save=False)
 
             written.append(self._write_label_sheet(ob1, ken, state.weight1, 1))
             cfg1 = self.master.get(ob1)
@@ -319,6 +330,8 @@ class Workflow:
                               "warn")
             take = cfg.take_type
             wt = state.weight1 if take == 1 else state.weight2
+            if lot_changed:
+                self.clear_all(state, save=False)
 
             written.append(self._write_label_sheet(ob, ken, wt, take))
 
@@ -337,8 +350,23 @@ class Workflow:
                           {"state": state.to_dict(), "written": []})
 
         state.kensa_no = ken
+        # 検査番号(= ロット番号)のコイル外径から、近いチップボールを選ぶ(統合 1.2.35・現場の指示)。
+        # 資材計算の仕掛パスが実績の形式のときだけ(`services/coil_outer.py`)
+        try:
+            tip, note = coil_outer.choose(ken, state.tip)
+        except Exception:                               # noqa: BLE001 - 選べなくても反映は止めない
+            log.warning("コイル外径からチップボールを選べませんでした", exc_info=True)
+            tip, note = None, ""
+        if tip:
+            state.tip = tip
+        state.tip_note = note
         self.save_state(state)
-        return Result(True, "重量を反映しました", "info",
+        message = "重量を反映しました"
+        if lot_changed:
+            message += "\n検査番号が変わったので、前のロットの NW・GW・高さと台紙の本数欄を消しました"
+        if note:
+            message += "\n" + note
+        return Result(True, message, "info",
                       {"state": state.to_dict(), "written": written})
 
     def _write_label_sheet(self, ob_idx: int, ken: str, wt: str,
@@ -381,13 +409,10 @@ class Workflow:
         if msg:
             return Result(False, msg, "warn", {"state": state.to_dict()})
 
-        # VBA: クリア()
-        self.clear_all(state, save=False)
-
-        # VBA: RecreateSheet("風袋計算")
-        self.store.clear_tare()
-
-        # VBA: IsValidSettings()
+        # 設定(チップボール・丈・サイズ)と資材マスタを、**消す前に**確かめる(統合 1.2.35)。
+        # VBA は クリア → 風袋シートの作り直し → IsValidSettings の順で、止めると台紙の本数欄だけ
+        # 消えて、画面に残した NW・GW・高さと食い違った(開き直すと古い GW が出た)。
+        # 止めるときは何も消さない(前の計算結果のまま。入力が変わっていれば印刷は止まる)
         msg = V.validate_settings(state)
         if msg is not None:
             return Result(False, msg, "warn", {"state": state.to_dict()})
@@ -412,10 +437,13 @@ class Workflow:
         t2 = TC.parse_label_weight(state.lbl_weight2)
 
         missing: List[str] = []
-        results = {}
+        computed = []
 
-        # VBA は 4 -> 3 -> 2 -> 1 の順に処理する
-        for coil_no in (4, 3, 2, 1):
+        # VBA は 4 -> 3 -> 2 -> 1 の順に処理する。先に全部計算してから(書くのは確かめたあと)。
+        # **隠れている丈の梱包は計算しない**(統合 1.2.35)。丈を切り替えても本数の欄は値が残るので、
+        # 丈1・丈2 同時 → 丈1 だけ に切り替えると、丈2 の梱包(NW=0)が風袋の紙に出ていた
+        # (VBA は印刷範囲で表示中の丈だけを刷っていた)
+        for coil_no in self.visible_slots(state)[::-1]:
             raw = str(state.coil_h.get(coil_no, "") or "").strip()
             if raw == "":
                 continue
@@ -426,11 +454,28 @@ class Workflow:
                 table, coil_text, coil_no, width, state.tip, cb_key, ob_idx,
                 t1, t2, state.take1_visible, state.take2_visible,
                 all_coil_empty=False)
-
             for name in mat.missing:
                 if name not in missing:
                     missing.append(name)
+            computed.append((coil_no, coil_text, mat))
 
+        if not computed:
+            return Result(False, "表示中の丈に本数が入力されていません", "warn",
+                          {"state": state.to_dict()})
+
+        # 資材マスタに無い資材・単重が数でない資材があれば止める(統合 1.2.35。VBA も止まった。
+        # 以前は 0kg として計算を続け、GW が軽いラベルが刷れた)
+        if missing:
+            return Result(False, self.missing_message(missing, self.materials.describe()),
+                          "error", {"state": state.to_dict(), "missing": missing})
+
+        # VBA: クリア()
+        self.clear_all(state, save=False)
+        # VBA: RecreateSheet("風袋計算")
+        self.store.clear_tare()
+
+        results = {}
+        for coil_no, coil_text, mat in computed:
             # --- 画面へ（VBA SetCoilFormValues / SetCoilDimensions）---
             nw_s, gw_s = TC.form_values(mat)
             state.nw[coil_no] = nw_s
@@ -468,18 +513,34 @@ class Workflow:
                       for k in (1, 2, 3, 4) if str(state.coil_h.get(k, "") or "").strip()},
             "material": material})
 
-        level = "warn" if missing else "info"
-        message = "計算しました"
-        if missing:
-            message = ("計算しましたが、資材マスタに無い項目があり 0kg として"
-                       "計算しました:\n" + "、".join(missing))
-        return Result(True, message, level, {
+        return Result(True, "計算しました", "info", {
             "state": state.to_dict(),
             "tare": {str(k): v for k, v in results.items()},
             "transferred": transferred,
             "missing": missing,
             "materialSource": self.materials.last_source,
         })
+
+    @staticmethod
+    def visible_slots(state: FormState) -> List[int]:
+        """表示中の丈の梱包の番号(丈1 → 1・2、丈2 → 3・4)。"""
+        out: List[int] = []
+        if state.take1_visible:
+            out += [1, 2]
+        if state.take2_visible:
+            out += [3, 4]
+        return out
+
+    @staticmethod
+    def missing_message(missing: List[str], material: dict) -> str:
+        """資材マスタに無い・数でない資材で止めたときの文(どこを直せばよいかまで)。"""
+        where = material.get("label") or material.get("source") or ""
+        path = material.get("path") or ""
+        return ("資材重量なし: 資材マスタに無い資材、または単重・係数が数でない資材があるので、"
+                "計算を止めました。\n" + "、".join(missing)
+                + (f"\n読んだ資材マスタ: {where}" if where else "")
+                + (f"({path})" if path else "")
+                + "\n資材マスタを直してから、もう一度計算してください")
 
     @staticmethod
     def _label_weight_problem(state: FormState) -> Optional[str]:
@@ -602,6 +663,11 @@ class Workflow:
             return Result(False, "コイルサイズが選択されていません", "warn")
         if state.tip not in TIP_CHOICES:
             return Result(False, "チップボールチェックがありません", "warn")
+        # 表示中の丈のラベルの重量が数でなければ止める(統合 1.2.35。風袋計算と同じ。
+        # 羅列は 1〜50 本の NW・GW を並べるので、重量が数でないと NW=0 の一覧になる)
+        msg = self._list_weight_problem(state)
+        if msg:
+            return Result(False, msg, "warn")
 
         try:
             # 「計算」を押した瞬間は **必ずマスタを確かめる**。
@@ -622,6 +688,10 @@ class Workflow:
         data = LC.build_list(table, width, state.tip, t1, t2,
                              state.take1_visible, state.take2_visible,
                              cb_key=cb_key, ob_idx=ob_idx)
+        # 資材マスタに無い資材・単重が数でない資材があれば止める(統合 1.2.35。風袋計算と同じ)
+        if data["missing"]:
+            return Result(False, self.missing_message(data["missing"], self.materials.describe()),
+                          "error", {"missing": data["missing"]})
         data["width"] = fmt(width, "0.0")
         data["footer"] = self._list_footer(state)
         # どの取得元の、いつ時点の資材重量で計算したか(統合 1.2.31)
@@ -630,12 +700,19 @@ class Workflow:
         self._log("計算", "羅列計算", {"width": data["width"], "material": data["material"]})
         self.store.set_kv("list_result", data)
 
-        level = "warn" if data["missing"] else "info"
-        msg = "羅列計算を作成しました"
-        if data["missing"]:
-            msg += "（資材マスタに無い項目を 0kg として計算: %s）" % "、".join(data["missing"])
-        return Result(True, msg, level,
+        return Result(True, "羅列計算を作成しました", "info",
                       {"list": data, "materialSource": self.materials.last_source})
+
+    @staticmethod
+    def _list_weight_problem(state: FormState) -> Optional[str]:
+        """羅列に使う丈(表示中の丈)の、ラベルの重量が数でなければ理由。"""
+        for take, visible, label in ((1, state.take1_visible, state.lbl_weight1),
+                                     (2, state.take2_visible, state.lbl_weight2)):
+            if visible and V.weight_number(label) is None:
+                shown = str(label or "").replace("kg", "").strip() or "空"
+                return (f"丈{take}の重量が数になっていません(「{shown}」)。"
+                        "重量を数で入れて「重量反映」をやり直してください")
+        return None
 
     def _list_footer(self, state: FormState) -> str:
         """VBA ``FormatListSheet`` の左フッター。"""
@@ -781,7 +858,8 @@ class Workflow:
                 payload["coils"] = {str(k): {"本数": v.get("coilText", ""),
                                              "NW": (v.get("display") or {}).get("NW", ""),
                                              "GW": (v.get("display") or {}).get("GW", "")}
-                                    for k, v in (self.store.all_tare() or {}).items()}
+                                    for k, v in (self.store.all_tare() or {}).items()
+                                    if int(k) in self.visible_slots(state)}
                 payload["inputChanged"] = self.tare_is_stale(state)
         self._log("印刷", title, payload)
         return Result(True, "記録しました", "info")

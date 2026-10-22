@@ -154,6 +154,10 @@ class TarePageTest(unittest.TestCase):
             def tare_is_stale(self, state=None):
                 return False
 
+            @staticmethod
+            def visible_slots(state):
+                return [1, 2, 3, 4]
+
         pages = Pages.__new__(Pages)
         pages.wf = WF()
         pages.cfg = type("Cfg", (), {"url_prefix": ""})()

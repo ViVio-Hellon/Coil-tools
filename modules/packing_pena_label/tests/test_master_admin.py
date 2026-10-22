@@ -459,7 +459,12 @@ class MasterReachesThePrintTest(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp()
         cls.db = os.path.join(cls.tmp, "梱包資材マスタ.sqlite3")
-        make_master(cls.db)
+        # 計算に使う資材が全部そろったマスタ(統合 1.2.35 から、無い資材があると計算を止めるので)
+        import csv
+        from ._material import SAMPLE
+        with open(SAMPLE, encoding="utf-8-sig", newline="") as f:
+            full = [tuple(r) for r in list(csv.reader(f))[1:] if r]
+        make_master(cls.db, full)
         c = sqlite3.connect(cls.db)
         c.execute('CREATE TABLE "ラベル台紙一覧" '
                   '(管理番号 INTEGER, シート名 TEXT, 型番 TEXT)')

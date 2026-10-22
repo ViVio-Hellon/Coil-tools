@@ -355,9 +355,11 @@ class TestStaleCalcGuard(WorkflowTestBase):
         self.assertFalse(self.wf.calc_is_stale())
         self.assertFalse(self.wf.label_view(14)["stale"])
 
+    # 検番を変えた重量反映は「次のロット」として前の NW・GW を消す(統合 1.2.35)ので、
+    # 食い違いの試験は同じ検番のまま重量・本数を変える
     def test_stale_when_inputs_changed_without_recalculating(self):
         self._run(self._ob_state("Z987654", "22.0", "11"))
-        self._run(self._ob_state("Z111111", "33.0", "20"), calc=False)
+        self._run(self._ob_state("Z987654", "33.0", "20"), calc=False)
         self.assertTrue(self.wf.calc_is_stale(), "食い違いを検出できていない")
         self.assertTrue(self.wf.label_view(14)["stale"])
 
@@ -365,18 +367,28 @@ class TestStaleCalcGuard(WorkflowTestBase):
         """警告が出ている状態では、実際に検番と NW が食い違っている。"""
         self._run(self._ob_state("Z987654", "22.0", "11"))
         before = self.wf.label_view(14)["printHeader"]
-        self._run(self._ob_state("Z111111", "33.0", "20"), calc=False)
+        self._run(self._ob_state("Z987654", "33.0", "20"), calc=False)
         after = self.wf.label_view(14)["printHeader"]
-        self.assertEqual(after["kensaNo"], "Z111111", "検番は新しくなる")
         self.assertEqual(after["nw1"], before["nw1"], "NW は古いまま（VBA と同じ）")
         self.assertEqual(after["coilH1"], before["coilH1"], "本数も古いまま")
 
+    def test_next_lot_clears_instead_of_mixing(self):
+        """検番が変わった重量反映(次のロット)では、前の NW・本数を消す(混ざらない。統合 1.2.35)。"""
+        self._run(self._ob_state("Z987654", "22.0", "11"))
+        self.assertTrue(self.wf.label_view(14)["printHeader"]["nw1"])
+        self._run(self._ob_state("Z111111", "33.0", "20"), calc=False)
+        after = self.wf.label_view(14)["printHeader"]
+        self.assertEqual(after["kensaNo"], "Z111111")
+        self.assertEqual(after["nw1"], "", "前のロットの NW が残っている")
+        self.assertEqual(after["coilH1"], "", "前のロットの本数が残っている")
+        self.assertFalse(self.wf.calc_is_stale())
+
     def test_recalculating_clears_the_warning_and_fixes_values(self):
         self._run(self._ob_state("Z987654", "22.0", "11"))
-        self._run(self._ob_state("Z111111", "33.0", "20"), calc=False)
+        self._run(self._ob_state("Z987654", "33.0", "20"), calc=False)
         self.assertTrue(self.wf.calc_is_stale())
 
-        self._run(self._ob_state("Z111111", "33.0", "20"))
+        self._run(self._ob_state("Z987654", "33.0", "20"))
         self.assertFalse(self.wf.calc_is_stale())
         h = self.wf.label_view(14)["printHeader"]
         self.assertEqual(h["coilH1"], "20")
@@ -398,7 +410,8 @@ class TestStaleCalcGuard(WorkflowTestBase):
     def test_every_input_that_moves_the_numbers_is_watched(self):
         """本数・高さ・NW・GW を動かす入力は、どれを変えても検出する。"""
         base = dict(ken="Z987654", w2="22.0", n="11")
-        for field, value in (("ken", "Z111111"), ("w2", "33.0"), ("n", "20")):
+        # 検番は変えると前の値を消す(test_next_lot_clears_instead_of_mixing)
+        for field, value in (("w2", "33.0"), ("n", "20")):
             self._run(self._ob_state(**base))
             self.assertFalse(self.wf.calc_is_stale(), field)
             changed = dict(base); changed[field] = value

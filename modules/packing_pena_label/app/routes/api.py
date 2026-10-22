@@ -74,7 +74,11 @@ class ApiRoutes:
         # 以前は埋めていたので、この停止に届かなかった。統合 1.2.32・現場の指示)。
         # 送ってこない古い画面だけ、保存してある値を使う
         if "tip" in cur:
-            state.tip = str(cur.get("tip") or "")
+            picked = str(cur.get("tip") or "")
+            if picked != state.tip:
+                # 手で選び直した。外径から選んだときの案内は消す(統合 1.2.35)
+                state.tip_note = ""
+            state.tip = picked
 
         # 入力値は VBA の入力制限と同じ正規化をサーバー側でも行う
         state.kensa_no = V.filter_alnum_upper(cur.get("kensaNo") or "")
@@ -428,6 +432,9 @@ class ApiRoutes:
         n1, n2 = self.wf.all_size.prepare_sheets(combo)
         st = self.wf.all_size.load_state()
         st["comboText"] = combo
+        # 2ケタ/3ケタは選び直してもらう(統合 1.2.35・現場の指示。既定は未選択。VBA も開くたび・
+        # クリアのたびに未選択だった。以前は 2ケタが選んであり、3ケタのつもりで 2ケタの副番で刷るおそれ)
+        st["threeDigit"] = None
         self.wf.all_size.save_state(st)
         return {"ok": True, "message": "台紙を用意しました（%s / %s）" % (n1, n2),
                 "sheets": [n1, n2]}

@@ -362,7 +362,7 @@ class TestPrintBlockedWhenStale(HttpTestCase):
 
     def test_print_button_is_disabled_when_stale(self):
         self._apply(self._cur())
-        self._apply(self._cur("Z111111", "33.0", "20"), calc=False)
+        self._apply(self._cur("Z987654", "33.0", "20"), calc=False)
         _, html = self.get("/labels/print?ob=14")
         self.assertIn("印刷する（停止中）", html)
         self.assertIn("<button class=\"btn\" disabled", html)
@@ -372,7 +372,7 @@ class TestPrintBlockedWhenStale(HttpTestCase):
     def test_print_output_itself_is_suppressed(self):
         """Ctrl+P で刷られても、シートは紙に出ない。"""
         self._apply(self._cur())
-        self._apply(self._cur("Z111111", "33.0", "20"), calc=False)
+        self._apply(self._cur("Z987654", "33.0", "20"), calc=False)
         _, html = self.get("/labels/print?ob=14")
         self.assertIn("@media print{.sheet{display:none !important}", html)
         self.assertIn('class="stopprint"', html)
@@ -380,11 +380,11 @@ class TestPrintBlockedWhenStale(HttpTestCase):
 
     def test_recalculating_restores_printing(self):
         self._apply(self._cur())
-        self._apply(self._cur("Z111111", "33.0", "20"), calc=False)
+        self._apply(self._cur("Z987654", "33.0", "20"), calc=False)
         _, html = self.get("/labels/print?ob=14")
         self.assertIn("印刷する（停止中）", html)
 
-        self._apply(self._cur("Z111111", "33.0", "20"))
+        self._apply(self._cur("Z987654", "33.0", "20"))
         _, html = self.get("/labels/print?ob=14")
         self.assertIn('onclick="window.print()"', html, "印刷が戻っていない")
         self.assertNotIn("stopprint", html)
@@ -395,7 +395,7 @@ class TestPrintBlockedWhenStale(HttpTestCase):
         _, html = self.get("/labels")
         self.assertIn("/labels/print?ob=14", html)
 
-        self._apply(self._cur("Z111111", "33.0", "20"), calc=False)
+        self._apply(self._cur("Z987654", "33.0", "20"), calc=False)
         _, html = self.get("/labels")
         self.assertIn("印刷（停止中）", html)
         self.assertNotIn("/labels/print?ob=14", html,
@@ -403,7 +403,7 @@ class TestPrintBlockedWhenStale(HttpTestCase):
 
     def test_the_warning_explains_what_to_do(self):
         self._apply(self._cur())
-        self._apply(self._cur("Z111111", "33.0", "20"), calc=False)
+        self._apply(self._cur("Z987654", "33.0", "20"), calc=False)
         _, html = self.get("/labels/print?ob=14")
         self.assertIn("計算", html)
         self.assertIn("混ざ", html, "何が起きるのかが書かれていない")
@@ -412,7 +412,7 @@ class TestPrintBlockedWhenStale(HttpTestCase):
         """クリア直後は古い値が無いので、止める理由も無い。"""
         self._apply(self._cur())
         self.post("/api/clear", {"current": self._cur()})
-        self._apply(self._cur("Z111111", "33.0", "20"), calc=False)
+        self._apply(self._cur("Z987654", "33.0", "20"), calc=False)
         _, html = self.get("/labels/print?ob=14")
         self.assertNotIn("印刷する（停止中）", html)
 
@@ -447,7 +447,8 @@ class TestEveryPrintTabHasThePrintButton(HttpTestCase):
 
     def test_the_bar_cannot_print_stale_labels(self):
         """入力が変わったまま(計算していない)のラベルは、帯からも刷れない。"""
-        changed = dict(self.cur, kensaNo="w222222", weight1="20", weight2="22")
+        # 同じ検番で重量だけ変える(検番を変えると次のロットとして前の値を消す。統合 1.2.35)
+        changed = dict(self.cur, weight1="20", weight2="22")
         self.post("/api/apply-weight", {"current": changed})
         _, html = self.get("/labels/print?ob=5,6")
         self.assertNotIn("data-print-now", html)

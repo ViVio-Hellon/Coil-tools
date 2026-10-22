@@ -34,6 +34,8 @@ class FormState:
 
     #: チップボール径
     tip: str = "TIP1000"
+    #: チップボールをコイル外径から選んだ(選ばなかった)ときの案内(統合 1.2.35。画面のチップボールの下に出す)
+    tip_note: str = ""
 
     #: 入力欄
     kensa_no: str = ""
@@ -104,6 +106,7 @@ class FormState:
             "selectedCb": self.selected_cb,
             "namedCb": self.named_cb,
             "tip": self.tip,
+            "tipNote": self.tip_note,
             "kensaNo": self.kensa_no,
             "weight1": self.weight1,
             "weight2": self.weight2,
@@ -131,6 +134,7 @@ class FormState:
         # 既定は 1000(画面を開いたときに選んである)。保存した値が空なら空のまま
         # (選んでいない。計算で止める。統合 1.2.32)
         st.tip = d["tip"] if "tip" in d else "TIP1000"
+        st.tip_note = d.get("tipNote") or ""
         st.kensa_no = d.get("kensaNo") or ""
         st.weight1 = d.get("weight1") or ""
         st.weight2 = d.get("weight2") or ""

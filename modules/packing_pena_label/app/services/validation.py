@@ -202,10 +202,12 @@ def filter_coil_text(raw: str) -> str:
         return ""
     # 本数は整数。11.5 は計算に 11.5 を使い、見出しは「12本」になっていた(統合 1.2.12)。
     # 違う数で計算するより、空にして入れ直してもらう
+    # 「12.0」「１２」「012」はそのまま残すと、台紙・見出しに「12.0」と出た(統合 1.2.35)。整数の文字にそろえる
     try:
-        return s if float(to_narrow(s).replace(",", "")).is_integer() else ""
+        n = float(to_narrow(s).replace(",", ""))
     except ValueError:
         return ""
+    return str(int(n)) if n.is_integer() and n >= 0 else ""
 
 
 #: VBA CommandButton8（全角→半角変換）の置換表。**順序も VBA のまま**

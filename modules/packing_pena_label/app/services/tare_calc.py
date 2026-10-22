@@ -128,10 +128,24 @@ def _unit(table: M.MaterialTable, name: str, missing: List[str],
     if mass == "" and coef == "":
         if name not in missing:
             missing.append(name)
-        log.warning("資材マスタに存在しません（0kg として計算）: %s", name)
+        log.warning("資材マスタに存在しません: %s", name)
+    elif not (_is_number(mass) and _is_number(coef)):
+        # 単重・係数が数でない(空も)。VBA は型の不一致で止まった。0kg で続けると GW が軽く出る(統合 1.2.35)
+        label = f"{name}(単重「{mass}」・係数「{coef}」が数でない)"
+        if label not in missing:
+            missing.append(label)
+        log.warning("資材マスタの単重・係数が数でありません: %s 単重=%r 係数=%r", name, mass, coef)
     if mat is not None and key:
         mat.units_raw[key] = (mass, coef)
     return val(mass), val(coef)
+
+
+def _is_number(text) -> bool:
+    try:
+        float(str(text).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 # ============================================================ 寸法

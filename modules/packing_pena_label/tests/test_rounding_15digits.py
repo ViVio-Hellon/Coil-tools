@@ -34,7 +34,9 @@ class WeightTextTest(unittest.TestCase):
 class CoilCountTest(unittest.TestCase):
     def test_本数は整数だけ(self):
         self.assertEqual(V.filter_coil_text("11"), "11")
-        self.assertEqual(V.filter_coil_text("11.0"), "11.0")
+        self.assertEqual(V.filter_coil_text("11.0"), "11")      # 整数の文字にそろえる(1.2.35)
+        self.assertEqual(V.filter_coil_text("１２"), "12")
+        self.assertEqual(V.filter_coil_text("-3"), "")
         self.assertEqual(V.filter_coil_text("11.5"), "")
         self.assertEqual(V.filter_coil_text("abc"), "")
 

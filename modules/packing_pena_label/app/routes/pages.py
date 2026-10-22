@@ -254,6 +254,7 @@ class PageRoutes:
             "tip1000": "checked" if state.tip == "TIP1000" else "",
             "tip950": "checked" if state.tip == "TIP950" else "",
             "tip820": "checked" if state.tip == "TIP820" else "",
+            "tipNote": state.tip_note,
         }
         content = self.r.render("index.html", ctx)
         # 起動ページの中でタブを切り替えるための入れ物。
@@ -360,6 +361,9 @@ class PageRoutes:
     def tare(self, print_view: bool = False) -> str:
         data = self.wf.store.all_tare()
         state = self.wf.load_state()
+        # 表示中の丈の梱包だけ(統合 1.2.35。前の版で隠れた丈まで計算して残した結果を出さない)
+        shown = set(self.wf.visible_slots(state))
+        data = {k: v for k, v in data.items() if int(k) in shown}
         if not data:
             body = ('<div class="card"><h2>風袋計算</h2>'
                     '<div class="empty">計算結果がありません。'
@@ -1050,7 +1054,9 @@ class PageRoutes:
         svc.refresh()                        # 型番マスタに足された型番に追いつく
         st = svc.load_state()
         combo = st.get("comboText", "")
-        three = bool(st.get("threeDigit"))
+        # 2ケタ/3ケタは既定で未選択(統合 1.2.35)。決定したあとだけ、選んだほうに印が付く
+        digit = st.get("threeDigit")
+        three = digit is True
 
         opts = ['<option value="">（選択してください）</option>']
         allow = self._visible_dims()
@@ -1132,9 +1138,9 @@ class PageRoutes:
       <span class="cap">コイル副番</span>
       <div style="display:flex;gap:14px;padding-top:4px">
         <label style="display:flex;gap:4px;align-items:center;color:var(--ink)">
-          <input type="radio" name="asDigit" value="2" {"" if three else "checked"}>2ケタ</label>
+          <input type="radio" name="asDigit" value="2" {"checked" if digit is False else ""}>2ケタ</label>
         <label style="display:flex;gap:4px;align-items:center;color:var(--ink)">
-          <input type="radio" name="asDigit" value="3" {"checked" if three else ""}>3ケタ</label>
+          <input type="radio" name="asDigit" value="3" {"checked" if digit is True else ""}>3ケタ</label>
       </div>
     </div>
   </div>
@@ -1142,16 +1148,16 @@ class PageRoutes:
 
   <div class="inputs-3" style="margin-top:8px">
     <label>重量 {"丈1-1-?" if three else "丈1"}
-      <input type="text" id="asW1" value="{esc(st.get("w1",""))}" data-filter="num"></label>
+      <input type="text" id="asW1" value="{esc(st.get("w1",""))}" inputmode="decimal" data-filter="num"></label>
     <label>重量 {"丈2-1-?" if three else "丈2"}
-      <input type="text" id="asW2" value="{esc(st.get("w2",""))}" data-filter="num"></label>
+      <input type="text" id="asW2" value="{esc(st.get("w2",""))}" inputmode="decimal" data-filter="num"></label>
     <div></div>
   </div>
   <div class="inputs-3" id="asW45"{w45_style}>
     <label>重量 1-2-?
-      <input type="text" id="asW4" value="{esc(st.get("w4",""))}" data-filter="num"></label>
+      <input type="text" id="asW4" value="{esc(st.get("w4",""))}" inputmode="decimal" data-filter="num"></label>
     <label>重量 2-2-?
-      <input type="text" id="asW5" value="{esc(st.get("w5",""))}" data-filter="num"></label>
+      <input type="text" id="asW5" value="{esc(st.get("w5",""))}" inputmode="decimal" data-filter="num"></label>
     <div></div>
   </div>
 
