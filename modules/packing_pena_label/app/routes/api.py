@@ -482,7 +482,7 @@ class ApiRoutes:
             return {
                 "ok": False, "level": "warn", "needPassword": True,
                 "pathKeys": changed,
-                "message": ("パスの変更には合言葉が要ります。\n変更しようとした項目: "
+                "message": ("パス・テストモードの変更には合言葉が要ります。\n変更しようとした項目: "
                             + "、".join(labels)),
             }
 

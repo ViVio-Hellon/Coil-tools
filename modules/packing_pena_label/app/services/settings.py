@@ -45,6 +45,8 @@ class SettingSpec:
     need_write: bool = False
     #: このフォルダーの中に存在すべきファイル名（aim_ref_path 用）
     must_contain: str = ""
+    #: 変えるのに合言葉が要るか(パス以外。テストモードなど。統合 1.2.40)
+    need_password: bool = False
 
 
 GROUP_REF = "参照先（外部ファイル）"
@@ -80,6 +82,13 @@ SETTINGS: List[SettingSpec] = [
               "この PC のローカル領域の records に加えてここにも書く(<PC名> のフォルダーを作って PC ごとに)。"
               "共有フォルダーを入れると、PC の入れ替えや状態DB の破損でも記録が残る。"),
         default_hint="未設定(この PC の records にだけ書く)"),
+    SettingSpec(
+        key="test_mode", label="テストモード（実機の試験中）", kind="bool",
+        group=GROUP_REF, need_password=True,
+        help=("実機の試験のときに入れる。計算・印刷の記録と資材マスタの編集履歴に「テストモード」と残し、"
+              "画面の右上に「テストモード」の札を出す(本番の記録と見分けられるように)。"
+              "切り替えには合言葉が要る。試験が終わったら必ず切る。"),
+        default_hint="切(本番)"),
     SettingSpec(
         key="line_name", label="ライン名（このPC）", kind="text",
         group=GROUP_REF, placeholder="例: 2ライン",
@@ -243,12 +252,23 @@ def changed_path_keys(values: Dict[str, Any], cfg) -> List[str]:
     """
     out = []
     for key, raw in (values or {}).items():
-        if not is_path_key(key):
+        spec = SETTINGS_BY_KEY.get(key)
+        if not is_path_key(key) and not (spec and spec.need_password):
             continue
         now = getattr(cfg, key, "")
+        if spec and spec.kind == "bool":
+            if _truthy(raw) != bool(now):
+                out.append(key)
+            continue
         if str(raw or "").strip() != str(now or "").strip():
             out.append(key)
     return out
+
+
+def _truthy(raw) -> bool:
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("1", "true", "on", "yes")
+    return bool(raw)
 
 
 def password_ok(given: str) -> bool:

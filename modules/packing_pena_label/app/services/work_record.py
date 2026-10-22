@@ -51,10 +51,17 @@ def user_name() -> str:
         return ""
 
 
+#: テストモードのときの印(記録・編集履歴に残す)
+TEST_MODE_MARK = "テストモード"
+
+
 def who(cfg) -> Dict[str, str]:
-    """どの PC(ライン)・誰の記録か。"""
-    return {"pc": pc_name(), "line": str(getattr(cfg, "line_name", "") or "").strip(),
-            "user": user_name()}
+    """どの PC(ライン)・誰の記録か。テストモードなら ``mode`` に「テストモード」(統合 1.2.40)。"""
+    out = {"pc": pc_name(), "line": str(getattr(cfg, "line_name", "") or "").strip(),
+           "user": user_name()}
+    if getattr(cfg, "test_mode", False):
+        out["mode"] = TEST_MODE_MARK
+    return out
 
 
 def versions() -> Dict[str, str]:

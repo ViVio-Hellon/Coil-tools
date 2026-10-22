@@ -441,6 +441,7 @@ class Workflow:
             # 鮮度チェックの間隔（既定 300 秒）に隠れて、
             # 別の PC で直した単重が反映されないまま刷られるのを防ぐ。
             table = self.materials.load(check_now=True)
+            self._note_material_changes(table)
         except AccessError as exc:
             # VBA: MsgBox "資材重量なし", vbCritical
             return Result(False, "資材重量なし\n%s" % exc, "error",
@@ -695,6 +696,7 @@ class Workflow:
             # 鮮度チェックの間隔（既定 300 秒）に隠れて、
             # 別の PC で直した単重が反映されないまま刷られるのを防ぐ。
             table = self.materials.load(check_now=True)
+            self._note_material_changes(table)
         except AccessError as exc:
             return Result(False, "資材重量なし\n%s" % exc, "error")
         if table.is_empty():
@@ -840,6 +842,35 @@ class Workflow:
         "/list/print": "羅列計算", "/list": "羅列計算",
         "/all-size/print": "全サイズ",
     }
+
+    #: 資材重量の値が前に読んだときと変わっていた(統合 1.2.40)。ツールの外(Access など)で直した分も分かる
+    KIND_MATERIAL = "資材重量の変化"
+    _MATERIAL_SNAPSHOT_KEY = "material_snapshot"
+
+    def _note_material_changes(self, table) -> None:
+        """資材重量(単位質量・係数)を前に読んだときと比べ、変わっていれば記録に残す(統合 1.2.40・現場の指示)。
+
+        マスタ管理で直したものは資材マスタの編集履歴に残るが、ツールの外(Access など)で直したものは残らない。
+        計算のたびに読んだ値を比べ、**変わった資材・前・後**を記録する。記録できなくても計算は止めない。
+        """
+        try:
+            now = {n: list(table.unit_of(n)) for n in table.names()}
+            before = self.store.get_kv(self._MATERIAL_SNAPSHOT_KEY, None)
+            self.store.set_kv(self._MATERIAL_SNAPSHOT_KEY, now)
+            if not before:
+                return                                   # 初めて読んだ(比べる相手が無い)
+            changes = []
+            for name in sorted(set(before) | set(now)):
+                b, a = before.get(name), now.get(name)
+                if b != a:
+                    changes.append({"資材": name,
+                                    "前": "無し" if b is None else "単位質量 %s・係数 %s" % tuple(b),
+                                    "後": "無し" if a is None else "単位質量 %s・係数 %s" % tuple(a)})
+            if changes:
+                self._log(self.KIND_MATERIAL, "資材重量", {
+                    "changes": changes, "material": self.materials.describe()})
+        except Exception:                                # noqa: BLE001
+            log.warning("資材重量の変化を確かめられませんでした", exc_info=True)
 
     #: 記録の種類(統合 1.2.39 で名前を正した)
     KIND_CALC = "計算"

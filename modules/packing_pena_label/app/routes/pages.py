@@ -201,6 +201,10 @@ class PageRoutes:
             "materialSource": src or "none", "materialSourceLabel": label,
             "materialStale": "stale" if stale else "",
             "materialSourceHint": hint,
+            # テストモードの札(統合 1.2.40。入れたまま本番に戻らないよう、どの画面にも出す)
+            "testModeBadge": ('<span class="testmode" title="記録に「テストモード」と残します。'
+                              '試験が終わったら設定で切ってください">テストモード</span>'
+                              if getattr(self.cfg, "test_mode", False) else ""),
             # 入力画面は 1 つだけ。開いてよいか確認できるまで操作させない。
             # 印刷用のタブは入力画面ではないので確かめない(全サイズ印刷で
             # 「この画面は開けません」の覆いが出ていた)
@@ -2546,6 +2550,8 @@ class PageRoutes:
             who_txt = (esc(w.get("pc", "")) + (f'<br><span class="logsub">{esc(w["line"])}</span>'
                                                 if w.get("line") else "")) \
                 if w else '<span class="logold">(記録なし)</span>'
+            if w.get("mode"):
+                who_txt += f'<br><b class="logtest">{esc(w["mode"])}</b>'
             detail = []
             if d.get("stopReason"):
                 detail.append(f'<b class="logstale">{esc(d["stopReason"])}</b>')
@@ -2560,6 +2566,9 @@ class PageRoutes:
             for k, c in sorted((d.get("notOnLabel") or {}).items()):
                 detail.append(f'<span class="logold">梱包{esc(k)}: {esc(c.get("本数", ""))}本 '
                               f'(ラベルに載らない梱包。NW・GW は使っていない)</span>')
+            for ch in d.get("changes") or []:
+                detail.append(f'<b>{esc(ch.get("資材", ""))}</b>: {esc(ch.get("前", ""))} → '
+                              f'<b>{esc(ch.get("後", ""))}</b>')
             if d.get("combo"):
                 detail.append(f'{esc(d["combo"])} 重量 {esc("・".join(d.get("weights") or []))}')
             if d.get("width") and not detail:
@@ -2570,7 +2579,8 @@ class PageRoutes:
             if kind == "印刷":                       # 1.2.38 までの記録の名前
                 kind = self.wf.KIND_PRINT
             kind_cls = {self.wf.KIND_PRINT: "logprint",
-                        self.wf.KIND_STOPPED: "logstop"}.get(kind, "logcalc")
+                        self.wf.KIND_STOPPED: "logstop",
+                        self.wf.KIND_MATERIAL: "logstop"}.get(kind, "logcalc")
             rows.append(
                 f'<tr><td class="nowrap">{esc(r.get("at", ""))}</td>'
                 f'<td class="nowrap"><span class="{kind_cls}">{esc(kind)}</span></td>'
@@ -2597,6 +2607,8 @@ class PageRoutes:
                 '(ブラウザは、刷ったか・やめたかを教えません)。<b>止めた印刷</b>は、入力が変わったまま'
                 '(計算し直していない)で印刷を止めた記録です(混ざったラベルを止めた証拠)。'
                 '印刷の行の資材重量は、その紙の値を計算したときのものです。'
+                '<b>資材重量の変化</b>は、計算のときに読んだ資材重量(単位質量・係数)が前と変わっていた記録です'
+                '(ツールの外で直した分も分かります。誰が直したかは下の編集履歴にあればそこで)。'
                 'ラベルに載らない梱包(隠れている丈・NW が無い)は灰色で分けています。</p>'
                 + keep
                 + ('<div class="scroll"><table class="tbl"><thead><tr><th>時刻</th><th>種類</th>'
@@ -2610,6 +2622,7 @@ class PageRoutes:
             f'<tr><td class="nowrap">{esc(h.get("日時", ""))}</td>'
             f'<td class="nowrap">{esc(h.get("PC", ""))}'
             + (f'<br><span class="logsub">{esc(h.get("ライン", ""))}</span>' if h.get("ライン") else "")
+            + (f'<br><b class="logtest">{esc(h.get("モード", ""))}</b>' if h.get("モード") else "")
             + f'</td><td>{esc(h.get("利用者", ""))}</td><td class="nowrap">{esc(h.get("表", ""))}</td>'
             f'<td>{esc(h.get("行の名前", "") or h.get("行", ""))}</td><td class="nowrap">{esc(h.get("操作", ""))}</td>'
             f'<td>{esc(h.get("列", ""))}</td><td>{esc(h.get("前", ""))}</td><td>{esc(h.get("後", ""))}</td></tr>'
@@ -2627,6 +2640,7 @@ class PageRoutes:
                     if hrows else '<div class="empty">まだ編集履歴がありません。</div>')
                  + '<style>.logstale{color:var(--err)}.logprint{font-weight:700}'
                    '.logstop{font-weight:700;color:var(--err)}.logold{opacity:.6}'
+                   '.logtest{color:#fff;background:#b3261e;padding:0 6px;border-radius:8px;font-size:11px}'
                    '.logsub{font-size:11px;opacity:.75}.nowrap{white-space:nowrap}</style></div>')
         return self._shell("計算・印刷の記録", body, "")
 

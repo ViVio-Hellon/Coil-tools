@@ -135,7 +135,8 @@ BY_TABLE: Dict[str, Managed] = {m.table: m for m in MANAGED}
 #: 直したのに履歴だけ無い・履歴だけあって直っていない、は起きない。
 #: 「誰が」はログインが無いので、PC 名・ライン名・Windows の利用者名で残す
 HISTORY_TABLE = "資材マスタ編集履歴"
-HISTORY_COLUMNS = ("日時", "PC", "ライン", "利用者", "表", "行", "行の名前", "操作", "列", "前", "後")
+HISTORY_COLUMNS = ("日時", "PC", "ライン", "利用者", "表", "行", "行の名前", "操作", "列", "前", "後",
+                   "モード")
 #: 行の名前に使う列(先にあるものを使う)
 _ROW_NAME_COLUMNS = ("梱包資材名", "サイズ名", "シート名", "管理番号")
 
@@ -143,6 +144,10 @@ _ROW_NAME_COLUMNS = ("梱包資材名", "サイズ名", "シート名", "管理�
 def _ensure_history(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE TABLE IF NOT EXISTS %s (%s)" % (
         _quote(HISTORY_TABLE), ", ".join("%s TEXT" % _quote(c) for c in HISTORY_COLUMNS)))
+    have = columns(conn, HISTORY_TABLE)
+    for c in HISTORY_COLUMNS:                 # あとから足した列(モード。統合 1.2.40)
+        if c not in have:
+            conn.execute("ALTER TABLE %s ADD COLUMN %s TEXT" % (_quote(HISTORY_TABLE), _quote(c)))
 
 
 def _row_name(row: Dict[str, Any]) -> str:
@@ -167,12 +172,14 @@ def write_history(conn: sqlite3.Connection, who: Optional[Dict[str, str]], table
     _ensure_history(conn)
     rows = [(stamp, who.get("pc", ""), who.get("line", ""), who.get("user", ""), table,
              str(row_id), row_name, action, col,
-             "" if before is None else str(before), "" if after is None else str(after))
+             "" if before is None else str(before), "" if after is None else str(after),
+             who.get("mode", ""))
             for col, before, after in changes
             if ("" if before is None else str(before)) != ("" if after is None else str(after))]
     if rows:
-        conn.executemany("INSERT INTO %s VALUES (%s)" % (
-            _quote(HISTORY_TABLE), ", ".join("?" * len(HISTORY_COLUMNS))), rows)
+        conn.executemany("INSERT INTO %s (%s) VALUES (%s)" % (
+            _quote(HISTORY_TABLE), ", ".join(_quote(c) for c in HISTORY_COLUMNS),
+            ", ".join("?" * len(HISTORY_COLUMNS))), rows)
     return len(rows)
 
 

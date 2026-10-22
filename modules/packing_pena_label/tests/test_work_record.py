@@ -160,3 +160,108 @@ class MasterHistoryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestModeToggleTest(HttpTestCase):
+    """テストモードの切り替え(設定を保存すると設定を読み直すので、ほかの試験と分ける)。"""
+
+    def test_切り替えには合言葉が要る(self):
+        from modules.packing_pena_label.app.services import settings as S
+        _, j = self.post("/api/settings/save", {"values": {"test_mode": True}})
+        self.assertTrue(j.get("needPassword"), j)
+        self.assertFalse(self.cfg.test_mode)
+        _, j = self.post("/api/settings/save", {"values": {"test_mode": True},
+                                                "password": S.PATH_PASSWORD})
+        self.assertTrue(j["ok"], j)
+        self.assertTrue(self.ctx.wf.cfg.test_mode)
+        _, home = self.get("/")
+        self.assertIn('class="testmode"', home, "どの画面にも札を出す")
+        _, j = self.post("/api/settings/save", {"values": {"test_mode": False},
+                                                "password": S.PATH_PASSWORD})
+        self.assertTrue(j["ok"], j)
+        _, home = self.get("/")
+        self.assertNotIn('class="testmode"', home)
+
+
+class TestModeTest(HttpTestCase):
+    """テストモード(統合 1.2.40・現場の指示)。記録・編集履歴に「テストモード」。"""
+
+    def tearDown(self):
+        self.ctx.wf.cfg.test_mode = False
+
+    def test_記録と編集履歴にテストモードと残す(self):
+        self.ctx.wf.cfg.test_mode = True
+        try:
+            self.post("/api/clear", {"current": _cur()})
+            self.post("/api/apply-weight", {"current": _cur()})
+            self.post("/api/calc-tare", {"current": _cur()})
+            row = self.ctx.wf.recent_log(1)[0]
+            self.assertEqual(row["data"]["who"]["mode"], "テストモード")
+            _, html = self.get("/print-log")
+            self.assertIn('<b class="logtest">テストモード</b>', html)
+        finally:
+            self.ctx.wf.cfg.test_mode = False
+        self.post("/api/calc-tare", {"current": _cur()})
+        self.assertNotIn("mode", self.ctx.wf.recent_log(1)[0]["data"]["who"])
+        who = WR.who(type("C", (), {"test_mode": True, "line_name": ""})())
+        self.assertEqual(who["mode"], "テストモード")
+
+    def test_配布設定には入れない(self):
+        from modules.packing_pena_label.app.services import distribution as D
+        defaults = {k: on for k, _, _, on in D.items()}
+        self.assertFalse(defaults["test_mode"])
+        self.assertFalse(defaults["line_name"])
+        self.assertTrue(defaults["record_dir"])
+
+
+class EditHistoryModeTest(unittest.TestCase):
+    def test_編集履歴のモード列(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            db = os.path.join(tmp, "梱包資材マスタ.sqlite3")
+            make_master(db)
+            repo = MaterialRepository(accdb_dir="", csv_path="", prefer_access=False,
+                                      db_path=db, refresh_sec=0)
+            with sqlite3.connect(db) as c:          # 1.2.39 の形(モード列が無い)の表
+                c.execute('CREATE TABLE "資材マスタ編集履歴" ("日時" TEXT, "PC" TEXT, "ライン" TEXT, '
+                          '"利用者" TEXT, "表" TEXT, "行" TEXT, "行の名前" TEXT, "操作" TEXT, '
+                          '"列" TEXT, "前" TEXT, "後" TEXT)')
+                rid = c.execute("SELECT rowid FROM 資材重量 WHERE 梱包資材名='テスラピン'").fetchone()[0]
+            MA.save_row(repo, "資材重量", rid, {"単位質量": "0.7"},
+                        who={"pc": "P", "line": "", "user": "u", "mode": "テストモード"})
+            self.assertEqual(MA.history(repo)["rows"][0]["モード"], "テストモード")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class MaterialChangeTest(HttpTestCase):
+    """資材重量の値が前に読んだときと変わっていたら記録に残す(ツールの外で直した分も)。"""
+
+    def test_変わった資材と前後を残す(self):
+        self.post("/api/clear", {"current": _cur()})
+        self.post("/api/apply-weight", {"current": _cur()})
+        self.post("/api/calc-tare", {"current": _cur()})        # 初めて読む(比べる相手が無い)
+        self.assertNotIn("資材重量の変化", [r["kind"] for r in self.ctx.wf.recent_log(5)])
+        wf = self.ctx.wf
+        real = wf.materials.load
+
+        def edited(*a, **k):
+            table = real(*a, **k)
+            orig = table.unit_of
+
+            def unit_of(name):
+                return ("0.99", "1") if name == "テスラピン" else orig(name)
+            table.unit_of = unit_of
+            return table
+        wf.materials.load = edited
+        try:
+            self.post("/api/calc-tare", {"current": _cur()})
+        finally:
+            wf.materials.load = real
+        rows = [r for r in wf.recent_log(5) if r["kind"] == "資材重量の変化"]
+        self.assertEqual(len(rows), 1)
+        ch = rows[0]["data"]["changes"]
+        self.assertEqual([c["資材"] for c in ch], ["テスラピン"])
+        self.assertIn("0.99", ch[0]["後"])
+        _, html = self.get("/print-log")
+        self.assertIn("資材重量の変化", html)
