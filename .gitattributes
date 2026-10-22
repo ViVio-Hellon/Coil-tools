@@ -20,3 +20,6 @@
 # うっかり `git add -f` で入ったときにテキスト扱いされないための保険。
 *.db binary
 *.sqlite3 binary
+
+# VBA の元ソース(受け取ったまま。Shift_JIS・CRLF を変えない)
+modules/packing_pena_label/docs/VBA元ソース/元のまま/** -text -diff

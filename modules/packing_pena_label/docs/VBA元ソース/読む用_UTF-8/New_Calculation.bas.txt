@@ -1,0 +1,1636 @@
+Attribute VB_Name = "New_Calculation"
+'2026.09.15_高さ計算が２つあり不整合だったので修正（括弧の中で mm と m を足しているのでで式として不成立）
+
+Option Explicit
+Public W1(30)
+Public K1(30)
+
+Public Const AccessLogTitle As String = "管理ﾌｧｲﾙ使用状況"
+Public Const AccessLogFileName As String = "Access.log"
+
+#If VBA7 And Win64 Then
+  '64ビット版
+    Private Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+#Else
+  '32ビット版
+    Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+#End If
+
+'もしコイルサイズ追加の場合の影響
+'SetCoilDimensions直接mat.col を決定 → mat.TA（高さ）を算出
+'CalculateESA間接mat.TA で1周/2周の分岐が変わる
+'CalculatePOR間接mat.TA が側面面積に影響
+'CalculatePET間接mat.TA が縦バンド長さに影響
+'CalculateTIP間接mat.TA 計算に mat.col が使われている（TIPTの中）
+
+'風袋計算 CalculateMaterials 関数
+
+
+'========== 1. フィールドインデックス取得 ==========
+Public Type MaterialFieldIndices
+  管理番号 As Long
+  梱包資材名 As Long
+  単位質量 As Long
+  係数 As Long
+End Type
+
+'========== 2. 資材重量の計算構造体 ==========
+Public Type MaterialWeights
+  col As Double          'コイル巾
+  TA As Single           'コイル高さ
+  KTA As Single          '梱包高さ
+  PIN As Double          'ピン重量
+  TIP As Double          'チップボール重量
+  SUT As Double          'ストレッチフィルム重量
+  ESA As Double          'エサフォーム重量
+  HB As Double           'ハードボード重量
+  POR As Double          'ポリシート重量
+  PET As Double          'PETバンド重量
+  PAR As Double          'パレット重量
+  NW As Double           'NW（製品重量）
+  HU As Double           '風袋（全資材合計）
+  GW As Double           'GW（風袋+製品重量）
+  DRY As Double          'EX-DRY重量
+  
+  'チップボール用情報
+  TempDiameter As String '外径
+  HalfDiameter As String '半径
+  GAI As Double          '外周
+  
+  '検算用式
+  pin式 As Variant
+  チップボール式 As Variant
+  SUT式 As Variant
+  ESA式 As Variant
+  POR式 As Variant
+  PAR式 As Variant
+  PET式 As Variant
+  DRY式 As Variant
+End Type
+
+'HB（ただの数字を入れる箱）
+'========== ユーザー定義型の定義（モジュール最上部に配置）==========hbDataという多機能な箱
+Private Type hbData
+  col As Double              'コイル巾
+  TA As Double               'コイル高さ
+  GAI As Double              '外周
+  HBValue As Double          'HB重量
+  HBFormula As String        'HB計算式
+  HBFlag As Boolean          '固定物HBフラグ
+  HB固定値 As Variant        'HB590*2000
+  HB530固定値 As Variant     'HB530*2000  _2026.3.26
+  HB計算用 As Variant        'ハードボード
+  HB八角用 As Variant        '八角ハードボード
+End Type
+
+'========== 梱包資材の物理定数 ==========
+Public Const CHIP_THICKNESS_MM  As Double = 0.7    ' チップボール1枚厚(mm)
+Public Const CHIP_EXTRA_SHEETS  As Long = 1        ' チップボール枚数 = 本数 + この値
+
+'========== 梱包寸法の定数 ==========
+Public Const PALLET_HEIGHT_MM   As Double = 150    ' 樹脂パレット高さ（上下各1）
+Public Const HB_THICKNESS_MM    As Double = 2.35   ' ハードボード1枚厚（上下各1）
+' 胴巻きハードボードの寸法補正（この2つは対で使う）　2026.09.15
+'   外周方向: 外周 + 700mm  … 巻き重ね代
+'   高さ方向: 積高 - 20mm   … バンド締結代（積高と同寸だとバンドが締まらない）
+Public Const HB_MARGIN_M        As Double = 0.7    ' 胴巻きHB 外周方向 +700mm
+
+' 胴巻きHBの高さ補正。実運用では在庫サイズの直近下位を現場でカットするため
+' 一定の締結代という概念が成立しない。将来値を決める場合はここだけ変更する
+Public Const HB_BAND_CLEARANCE_M As Double = 0#
+
+
+Public Const HB_MIN_HEIGHT_M    As Double = 0.05   ' 補正後の下限。割る場合は補正しない
+Public Const BAND_SLACK_M       As Double = 0.2    ' PETバンド締め代
+Public Const STRETCH_WRAPS      As Long = 5        ' ストレッチフィルム巻き数
+Public Const ESA_DOUBLE_LIMIT_M As Double = 0.82   ' これを超えたらエサフォーム2周　M
+Public Const PALLET_QTY         As Long = 2        ' 樹脂パレット台数
+
+Public Function 配列比較差分取得(a As Variant, b As Variant) As Variant
+ 
+Dim i As Long
+Dim j As Long
+Dim Q As Long
+Dim r As Long, n As Long
+'Dim a() As Variant
+'Dim b() As Variant
+Dim c() As Variant
+Dim msg1 As String
+Dim msg2 As String
+Dim result As Variant
+Dim buf As Variant
+    '対象文字
+'    a = Array("みかん", "めろん", "いちご", "きゃべつ", "れもん")
+'    b = Array("りんご", "じゃがいも", "さくらんぼ", "めろん", "いちご", "れもん", "ごぼう")
+For r = 1 To 2
+  Q = 1
+  ReDim Preserve c(Q)
+  If r = 1 Then
+      buf = a
+  Else
+      buf = b
+  End If
+  '配列をループ
+  For i = LBound(buf) To UBound(buf)
+
+      '配列を比較
+      If r = 1 Then
+          result = Filter(b, a(i))
+      Else
+          result = Filter(a, b(i))
+      End If
+
+      '片側にあって、片側にないものを取得
+      If UBound(result) = -1 Then
+          ReDim Preserve c(Q)
+          c(Q) = buf(i)
+          Q = Q + 1
+      End If
+  Next i
+  ReDim temp(1 To UBound(c))
+  For j = 1 To UBound(c)
+      If r = 1 Then
+          msg1 = msg1 & c(j) & vbCrLf
+      Else
+          n = n + 1
+          temp(n) = c(j)
+          msg2 = msg2 & c(j) & "_"
+      End If
+  Next j
+  Erase c
+Next r
+'MsgBox "【AにあってBに無い】" & vbCrLf & msg1 & _
+'    vbCrLf & "【BにあってAに無い】" & vbCrLf & msg2
+配列比較差分取得 = temp
+End Function
+
+Public Function duplicateDelete(s As String) As String '同じセル内で同じ文字を削除
+Dim dic As Object
+Dim D() As String
+Dim i As Integer
+Set dic = CreateObject("Scripting.Dictionary")
+D = Split(s, " ")
+For i = 0 To UBound(D)
+If dic.Exists(D(i)) Then D(i) = ""
+dic(D(i)) = Null
+Next
+duplicateDelete = Join(D, " ")
+End Function
+
+Public Sub Progress(a As Long, n As Long)
+Dim maxWidth As Long, j As Long, i As Long, percent As Long
+maxWidth = msg.width
+msg.ProgressLabel.width = maxWidth * (1 / 100)
+msg.ProgressLabel.width = 0
+msg.ProgressLabel.Visible = True
+  For i = a To n
+      DoEvents
+      'なんか重い処理
+          For j = 1 To 3500000
+          Next
+      percent = CInt(i / 100 * 100) 'プログレスバーのLabel表示を更新***後半の数字が%表記
+      msg.ProgressLabel.width = maxWidth * (i / 100)
+      msg.LL.Caption = percent & "%完了"
+  Next
+  Sleep 300
+  msg.Repaint
+  msg.LL.Caption = ""
+ msg.Hide
+End Sub
+
+Public Sub ProgressBar_count(x As Long, count As Long) 'CountをMaxになった時100%
+If UFProgress.Visible = False Then Exit Sub
+Dim a As Long, percent As Long
+UFProgress.ProgressBar1.Min = 1 'プログレスバーの最小値を設定
+UFProgress.ProgressBar1.Max = 1000  'プログレスバーの最大値を設定
+UFProgress.ProgressBar1.Value = 1 'プログレスバーの現在値を設定
+  For a = x To count
+    If UFProgress.ProgressBar1.Min < a And UFProgress.ProgressBar1.Max >= a Then 'プログレスバーの値表示を更新
+      percent = CInt(a / 1000 * 100) 'プログレスバーのLabel表示を更新
+      UFProgress.Label1.Caption = percent & "%完了"
+      UFProgress.ProgressBar1.Value = a 'プログレスバーの値を更新
+      DoEvents '滞留処理を実行
+    End If
+  Next a
+End Sub
+
+Public Sub Sheet_Color_Clear(IWS As Worksheet)
+Range(IWS.Cells(5, 1), IWS.Cells(19, 13)).Interior.Color = RGB(255, 255, 255)
+End Sub
+
+Public Sub Sheet_Color(IWS As Worksheet)
+Dim i As Long: i = UF_Material.RowCount '行数指定
+Call Sheet_Color_Clear(IWS) 'ｸﾘｱ
+Range(IWS.Cells(i + 4, 1), IWS.Cells(i + 4, 13)).Interior.Color = RGB(204, 255, 255)
+End Sub
+
+'========== 主関数（簡潔版）==========
+Public Function DB_Materials(CoilText As Double, coilNo As Long) As Single 'コイル本数、
+  Dim i As Long
+  Dim tableName As String: tableName = "資材重量"
+  Dim FPath As String: FPath = PATH_AIM_参照
+  Dim Target As String: Target = "梱包資材マスタ.accdb"
+  
+  Dim filePath As String: filePath = FPath & Target
+  Dim SQLfilter As String: SQLfilter = ""
+  Dim TempHiki As Variant: TempHiki = GetRecordsArr(filePath, tableName, SQLfilter)
+  
+  If IsEmpty(TempHiki) Then
+    MsgBox "資材重量なし", vbCritical
+    Exit Function
+  End If
+  
+  Dim Hikifields As Variant: Hikifields = GetFieldsArr(filePath, tableName, "")
+  If IsEmpty(Hikifields) Then
+    MsgBox "資材重量なし", vbCritical
+    Exit Function
+  End If
+  
+  '====== フィールドインデックスの取得 ======
+  Dim fieldIdx As MaterialFieldIndices
+  fieldIdx = GetFieldIndices(Hikifields)
+  
+  '====== 資材重量の計算 ======
+  Dim materials As MaterialWeights
+  materials = CalculateMaterials(CoilText, coilNo, TempHiki, fieldIdx)
+  
+  '====== 指定サイズフォームへの反映 ======
+  SetCoilFormValues coilNo, materials
+  
+  '====== 表記用フォームへの反映 ======
+  SetDisplayFormValues materials, coilNo, CoilText
+  
+  '====== ListViewにデータを表示 ======
+  PopulateListViewMaterials TempHiki, fieldIdx
+  
+  '====== シートへの転記 ======
+  WriteToSheet coilNo, CoilText, materials
+  
+  '====== シート装飾 ======
+  FormatSheet
+  
+End Function
+
+'========== デバッグ用：フォーム値の確認 ==========
+Private Sub DebugDisplayForm()
+  With 表記用
+    Debug.Print "===== 表記用フォーム デバッグ出力 ====="
+    Debug.Print "PI = " & .PI
+    Debug.Print "PIsiki = " & .PIsiki
+    Debug.Print "TIP = " & .TIP
+    Debug.Print "TIPsiki = " & .TIPsiki
+    Debug.Print "SUT = " & .SUT
+    Debug.Print "SUTsiki = " & .SUTsiki
+    Debug.Print "ESA = " & .ESA
+    Debug.Print "ESAsiki = " & .ESAsiki
+    Debug.Print "POR = " & .POR
+    Debug.Print "PORsiki = " & .PORsiki
+    Debug.Print "PAR = " & .PAR
+    Debug.Print "PARsiki = " & .PARsiki
+    Debug.Print "PET = " & .PET
+    Debug.Print "PETsiki = " & .PETsiki
+    Debug.Print "HB = " & .HB
+    Debug.Print "HBsiki = " & .HBsiki
+    Debug.Print "NW = " & .NW
+    Debug.Print "DRY = " & .DRY
+    Debug.Print "DRYsiki = " & .DRYsiki
+    Debug.Print "HU = " & .HU
+    Debug.Print "GW = " & .GW
+    Debug.Print "===== end ====="
+  End With
+End Sub
+
+'========== デバッグ用：材料データの確認 ==========
+Private Sub DebugMaterialData(mat As MaterialWeights)
+  Debug.Print "===== MaterialWeights デバッグ出力 ====="
+  Debug.Print "PIN = " & mat.PIN
+  Debug.Print "TIP = " & mat.TIP
+  Debug.Print "SUT = " & mat.SUT
+  Debug.Print "ESA = " & mat.ESA
+  Debug.Print "POR = " & mat.POR
+  Debug.Print "PAR = " & mat.PAR
+  Debug.Print "PET = " & mat.PET
+  Debug.Print "HB = " & mat.HB
+  Debug.Print "NW = " & mat.NW
+  Debug.Print "DRY = " & mat.DRY
+  Debug.Print "GAI = " & mat.GAI
+  Debug.Print "TA = " & mat.TA
+  Debug.Print "Col = " & mat.col
+  Debug.Print "===== end ====="
+End Sub
+
+Public Function GetFieldIndices(Hikifields As Variant) As MaterialFieldIndices
+  Dim idx As MaterialFieldIndices
+  Dim i As Long
+  
+  For i = LBound(Hikifields, 2) To UBound(Hikifields, 2)
+    Select Case Hikifields(1, i)
+      Case "管理番号": idx.管理番号 = i
+      Case "梱包資材名": idx.梱包資材名 = i
+      Case "単位質量": idx.単位質量 = i
+      Case "係数": idx.係数 = i
+    End Select
+  Next i
+  
+  GetFieldIndices = idx
+End Function
+
+'========== 3. 資材重量計算 ==========
+Private Function CalculateMaterials(CoilText As Double, coilNo As Long, _
+                                     TempHiki As Variant, fieldIdx As MaterialFieldIndices) As MaterialWeights
+  Dim mat As MaterialWeights
+  Dim T1 As Double, T2 As Double
+  
+  '========== コイル巾と高さの計算 ==========
+  SetCoilDimensions mat, CoilText, coilNo
+  
+  '========== チップボールサイズの決定 ==========
+  SetDiameterInfo mat
+  
+  '========== 各資材重量の計算 ==========
+  mat.PIN = CalculatePIN(TempHiki, fieldIdx, mat)
+  mat.TIP = CalculateTIP(CoilText, mat, TempHiki, fieldIdx)
+  mat.SUT = CalculateSUT(mat, TempHiki, fieldIdx)
+  mat.ESA = CalculateESA(mat, TempHiki, fieldIdx)
+  mat.POR = CalculatePOR(mat, TempHiki, fieldIdx)
+  mat.HB = DB_HB(CoilText, coilNo)
+  mat.PET = CalculatePET(mat, TempHiki, fieldIdx)
+  mat.PAR = CalculatePAR(TempHiki, fieldIdx, mat)
+  mat.DRY = CalculateDRY(TempHiki, fieldIdx, mat)
+  
+  '========== NW（製品重量）の計算 ==========
+  GetCoilWeights T1, T2, coilNo '引数で渡された値を直接書き換える ByRef（参照渡し）
+  mat.NW = CalculateNW(CoilText, coilNo, T1, T2)
+  
+  '========== 風袋・GWの計算 ==========
+  mat.HU = mat.PIN + mat.TIP + mat.SUT + mat.ESA + mat.POR + mat.HB + mat.PET + mat.PAR + mat.DRY
+  mat.GW = mat.HU + mat.NW
+  
+  CalculateMaterials = mat
+End Function
+
+'========== 4. コイル寸法の設定 ==========
+Public Sub SetCoilDimensions(ByRef mat As MaterialWeights, CoilText As Double, coilNo As Long)
+  Dim KTA As Single
+
+  mat.col = GetCoilWidth()
+
+  With テスラ指定サイズ
+    '本数が空白の場合終了
+    If .CoilH1 = "" And .CoilH2 = "" And .CoilH3 = "" And .CoilH4 = "" Then
+      .NW1 = "": .GW1 = "": .TA1 = ""
+      .NW2 = "": .GW2 = "": .TA2 = ""
+      .NW3 = "": .GW3 = "": .TA3 = ""
+      .NW4 = "": .GW4 = "": .TA4 = ""
+      Exit Sub
+    End If
+
+    '高さ計算（共通関数へ集約）
+    mat.TA = GetCoilTA(CoilText, mat.col)
+'    KTA = val((mat.TA * 1000) + 150 + 150) + (2.35 * 2)
+    KTA = val((mat.TA * 1000) + PALLET_HEIGHT_MM * 2) + (HB_THICKNESS_MM * 2)
+    
+    Select Case coilNo
+      Case 1: .TA1 = Format(Application.WorksheetFunction.RoundUp(KTA, -1), "0.0")
+      Case 2: .TA2 = Format(Application.WorksheetFunction.RoundUp(KTA, -1), "0.0")
+      Case 3: .TA3 = Format(Application.WorksheetFunction.RoundUp(KTA, -1), "0.0")
+      Case 4: .TA4 = Format(Application.WorksheetFunction.RoundUp(KTA, -1), "0.0")
+    End Select
+  End With
+End Sub
+
+'========== 5. 直径情報の設定 ==========円周の公式:円周 = 直径 × 円周率
+Public Sub SetDiameterInfo(ByRef mat As MaterialWeights)
+  With テスラ指定サイズ
+    If .TIP1000 Then
+      mat.TempDiameter = "1100": mat.HalfDiameter = "550"
+    ElseIf .TIP950 Then
+      mat.TempDiameter = "1000": mat.HalfDiameter = "500"
+    ElseIf .TIP820 Then
+      mat.TempDiameter = "900":  mat.HalfDiameter = "450"
+    End If
+  End With
+  mat.GAI = GetCoilGAI()
+End Sub
+
+'========== 各資材の重量計算関数==========
+Public Function CalculatePIN(TempHiki As Variant, fieldIdx As MaterialFieldIndices, ByRef mat As MaterialWeights) As Double
+  Dim 単重 As Variant: 単重 = GetUnitMassAndCoefficient(TempHiki, "テスラピン", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)
+  mat.pin式 = 単重
+  Dim result As Double: result = val(4 * 単重(0) * 単重(1))
+  表記用.PIsiki = "【ピン】本数×単重" & vbCrLf & "4本 × " & Format(単重(0), "0.000") & " = " & Format(result, "0.000")
+  CalculatePIN = result
+End Function
+
+'ﾁｯﾌﾟﾎﾞｰﾙの高さ　1枚0.7mm’ﾁｯﾌﾟﾎﾞｰﾙ数は積み本数+1_重量
+Public Function CalculateTIP(CoilText As Double, mat As MaterialWeights, TempHiki As Variant, fieldIdx As MaterialFieldIndices) As Double
+  Dim 単重 As Variant
+  With テスラ指定サイズ
+    If .TIP1000 Then
+      単重 = GetUnitMassAndCoefficient(TempHiki, "チップボール1000ф", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)
+      mat.チップボール式 = 単重
+    ElseIf .TIP950 Then
+      単重 = GetUnitMassAndCoefficient(TempHiki, "チップボール950ф", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)
+      mat.チップボール式 = 単重
+    ElseIf .TIP820 Then
+      単重 = GetUnitMassAndCoefficient(TempHiki, "チップボール820ф", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)
+      mat.チップボール式 = 単重
+    End If
+  End With
+
+  Dim maisu As Double: maisu = CoilText + CHIP_EXTRA_SHEETS
+  Dim result As Double: result = val(maisu * 単重(0) * 単重(1))
+  表記用.TIPsiki = "【チップボール】（積み本数＋" & CHIP_EXTRA_SHEETS & "枚）×単重" & vbCrLf & _
+    "(" & Format(CoilText, "0") & " + " & CHIP_EXTRA_SHEETS & ") × " & Format(単重(0), "0.000") & " = " & Format(result, "0.00")
+  CalculateTIP = result
+End Function
+
+'5周は巻く
+Public Function CalculateSUT(mat As MaterialWeights, TempHiki As Variant, fieldIdx As MaterialFieldIndices) As Double
+  Dim 単重 As Variant: 単重 = GetUnitMassAndCoefficient(TempHiki, "ストレッチフィルム", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)
+  mat.SUT式 = 単重
+  Dim result As Double: result = val(mat.GAI * STRETCH_WRAPS * 単重(0) * 単重(1))
+  表記用.SUTsiki = "【ストレッチフィルム】外周" & STRETCH_WRAPS & "周分の長さ×単重" & vbCrLf & _
+    Format(mat.GAI, "0.000") & "m × " & STRETCH_WRAPS & "周 × " & Format(単重(0), "0.000") & " = " & Format(result, "0.000")
+  CalculateSUT = result
+End Function
+
+'エサフォームの高さが550　1.5倍ほどの高さになった時2周とする
+Public Function CalculateESA(mat As MaterialWeights, TempHiki As Variant, fieldIdx As MaterialFieldIndices) As Double
+  Dim 単重 As Variant: 単重 = GetUnitMassAndCoefficient(TempHiki, "エサフォーム", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)
+  mat.ESA式 = 単重
+  Dim result As Double
+  Dim formula As String
+  If mat.TA > ESA_DOUBLE_LIMIT_M Then
+    result = val(mat.GAI * 2 * 単重(0) * 単重(1))
+    formula = "【エサフォーム】外周の長さ×単重（2周）" & vbCrLf & Format(mat.GAI, "0.000") & "m × 2周 × " & Format(単重(0), "0.000") & " = " & Format(result, "0.000")
+  Else
+    result = val(mat.GAI * 単重(0) * 単重(1))
+    formula = "【エサフォーム】外周の長さ×単重（1周）" & vbCrLf & Format(mat.GAI, "0.000") & "m × 1周 × " & Format(単重(0), "0.000") & " = " & Format(result, "0.000")
+  End If
+  表記用.ESAsiki = formula
+  CalculateESA = result
+End Function
+
+ '高さﾌﾟﾗｽ分で包む　ﾌﾟﾗｽ分は高さの半分とする '同部分
+Public Function CalculatePOR(mat As MaterialWeights, TempHiki As Variant, fieldIdx As MaterialFieldIndices) As Double
+  Dim 単重 As Variant: 単重 = GetUnitMassAndCoefficient(TempHiki, "ポリシート", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)
+  mat.POR式 = 単重
+  Dim AREA As Double, AREA2 As Double, PIWork As Double
+  PIWork = WorksheetFunction.PI()
+  Dim 半径 As Long
+  With テスラ指定サイズ
+    If .TIP1000 Then
+      AREA = val(550 ^ 2 * PIWork)
+      半径 = 550
+    ElseIf .TIP950 Then
+      AREA = val(500 ^ 2 * PIWork)
+      半径 = 500
+    ElseIf .TIP820 Then
+      AREA = val(450 ^ 2 * PIWork)
+      半径 = 450
+    End If
+  End With
+  AREA2 = val((mat.TA + mat.TA / 2) * mat.GAI) 'ややプラスしている
+  '「底面の円の面積2つ」と「側面の四角形の面積」を足す
+  Dim result As Double: result = val((AREA * 2 + AREA2) / 10 ^ 6 * 単重(0) * 単重(1))
+  表記用.PORsiki = "【ポリシート】円柱の表面積＝2πr^2＋2πrh" & vbCrLf & "(底面:2π×" & 半径 & "2 + 側面:2π×" & 半径 & "×" & Format(mat.TA, "0.000") & ") × " & Format(単重(0), "0.000") & " = " & Format(result, "0.000")
+  CalculatePOR = result
+End Function
+
+'ペットバンド胴巻き4本縦バンド4本締める時の余分を200mm
+Public Function CalculatePET(mat As MaterialWeights, TempHiki As Variant, fieldIdx As MaterialFieldIndices) As Double
+  Dim 単重 As Variant: 単重 = GetUnitMassAndCoefficient(TempHiki, "PETバンド", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)
+  mat.PET式 = 単重
+  Dim DOU As Double, TATE As Double
+  DOU = val((mat.GAI + BAND_SLACK_M) * 4)
+  With テスラ指定サイズ
+    If .TIP1000 Then
+      TATE = val((((mat.TA + BAND_SLACK_M) * 4) * 2) + ((1100 * 4) * 2) / 10 ^ 3)
+    ElseIf .TIP950 Then
+      TATE = val((((mat.TA + BAND_SLACK_M) * 4) * 2) + ((1000 * 4) * 2) / 10 ^ 3)
+    ElseIf .TIP820 Then
+      TATE = val((((mat.TA + BAND_SLACK_M) * 4) * 2) + ((900 * 4) * 2) / 10 ^ 3)
+    End If
+  End With
+  Dim result As Double: result = (DOU + TATE) * 単重(0) * 単重(1)
+  表記用.PETsiki = "【PETバンド】胴巻き4本分＋縦バンド4本分" & vbCrLf & "胴巻き:" & Format(DOU, "0.000") & "m + 縦バンド:" & Format(TATE, "0.000") & "m = " & Format(result, "0.000")
+  CalculatePET = result
+End Function
+
+'樹脂パレット　変数化済
+Public Function CalculatePAR(TempHiki As Variant, fieldIdx As MaterialFieldIndices, ByRef mat As MaterialWeights) As Double
+  Dim 単重 As Variant: 単重 = GetUnitMassAndCoefficient(TempHiki, "樹脂パレット", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)
+  mat.PAR式 = 単重
+  Dim result As Double: result = 単重(0) * 単重(1) * PALLET_QTY
+  表記用.PARsiki = "【樹脂パレット】" & PALLET_QTY & "台" & vbCrLf & _
+    Format(単重(0), "0.000") & " × " & PALLET_QTY & "台 = " & Format(result, "0.0")
+  CalculatePAR = result
+End Function
+
+Public Function CalculateDRY(TempHiki As Variant, fieldIdx As MaterialFieldIndices, ByRef mat As MaterialWeights) As Double
+  Dim 単重 As Variant: 単重 = GetUnitMassAndCoefficient(TempHiki, "EX-DRY", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)
+  mat.DRY式 = 単重
+  Dim result As Double: result = 単重(0) * 単重(1)
+  表記用.DRYsiki = "【乾燥剤】1つ" & vbCrLf & Format(単重(0), "0.000") & " × 1つ = " & Format(result, "0.000")
+  CalculateDRY = result
+End Function
+
+Public Function CalculateNW(CoilText As Double, coilNo As Long, T1 As Double, T2 As Double) As Double 'コイル本数、丈1～4、ラベルの重量(kg排除済み)
+  With テスラ指定サイズ
+    Select Case coilNo
+      Case 1, 2: If .Take1.Visible Then CalculateNW = Format(val(CoilText * T1), "0.0")
+      Case 3, 4: If .Take2.Visible Then CalculateNW = Format(val(CoilText * T2), "0.0")
+    End Select
+  End With
+End Function
+
+'========== 6. フォーム値設定 ==========
+Public Sub SetCoilFormValues(coilNo As Long, mat As MaterialWeights)
+  With テスラ指定サイズ
+    Select Case coilNo
+      Case 1: .NW1 = Format(mat.NW, "0.0"): .GW1 = Format(Application.WorksheetFunction.Round(mat.GW, 0), "0.0")
+      Case 2: .NW2 = Format(mat.NW, "0.0"): .GW2 = Format(Application.WorksheetFunction.Round(mat.GW, 0), "0.0")
+      Case 3: .NW3 = Format(mat.NW, "0.0"): .GW3 = Format(Application.WorksheetFunction.Round(mat.GW, 0), "0.0")
+      Case 4: .NW4 = Format(mat.NW, "0.0"): .GW4 = Format(Application.WorksheetFunction.Round(mat.GW, 0), "0.0")
+    End Select
+  End With
+End Sub
+'========== 表記用フォームへの反映 ==========
+Public Sub SetDisplayFormValues(mat As MaterialWeights, coilNo As Long, CoilText As Double)
+  Dim T1 As Double, T2 As Double
+  GetCoilWeights T1, T2, coilNo
+  
+  With 表記用
+    .PI = Format(mat.PIN, "0.000")
+    .TIP = Format(mat.TIP, "0.00")
+    .SUT = Format(mat.SUT, "0.000")
+    .ESA = Format(mat.ESA, "0.000")
+    .POR = Format(mat.POR, "0.000")
+    .PAR = Format(mat.PAR, "0.0")
+    .PET = Format(mat.PET, "0.000")
+    .HB = Format(mat.HB, "0.000")
+    .NW = Format(mat.NW, "0.0")
+    .DRY = Format(mat.DRY, "0.000")
+    .HU = Format(Application.WorksheetFunction.Round(mat.HU, 0), "0.0")
+    .GW = Format(Application.WorksheetFunction.Round(mat.GW, 0), "0.0")
+    
+    '====== NWsiki を設定 ======
+    If coilNo = 1 Or coilNo = 2 Then
+      表記用.NWsiki = Format(T1, "0.0") & " × " & Format(CoilText, "0") & " = " & Format(mat.NW, "0.0")
+    Else
+      表記用.NWsiki = Format(T2, "0.0") & " × " & Format(CoilText, "0") & " = " & Format(mat.NW, "0.0")
+    End If
+    '====== HUsiki を設定 ======
+    .HUsiki = Format(mat.PIN, "0.000") & "+" & Format(mat.TIP, "0.000") & "+" & Format(mat.SUT, "0.000") & "+" & Format(mat.ESA, "0.000") & "+" & Format(mat.POR, "0.000") & "+" & Format(mat.HB, "0.000") & "+" & Format(mat.PAR, "0.0") & "+" & Format(mat.PET, "0.000") & "+" & Format(mat.DRY, "0.000")
+    
+    '====== GWsiki を設定 ======
+    .GWsiki = Format(mat.HU, "0.000") & "+" & Format(mat.NW, "0.0")
+  End With
+End Sub
+'========== 7. シートへの転記 ==========
+Public Sub WriteToSheet(coilNo As Long, CoilText As Double, mat As MaterialWeights)
+  Dim SheetsName As String: SheetsName = "風袋計算"
+  Dim i As Long, T1 As Double, T2 As Double
+  Dim KONNO As String
+  
+  GetCoilWeights T1, T2, coilNo
+  
+  Select Case coilNo
+    Case 1: i = 1: KONNO = "丈1_1梱包目:"
+    Case 2: i = 15: KONNO = "丈1_2梱包目:"
+    Case 3: i = 29: KONNO = "丈2_1梱包目:"
+    Case 4: i = 43: KONNO = "丈2_2梱包目:"
+  End Select
+  
+  With ThisWorkbook.Sheets(SheetsName)
+    '左列（項目名）
+    .Cells(i, 1) = KONNO & CoilText & "本"
+    .Cells(i + 1, 1) = "ﾋﾟﾝ"
+    .Cells(i + 2, 1) = "ﾁｯﾌﾟﾎﾞｰﾙ"
+    .Cells(i + 3, 1) = "ｽﾄﾚｯﾁﾌｨﾙﾑ"
+    .Cells(i + 4, 1) = "ｴｻﾌｫｰﾑ"
+    .Cells(i + 5, 1) = "ﾎﾟﾘｼｰﾄ"
+    .Cells(i + 6, 1) = "ﾊｰﾄﾞﾎﾞｰﾄﾞ"
+    .Cells(i + 7, 1) = "樹脂ﾊﾟﾚｯﾄ"
+    .Cells(i + 8, 1) = "ﾍﾟｯﾄﾊﾞﾝﾄﾞ"
+    .Cells(i + 9, 1) = "EX-DRY"
+    .Cells(i + 10, 1) = "NW"
+    .Cells(i + 11, 1) = "風袋"
+    .Cells(i + 12, 1) = "GW"
+    
+    '中列（計算値）
+    WriteSheetValues .Cells, i, mat, T1, T2, coilNo, CoilText
+    
+    '右列（計算式）
+    WriteSheetFormulas .Cells, i, mat, T1, T2, coilNo, CoilText
+  End With
+End Sub
+
+Public Sub WriteSheetValues(Cells As Object, i As Long, mat As MaterialWeights, _
+                             T1 As Double, T2 As Double, coilNo As Long, CoilText As Double)
+  Cells(i + 1, 2) = Format(mat.PIN, "0.000")
+  Cells(i + 1, 2).NumberFormatLocal = "0.000_ "
+  Cells(i + 2, 2) = Format(mat.TIP, "0.00")
+  Cells(i + 2, 2).NumberFormatLocal = "0.00_ "
+  Cells(i + 3, 2) = Format(mat.SUT, "0.000")
+  Cells(i + 3, 2).NumberFormatLocal = "0.000_ "
+  Cells(i + 4, 2) = Format(mat.ESA, "0.000")
+  Cells(i + 4, 2).NumberFormatLocal = "0.000_ "
+  Cells(i + 5, 2) = Format(mat.POR, "0.000")
+  Cells(i + 5, 2).NumberFormatLocal = "0.000_ "
+  Cells(i + 6, 2) = Format(mat.HB, "0.000")
+  Cells(i + 6, 2).NumberFormatLocal = "0.00_ "
+  Cells(i + 7, 2) = Format(mat.PAR, "0.0")
+  Cells(i + 7, 2).NumberFormatLocal = "0.0_ "
+  Cells(i + 8, 2) = Format(mat.PET, "0.000")
+  Cells(i + 8, 2).NumberFormatLocal = "0.000_ "
+  Cells(i + 9, 2) = Format(mat.DRY, "0.000")
+  Cells(i + 9, 2).NumberFormatLocal = "0.000_ "
+  Cells(i + 10, 2) = Format(mat.NW, "0.0")
+  Cells(i + 10, 2).NumberFormatLocal = "0.0_ "
+  Cells(i + 11, 2) = Format(Application.WorksheetFunction.Round(mat.HU, 0), "0.0")
+  Cells(i + 11, 2).NumberFormatLocal = "0.0_ "
+  Cells(i + 12, 2) = Format(Application.WorksheetFunction.Round(mat.GW, 0), "0.0")
+  Cells(i + 12, 2).NumberFormatLocal = "0.0_ "
+End Sub
+
+Public Sub WriteSheetFormulas(Cells As Object, i As Long, mat As MaterialWeights, _
+                               T1 As Double, T2 As Double, coilNo As Long, CoilText As Double)
+  Cells(i + 1, 3) = 4 & "*" & CStr(mat.pin式(0)) & "*" & CStr(mat.pin式(1))
+  Cells(i + 2, 3) = "(" & CoilText & "+" & 1 & ")" & "*" & mat.チップボール式(0) & "*" & mat.チップボール式(1)
+  Cells(i + 3, 3) = mat.TempDiameter & "*" & CStr(mat.GAI) & "/ 10 ^ 3)" & "*" & STRETCH_WRAPS & "*" & CStr(mat.SUT式(0)) & "*" & CStr(mat.SUT式(1)) & "[約" & STRETCH_WRAPS & "周計算]"
+  
+  If mat.TA > ESA_DOUBLE_LIMIT_M Then
+    Cells(i + 4, 3) = mat.TempDiameter & "*" & CStr(mat.GAI) & "/ 10 ^ 3)" & "*" & 2 & "*" & CStr(mat.ESA式(0)) & "*" & CStr(mat.ESA式(1)) & "[2周計算]"
+  Else
+    Cells(i + 4, 3) = mat.TempDiameter & "*" & CStr(mat.GAI) & "/ 10 ^ 3)" & "*" & CStr(mat.ESA式(0)) & "*" & CStr(mat.ESA式(1)) & "[1周計算]"
+  End If
+  
+  Cells(i + 5, 3) = "[" & "(" & mat.HalfDiameter & "^ 2 * PIN" & "*" & 2 & ")" & "]" & "+" & "[" & "(" & "(" & CStr(mat.TA) & "+" & CStr(mat.TA) & "/ 2)" & "*" & mat.TempDiameter & "*" & CStr(mat.GAI) & "/ 10 ^ 3" & ")" & ")" & "/ 10 ^ 6" & "]" & "*" & CStr(mat.POR式(0)) & "*" & CStr(mat.POR式(1)) & "  " & "包み分は高さの半分とする"
+  
+  Cells(i + 7, 3) = CStr(mat.PAR式(0)) & "*" & PALLET_QTY
+  Cells(i + 8, 3) = "[" & "(" & mat.TempDiameter & "*" & CStr(mat.GAI) & "/ 10 ^ 3" & "+" & BAND_SLACK_M & ")" & "*" & 4 & ")" & "]" & "+" & "[" & "(" & "(" & CStr(mat.TA) & "+" & BAND_SLACK_M & ")" & "*" & 4 & ")" & "*" & 2 & ")" & "+" & "(" & "(" & mat.TempDiameter & "*" & 4 & ")" & "*" & 2 & ") / 10 ^ 3" & "]" & "*" & CStr(mat.PET式(0)) & "*" & CStr(mat.PET式(1)) & "  " & "締める時の余分を" & Format(BAND_SLACK_M * 1000, "0") & "mmとした"
+  
+  Cells(i + 9, 3) = mat.DRY式(0) & "*" & 1
+  
+  If coilNo = 1 Or coilNo = 2 Then
+    Cells(i + 10, 3) = T1 & "*" & CoilText
+  Else
+    Cells(i + 10, 3) = T2 & "*" & CoilText
+  End If
+  
+  Cells(i + 11, 3) = Format(mat.PIN, "0.000") & "+" & Format(mat.TIP, "0.000") & "+" & Format(mat.SUT, "0.000") & "+" & Format(mat.ESA, "0.000") & "+" & Format(mat.POR, "0.000") & "+" & Format(mat.HB, "0.000") & "+" & Format(mat.PAR, "0.0") & "+" & Format(mat.PET, "0.000") & "+" & Format(mat.DRY, "0.000")
+  
+  Cells(i + 12, 3) = Format(mat.HU, "0.000") & "+" & Format(mat.NW, "0.0")
+End Sub
+
+Public Sub GetCoilWeights(ByRef T1 As Double, ByRef T2 As Double, coilNo As Long)
+  With テスラ指定サイズ
+    If .lblWeight1 <> "" Then T1 = CDbl(Replace(.lblWeight1, "kg", ""))
+    If .lblWeight2 <> "" Then T2 = CDbl(Replace(.lblWeight2, "kg", ""))
+  End With
+End Sub
+
+'========== 8. シート装飾 ==========
+Public Sub FormatSheet()
+  Dim SheetsName As String: SheetsName = "風袋計算"
+  
+  With ThisWorkbook.Sheets(SheetsName)
+    .Activate
+    .Cells.Select
+    With Selection.Font
+      .name = "メイリオ"
+      .Size = 10.5
+      .ThemeFont = xlThemeFontNone
+    End With
+    .Cells.EntireColumn.AutoFit
+    Call 風袋罫線設定
+  End With
+End Sub
+
+'========== 主関数（簡潔版）==========
+Public Function DB_HB(CoilText As Double, coilNo As Long) As Double
+  If Not IsNumeric(coilNo) Then Exit Function
+  
+  Dim i As Long
+  Dim tableName As String: tableName = "資材重量"
+  Dim FPath As String: FPath = PATH_AIM_参照
+  Dim Target As String: Target = "梱包資材マスタ.accdb"
+  
+  Dim filePath As String: filePath = FPath & Target
+  Dim SQLfilter As String: SQLfilter = ""
+  Dim TempHiki As Variant: TempHiki = GetRecordsArr(filePath, tableName, SQLfilter)
+  
+  If IsEmpty(TempHiki) Then
+    MsgBox "資材重量なし", vbCritical
+    Exit Function
+  End If
+  
+  Dim Hikifields As Variant: Hikifields = GetFieldsArr(filePath, tableName, "")
+  If IsEmpty(Hikifields) Then
+    MsgBox "資材重量なし", vbCritical
+    Exit Function
+  End If
+  
+  '====== フィールドインデックスの取得 ======
+  Dim fieldIdx As MaterialFieldIndices
+  fieldIdx = GetFieldIndices(Hikifields)
+  
+  '====== HBデータの計算 ======
+  Dim hbData As hbData
+  hbData = CalculateHBData(CoilText, coilNo, TempHiki, fieldIdx)
+  
+  '====== 表記用フォームへの反映 ======
+  SetHBDisplayForm hbData
+  
+  '====== シートへの転記 ======
+  WriteHBToSheet coilNo, hbData
+  
+  DB_HB = hbData.HBValue
+End Function
+
+'========== 1. HBデータの計算 ==========
+Public Function CalculateHBData(CoilText As Double, coilNo As Long, _
+                                  TempHiki As Variant, fieldIdx As MaterialFieldIndices) As hbData
+  Dim HB As hbData
+  
+  '====== コイル寸法の取得 ======
+  GetHBCoilDimensions HB, CoilText
+  
+  '====== HBマスタデータの取得 ======
+  GetHBMaterialData HB, TempHiki, fieldIdx
+  
+  '====== HBフラグの判定 ======Flag が HB.HBFlag に入る
+  HB.HBFlag = JudgeHBFlag(CoilText)
+  
+  '====== HB重量の計算表示 ======HB.HBFlag を参照
+  CalculateHBValue HB, CoilText
+  
+  CalculateHBData = HB
+End Function
+
+'========== 共通：コイル巾の決定 ==========
+' CB モード → OB モードの順で評価（OB が後勝ち＝元のコードと同じ挙動）
+Public Function GetCoilWidth() As Double
+  Dim w As Double
+  With テスラ指定サイズ
+    Select Case True
+      Case .CheckBox1: w = 40#
+      Case .CheckBox2: w = 33#
+      Case .CheckBox3: w = 73#
+      Case .CheckBox4: w = 82.5
+      Case .CheckBox5: w = 53.5
+      Case .CheckBox6: w = 63#
+      Case .ck_08_53:  w = 53.5                  ' 2026.3.26
+    End Select
+
+    Select Case True
+      Case .OptionButton7 Or .OptionButton8:   w = 40#
+      Case .OptionButton9 Or .OptionButton10:  w = 33#
+      Case .OptionButton1 Or .OptionButton2:   w = 73#
+      Case .OptionButton3 Or .OptionButton4:   w = 82.5
+      Case .OptionButton5 Or .OptionButton6:   w = 53.5
+      Case .OptionButton11 Or .OptionButton12: w = 63#
+      Case .lblSpec_08_53_1 Or .lblSpec_08_53_2: w = 53.5  ' 2026.3.26
+    End Select
+  End With
+  GetCoilWidth = w
+End Function
+
+'========== 共通：コイル高さ TA（m単位）==========
+' TA = コイル積高 + チップボール積厚（本数+1枚 × 0.7mm）変数化済
+Public Function GetCoilTA(CoilText As Double, col As Double) As Double
+  Dim TIPT As Double
+  TIPT = val((CoilText + CHIP_EXTRA_SHEETS) * CHIP_THICKNESS_MM / 10 ^ 3)   ' m
+  GetCoilTA = val(CoilText * col / 10 ^ 3) + TIPT                           ' m
+End Function
+
+'========== 共通：外周 GAI（m単位）==========
+Public Function GetCoilGAI() As Double
+  Dim PIWork As Double: PIWork = WorksheetFunction.PI()
+  With テスラ指定サイズ
+    If .TIP1000 Then
+      GetCoilGAI = val(1100 * PIWork / 10 ^ 3)
+    ElseIf .TIP950 Then
+      GetCoilGAI = val(1000 * PIWork / 10 ^ 3)
+    ElseIf .TIP820 Then
+      GetCoilGAI = val(900 * PIWork / 10 ^ 3)
+    End If
+  End With
+End Function
+
+'========== 2. コイル寸法の取得（HB用）==========
+Public Sub GetHBCoilDimensions(ByRef HB As hbData, CoilText As Double)
+  HB.GAI = GetCoilGAI()
+  HB.col = GetCoilWidth()
+  HB.TA = GetCoilTA(CoilText, HB.col)   ' ← ①と完全に同一の値になる
+End Sub
+
+'========== 3. HBマスタデータの取得 ==========
+Public Sub GetHBMaterialData(ByRef HB As hbData, TempHiki As Variant, fieldIdx As MaterialFieldIndices)
+  HB.HB固定値 = GetUnitMassAndCoefficient(TempHiki, "HB590*2000", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)
+  HB.HB計算用 = GetUnitMassAndCoefficient(TempHiki, "ハードボード", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)
+  HB.HB八角用 = GetUnitMassAndCoefficient(TempHiki, "八角ハードボード", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)
+  HB.HB530固定値 = GetUnitMassAndCoefficient(TempHiki, "HB530*2000", fieldIdx.梱包資材名, fieldIdx.単位質量, fieldIdx.係数)  ' 2026.3.26
+End Sub
+
+'========== 4. HBフラグの判定 ==========
+Public Function JudgeHBFlag(CoilText As Double) As Boolean
+  Dim Flag As Boolean: Flag = False
+  
+  With テスラ指定サイズ
+    Select Case True
+      Case (.CheckBox1) And (CoilText = 14): Flag = True
+      Case (.CheckBox2) And (CoilText = 15): Flag = True
+      Case (.CheckBox3) And (CoilText = 8): Flag = True
+      Case (.CheckBox3) And (CoilText = 7): Flag = True
+      Case (.CheckBox4) And (CoilText = 7): Flag = True
+      Case (.CheckBox4) And (CoilText = 6): Flag = True
+      Case (.CheckBox5) And (CoilText = 11): Flag = True          ' 2026.3.26
+      Case (.CheckBox5) And (CoilText = 10): Flag = True          ' 2026.3.26
+      Case (.CheckBox6) And (CoilText = 9): Flag = True
+      Case (.CheckBox6) And (CoilText = 8): Flag = True
+      Case (.ck_08_53) And (CoilText = 11): Flag = True            ' 2026.3.26
+      Case (.ck_08_53) And (CoilText = 10): Flag = True            ' 2026.3.26
+      ' OB モードも同様に本数条件付き_2026.3.26
+      Case (.OptionButton5 Or .OptionButton6) And (CoilText = 11): Flag = True
+      Case (.OptionButton5 Or .OptionButton6) And (CoilText = 10): Flag = True
+      Case (.lblSpec_08_53_1 Or .lblSpec_08_53_2) And (CoilText = 11): Flag = True
+      Case (.lblSpec_08_53_1 Or .lblSpec_08_53_2) And (CoilText = 10): Flag = True
+      Case Else: Flag = False
+    End Select
+  End With
+  
+  JudgeHBFlag = Flag
+End Function
+
+'========== 5. HB重量と計算式の算出 ==========
+'Flag=True & col=53.5 & 11本HB590*2000固定値×2 + 八角×2
+'Flag=True & col=53.5 & 10本HB530*2000固定値×2 + 八角×2
+'Flag=True & それ以外ハードボード(GAI+0.7)×TA×単重 + 八角×2
+'Flag=Falseハードボード(GAI+0.7)×TA×単重 + 八角×2
+
+Private Sub CalculateHBValue(ByRef HB As hbData, CoilText As Double)
+
+    If HB.HBFlag And HB.col = 53.5 And CoilText = 11 Then
+        '--- 11本: HB590*2000 使用 ---
+        HB.HBValue = 2 * HB.HB固定値(0) * HB.HB固定値(1) _
+                    + 2 * HB.HB八角用(0) * HB.HB八角用(1)
+        HB.HBFormula = "【ハードボード】HB590*2000 上下2枚 + 八角上下2枚" & vbCrLf & _
+            "胴巻き: 2 × " & Format(HB.HB固定値(0), "0.000") & _
+            " + 八角: 2 × " & Format(HB.HB八角用(0), "0.000") & _
+            " = " & Format(HB.HBValue, "0.000")
+
+    ElseIf HB.HBFlag And HB.col = 53.5 And CoilText = 10 Then
+        '--- 10本: HB530*2000 使用 ---
+        HB.HBValue = 2 * HB.HB530固定値(0) * HB.HB530固定値(1) _
+                    + 2 * HB.HB八角用(0) * HB.HB八角用(1)
+        HB.HBFormula = "【ハードボード】HB530*2000 上下2枚 + 八角上下2枚" & vbCrLf & _
+            "胴巻き: 2 × " & Format(HB.HB530固定値(0), "0.000") & _
+            " + 八角: 2 × " & Format(HB.HB八角用(0), "0.000") & _
+            " = " & Format(HB.HBValue, "0.000")
+
+    Else
+        '--- 上記以外は全て計算HB（Flag の真偽によらず同一式）---
+        CalcHBStandard HB
+    End If
+
+End Sub
+
+'========== 標準HB（八角上下2枚 + 胴巻き計算値）==========
+' 胴巻きHBの板寸法
+'   外周方向: 外周 + 700mm  … 巻き重ね代
+'   高さ方向: HB_BAND_CLEARANCE_M（現状0）を引く
+' 八角HB（上下2枚）はDB固定値のため、この補正の影響を受けない
+Private Sub CalcHBStandard(ByRef HB As hbData)
+    Dim HBHeight As Double
+    HBHeight = GetHBBandHeight(HB.TA)
+
+    HB.HBValue = (HB.GAI + HB_MARGIN_M) * HBHeight * HB.HB計算用(0) * HB.HB計算用(1) _
+                + 2 * HB.HB八角用(0) * HB.HB八角用(1)
+
+    HB.HBFormula = "【ハードボード】八角上下2枚+(外周+" & Format(HB_MARGIN_M * 1000, "0") & "mm)×コイル積高×HB単重" & vbCrLf & _
+        "2 × " & Format(HB.HB八角用(0), "0.000") & _
+        " + (" & Format(HB.GAI, "0.000") & " + " & HB_MARGIN_M & ") × " & _
+        Format(HBHeight, "0.000") & " × " & Format(HB.HB計算用(0), "0.000") & _
+        " = " & Format(HB.HBValue, "0.000")
+End Sub
+
+'========== 胴巻きHBの高さ ==========
+' HB_BAND_CLEARANCE_M が 0 の間は積高をそのまま返す
+' 補正後が下限を割る場合も積高をそのまま返す（実用上は発生しない想定）
+Private Function GetHBBandHeight(TA As Double) As Double
+    Dim h As Double
+    h = TA - HB_BAND_CLEARANCE_M
+    If h < HB_MIN_HEIGHT_M Then
+        GetHBBandHeight = TA
+    Else
+        GetHBBandHeight = h
+    End If
+End Function
+
+'========== 6. 表記用フォームへの反映 ==========
+Public Sub SetHBDisplayForm(HB As hbData)
+  With 表記用
+    .HBsiki = HB.HBFormula
+    .HB = Format(HB.HBValue, "0.000")
+  End With
+End Sub
+
+'========== 7. シートへの転記 ==========
+Public Sub WriteHBToSheet(coilNo As Long, HB As hbData)
+  Dim SheetsName As String: SheetsName = "風袋計算"
+  Dim i As Long
+  
+  Select Case coilNo
+    Case 1: i = 1
+    Case 2: i = 15
+    Case 3: i = 29
+    Case 4: i = 43
+  End Select
+  
+  With テスラ指定サイズ
+    If .CoilH1 <> "" Then
+      With ThisWorkbook.Sheets(SheetsName)
+        .Cells(i + 6, 3) = HB.HBFormula
+        .Cells(i + 6, 2) = Format(HB.HBValue, "0.000")
+        .Cells(i + 6, 2).NumberFormatLocal = "0.00_ "
+      End With
+    End If
+  End With
+End Sub
+
+Function GetUnitMassAndCoefficient(TempHiki As Variant, targetName As String, H_梱包資材名 As Long, H_単位質量 As Long, H_係数 As Long) As Variant
+'TempHiki(i, H_梱包資材名)がオブジェクト名と一致した場合に、TempHiki(i, H_単位質量)とTempHiki(i, H_係数)を返す関数
+Dim i As Long, result(1) As Variant
+' TempHiki の要素数を取得（2次元配列を仮定）
+On Error Resume Next
+Dim RowCount As Long
+RowCount = UBound(TempHiki, 1)
+On Error GoTo 0
+' 配列をループ
+For i = 1 To RowCount
+    If TempHiki(i, H_梱包資材名) = targetName Then
+        ' 一致した場合、単位質量と係数を取得して返す
+        result(0) = TempHiki(i, H_単位質量)
+        result(1) = TempHiki(i, H_係数)
+        GetUnitMassAndCoefficient = result
+        Exit Function
+    End If
+Next i
+GetUnitMassAndCoefficient = Array("", "") ' 一致しない場合は空の配列を返す
+End Function
+
+Public Sub 風袋罫線設定()
+Dim rng As Range, ws As Worksheet: Set ws = ThisWorkbook.Sheets("風袋計算")
+    '******************************************丈1罫線
+  If テスラ指定サイズ.Take1.Visible = True Then
+    If テスラ指定サイズ.CoilH1 <> "" Then
+      Set rng = ws.Range(ws.Cells(2, 1), ws.Cells(13, 3))
+      ' 格子状の罫線を設定
+      With rng.Borders
+        .LineStyle = xlContinuous
+        .weight = xlThin
+      End With
+    End If
+    If テスラ指定サイズ.CoilH2 <> "" Then
+      Set rng = ws.Range(ws.Cells(16, 1), ws.Cells(27, 3))
+      ' 格子状の罫線を設定
+      With rng.Borders
+        .LineStyle = xlContinuous
+        .weight = xlThin
+      End With
+    End If
+  End If
+    '******************************************丈2罫線
+  If テスラ指定サイズ.Take2.Visible = True Then
+    If テスラ指定サイズ.CoilH3 <> "" Then
+      Set rng = ws.Range(ws.Cells(30, 1), ws.Cells(41, 3))
+      ' 格子状の罫線を設定
+      With rng.Borders
+        .LineStyle = xlContinuous
+        .weight = xlThin
+      End With
+    End If
+    If テスラ指定サイズ.CoilH4 <> "" Then
+      Set rng = ws.Range(ws.Cells(44, 1), ws.Cells(55, 3))
+      ' 格子状の罫線を設定
+      With rng.Borders
+        .LineStyle = xlContinuous
+        .weight = xlThin
+      End With
+    End If
+  End If
+  
+'***************************************************印刷設定
+  If テスラ指定サイズ.Take1.Visible = True And テスラ指定サイズ.Take2.Visible = True Then
+   If テスラ指定サイズ.CoilH1 <> "" And テスラ指定サイズ.CoilH2 <> "" And テスラ指定サイズ.CoilH3 <> "" And テスラ指定サイズ.CoilH4 <> "" Then
+    Application.PrintCommunication = True
+    ActiveSheet.PageSetup.PrintArea = "$A$1:$C$55"
+    Application.PrintCommunication = False
+    With ActiveSheet.PageSetup
+        .LeftHeader = ""
+        .CenterHeader = ""
+        .RightHeader = "＊検査番号：" & テスラ指定サイズ.lblKensaNo & "＊" & "ｺｲﾙｻｲｽﾞ：" & テスラ指定サイズ.lblSize1 & " " & テスラ指定サイズ.lblSize2
+        .CenterFooter = ""
+        .LeftFooter = ""
+        .RightFooter = Format$(Date, "yyyy.mm.dd") & "印刷"
+        
+        .LeftMargin = Application.InchesToPoints(0)
+        .RightMargin = Application.InchesToPoints(0)
+        .TopMargin = Application.InchesToPoints(0)
+        .BottomMargin = Application.InchesToPoints(0)
+        .HeaderMargin = Application.InchesToPoints(0)
+        .FooterMargin = Application.InchesToPoints(0)
+        .PaperSize = xlPaperA4
+        .Orientation = xlLandscape '縦xlPortrait　横 xllandscape
+        .FitToPagesWide = 1 '1ページで納める
+        .FitToPagesTall = 1
+        '.Zoom = 100
+    End With
+    Application.PrintCommunication = True
+   End If
+  End If
+  If テスラ指定サイズ.Take1.Visible = True And テスラ指定サイズ.Take2.Visible = False Then
+   If テスラ指定サイズ.CoilH1 <> "" Or テスラ指定サイズ.CoilH2 <> "" Then
+    Application.PrintCommunication = True
+    ActiveSheet.PageSetup.PrintArea = "$A$1:$C$27"
+    Application.PrintCommunication = False
+    With ActiveSheet.PageSetup
+        .LeftHeader = ""
+        .CenterHeader = ""
+        .RightHeader = "＊検査番号：" & テスラ指定サイズ.lblKensaNo & "＊" & "ｺｲﾙｻｲｽﾞ：" & テスラ指定サイズ.lblSize1
+        .CenterFooter = ""
+        .LeftFooter = ""
+        .RightFooter = Format$(Date, "yyyy.mm.dd") & "印刷"
+        
+        .LeftMargin = Application.InchesToPoints(0)
+        .RightMargin = Application.InchesToPoints(0)
+        .TopMargin = Application.InchesToPoints(0)
+        .BottomMargin = Application.InchesToPoints(0)
+        .HeaderMargin = Application.InchesToPoints(0)
+        .FooterMargin = Application.InchesToPoints(0)
+        .PaperSize = xlPaperA4
+        .Orientation = xlLandscape '縦xlPortrait　横 xllandscape
+        .FitToPagesWide = 1 '1ページで納める
+        .FitToPagesTall = 1
+        '.Zoom = 100
+    End With
+   End If
+  End If
+  If テスラ指定サイズ.Take1.Visible = False And テスラ指定サイズ.Take2.Visible = True Then
+   If テスラ指定サイズ.CoilH3 <> "" Or テスラ指定サイズ.CoilH4 <> "" Then
+    Application.PrintCommunication = True
+    ActiveSheet.PageSetup.PrintArea = "$A$29:$C$55"
+    Application.PrintCommunication = False
+    With ActiveSheet.PageSetup
+        .LeftHeader = ""
+        .CenterHeader = ""
+        .RightHeader = "＊検査番号：" & テスラ指定サイズ.lblKensaNo & "＊" & "ｺｲﾙｻｲｽﾞ：" & テスラ指定サイズ.lblSize2
+        .CenterFooter = ""
+        .LeftFooter = ""
+        .RightFooter = Format$(Date, "yyyy.mm.dd") & "印刷"
+        
+        .LeftMargin = Application.InchesToPoints(0)
+        .RightMargin = Application.InchesToPoints(0)
+        .TopMargin = Application.InchesToPoints(0)
+        .BottomMargin = Application.InchesToPoints(0)
+        .HeaderMargin = Application.InchesToPoints(0)
+        .FooterMargin = Application.InchesToPoints(0)
+        .PaperSize = xlPaperA4
+        .Orientation = xlLandscape '縦xlPortrait　横 xllandscape
+        .FitToPagesWide = 1 '1ページで納める
+        .FitToPagesTall = 1
+        '.Zoom = 100
+    End With
+    Application.PrintCommunication = True
+   End If
+  End If
+End Sub
+
+'========== ListViewにDB資材を表示 ==========
+Public Sub PopulateListViewMaterials(TempHiki As Variant, fieldIdx As MaterialFieldIndices)
+  Dim lv As Object
+  Set lv = 表記用.ListViewMaterials  '← 実際のコントロール名に変更
+  
+  '既存の項目をクリア
+  lv.ListItems.Clear
+  lv.ColumnHeaders.Clear
+  
+  'リスト詳細ビューを設定
+  lv.View = 3
+  lv.FullRowSelect = True
+  lv.Gridlines = True
+  
+  '====== 列ヘッダーを追加 ======
+  lv.ColumnHeaders.Add , , "梱包資材名", 180
+  lv.ColumnHeaders.Add , , "単位質量", 100
+  
+  '====== DBから行を追加（可変対応） ======
+  Dim i As Long, j As Long
+  
+  'TempHikiの行数をループ
+  For i = LBound(TempHiki, 1) To UBound(TempHiki, 1)
+    Dim li As Object
+    Dim 資材名 As String, 単位質量 As String
+    
+    '資材名と単位質量を取得
+    資材名 = CStr(TempHiki(i, fieldIdx.梱包資材名))
+    単位質量 = CStr(TempHiki(i, fieldIdx.単位質量))
+    
+    'ListItemを追加
+    Set li = lv.ListItems.Add()
+    li.text = 資材名
+    li.SubItems(1) = 単位質量
+    
+    Debug.Print "行" & i & ": " & 資材名 & " - " & 単位質量
+  Next i
+  
+  'カラム幅を自動調整
+  AutoFitListViewColumns lv
+  
+  Debug.Print "ListViewに" & lv.ListItems.count & "件のデータを追加しました"
+End Sub
+
+'========== ListViewのカラム幅を自動調整 ==========
+Public Sub AutoFitListViewColumns(lv As Object)
+  Dim i As Long
+  
+  '固定幅を設定
+  For i = 1 To lv.ColumnHeaders.count
+    If i = 1 Then
+      lv.ColumnHeaders(i).width = 150  '梱包資材名
+    Else
+      lv.ColumnHeaders(i).width = 85  '単位質量
+    End If
+  Next i
+End Sub
+
+'Public Sub All計算(CoilText As Double, coilNo As Long) 'NW　GW　高さの計算
+'Dim col As Double 'コイル巾
+'Dim TA As Single 'コイル高さ
+'Dim KTA As Single '梱包高さ
+'Dim PIN As Double 'ﾋﾟﾝ
+'Dim TIP As Double 'ﾁｯﾌﾟﾎﾞｰﾙ
+'Dim ESA As Double 'ｴｻﾌｫ-ﾑ
+'Dim HB As Double 'ハードボード
+'Dim PET As Double 'バンド
+'Dim PAR As Double 'パレット
+'Dim NW As Double 'NW
+'Dim HU As Double '風袋
+'Dim GW As Double 'GW
+'Dim i As Long
+'
+'Dim PIWork As Double:    PIWork = WorksheetFunction.PI() '円周率
+'
+'Dim SheetsName As String: SheetsName = "風袋計算"
+'Dim n As String: n = ThisWorkbook.Sheets("設定").Cells(Rows.count, 1).End(xlUp).Row
+' '*************************係数読み込み
+'  For i = 3 To n
+'      W1(i - 2) = ThisWorkbook.Sheets("設定").Cells(i, 2)
+'      K1(i - 2) = ThisWorkbook.Sheets("設定").Cells(i, 3)
+'  Next i
+''サイズ変更があった場合巾修正を忘れると高さ計算が狂う為注意
+' '*************************コイル高さ　新サイズの為修正OptionButton5、6　2019.04.26
+'    With テスラ指定サイズ
+'      Select Case True
+'      Case .CheckBox1: col = 40#
+'      Case .CheckBox2: col = 33#
+'      Case .CheckBox3: col = 73#
+'      Case .CheckBox4: col = 82.5
+'      Case .CheckBox5: col = 53.5
+'      Case .CheckBox6: col = 63#
+'      End Select
+'
+'      Select Case True
+'      Case .OptionButton7 Or .OptionButton8:   col = 40#
+'      Case .OptionButton9 Or .OptionButton10:  col = 33#
+'      Case .OptionButton1 Or .OptionButton2:   col = 73#
+'      Case .OptionButton3 Or .OptionButton4:   col = 82.5
+'      Case .OptionButton5 Or .OptionButton6:   col = 53.5
+'      Case .OptionButton11 Or .OptionButton12: col = 63#
+'      End Select
+'      If .CoilH1 = "" And .CoilH2 = "" And .CoilH3 = "" And .CoilH4 = "" Then
+'        .NW1 = "" '本数が空白の時NWGWは空白にする
+'        .GW1 = ""
+'        .TA1 = ""
+'        .NW2 = ""
+'        .GW2 = ""
+'        .TA2 = ""
+'        .NW3 = ""
+'        .GW3 = ""
+'        .TA3 = ""
+'        .NW4 = ""
+'        .GW4 = ""
+'        .TA4 = ""
+'      Exit Sub
+'      Else
+'  '*************************高さ
+'        Dim TIPT As Single 'ﾁｯﾌﾟﾎﾞｰﾙの高さ　1枚0.7mm
+'        TIPT = Val((CoilText + 1) * 0.7 / 10 ^ 3) 'プラス1枚(一番上)
+'        'TAはコイルとチップの高さのみとしないと別の計算に影響する
+'        'HB上下の高さが入っていなかった1枚2.35mm　2019.04.26
+'        TA = Val(CoilText * col / 10 ^ 3) + TIPT 'ﾃｷｽﾄﾎﾞｯｸｽの数字×ﾁｪｯｸの入っているｺｲﾙ 'M単位
+'        KTA = Val((TA * 1000) + 150 + 150) + (2.35 * 2) '樹脂パレット高さ+150*2
+'        Select Case coilNo
+'        Case 1: .TA1 = Format(Application.WorksheetFunction.RoundUp(KTA, -1), "0.0") '丈1'& Chr(10) & (TA * 1000) + 150 + 150 '　1桁繰り上げ
+'        Case 2: .TA2 = Format(Application.WorksheetFunction.RoundUp(KTA, -1), "0.0")
+'        Case 3: .TA3 = Format(Application.WorksheetFunction.RoundUp(KTA, -1), "0.0") '丈2
+'        Case 4: .TA4 = Format(Application.WorksheetFunction.RoundUp(KTA, -1), "0.0")
+'        End Select
+'      End If
+'    End With
+' '*************************ﾋﾟﾝの本数は固定で4本_重量
+'    PIN = Val(4 * W1(1) * K1(1))
+'    Dim PI2 As Double: PI2 = Val(4 * W1(1) * K1(1))
+' '*************************ﾁｯﾌﾟﾎﾞｰﾙ数は積み本数+1_重量
+'    If テスラ指定サイズ.TIP1000 Then TIP = Val((CoilText + 1) * W1(2) * K1(2))
+'    If テスラ指定サイズ.TIP950 Then TIP = Val((CoilText + 1) * W1(19) * K1(19))
+'    If テスラ指定サイズ.TIP820 Then TIP = Val((CoilText + 1) * W1(20) * K1(20))
+' '*************************ｽﾄﾚｯﾁﾌｨﾙﾑ
+'   'コイル直径を1100とする(パレットサイズと同等)
+'    Dim GAI As Double
+'    If テスラ指定サイズ.TIP1000 Then
+'      GAI = Val(1100 * PIWork / 10 ^ 3) 'M単位
+'    ElseIf テスラ指定サイズ.TIP950 Then
+'      GAI = Val(1000 * PIWork / 10 ^ 3)
+'    ElseIf テスラ指定サイズ.TIP820 Then
+'      GAI = Val(900 * PIWork / 10 ^ 3)
+'    End If
+'
+'    Dim SUT As Double: SUT = Val(GAI * 5 * W1(3) * K1(3)) '5周は巻く 'ｽﾄﾚｯﾁﾌｨﾙﾑ
+' '*************************ｴｻﾌｫｰﾑ
+'    If TA > 0.82 Then 'エサフォームの高さが550　1.5倍ほどの高さになった時2周とする
+'     ESA = Val(GAI * 2 * W1(4) * K1(4)) '2周
+'    Else
+'     ESA = Val(GAI * W1(4) * K1(4)) '1周
+'    End If
+' '*************************ﾎﾟﾘｼｰﾄ
+'   'コイル直径を1100とする(パレットサイズと同等)
+'    Dim AREA As Double
+'    If テスラ指定サイズ.TIP1000 Then
+'      AREA = Val(550 ^ 2 * PIWork) '円部分
+'    ElseIf テスラ指定サイズ.TIP950 Then
+'      AREA = Val(500 ^ 2 * PIWork)
+'    ElseIf テスラ指定サイズ.TIP820 Then
+'      AREA = Val(450 ^ 2 * PIWork)
+'    End If
+'
+'    Dim AREA2 As Double: AREA2 = Val((TA + TA / 2) * GAI) '高さﾌﾟﾗｽ分で包む　ﾌﾟﾗｽ分は高さの半分とする '同部分
+'    Dim POR As Double:   POR = Val((AREA * 2 + AREA2) / 10 ^ 6 * W1(6) * K1(6)) 'ポリシート
+' '*************************HB
+'    HB = HB計算(CoilText, coilNo)
+' '*************************ペットバンド
+' '胴巻き4本
+'  Dim DOU As Double
+'   DOU = Val((GAI + 0.2) * 4) '締める時の余分を200mmとした
+' '縦バンド4本
+'  Dim TATE As Double
+'  If テスラ指定サイズ.TIP1000 Then
+'    TATE = Val((((TA + 0.2) * 4) * 2) + ((1100 * 4) * 2) / 10 ^ 3) '締める時の余分を200mmとした
+'  ElseIf テスラ指定サイズ.TIP950 Then
+'    TATE = Val((((TA + 0.2) * 4) * 2) + ((1000 * 4) * 2) / 10 ^ 3)
+'  ElseIf テスラ指定サイズ.TIP820 Then
+'    TATE = Val((((TA + 0.2) * 4) * 2) + ((900 * 4) * 2) / 10 ^ 3)
+'  End If
+'
+'  PET = (DOU + TATE) * W1(5) * K1(5)
+' '*************************パレット
+'  '樹脂パレット固定
+'  PAR = W1(21) * 2 '2台分
+' '*************************EXDRY_2024.11.25
+'  Dim DRY As Double: DRY = W1(22)
+' '*************************丈1と丈2の重量からKgを抜く　変数とﾌｫｰﾑﾗﾍﾞﾙに注意
+'  Dim T1 As Double, T2 As Double
+'  With テスラ指定サイズ
+'    Select Case coilNo
+'    Case 1: If .lblWeight1 <> "" Then T1 = Replace(.lblWeight1, "kg", "") '丈1_No1
+'    Case 2: If .lblWeight1 <> "" Then T1 = Replace(.lblWeight1, "kg", "") '丈1_No2
+'    Case 3: If .lblWeight2 <> "" Then T2 = Replace(.lblWeight2, "kg", "") '丈2_No1
+'    Case 4: If .lblWeight2 <> "" Then T2 = Replace(.lblWeight2, "kg", "") '丈2_No2
+'    End Select
+' '*************************NWの計算
+'    Select Case coilNo
+'    Case 1, 2 '丈1
+'      If .Take1.Visible = True Then NW = Format((Val(CoilText * T1)), "0.0") 'フレーム
+'    Case 3, 4 '丈2
+'      If .Take2.Visible = True Then NW = Format((Val(CoilText * T2)), "0.0") 'フレーム
+'    End Select
+'
+'    Select Case coilNo
+'    Case 1: .NW1 = Format(NW, "0.0")
+'    Case 2: .NW2 = Format(NW, "0.0")
+'    Case 3: .NW3 = Format(NW, "0.0")
+'    Case 4: .NW4 = Format(NW, "0.0")
+'    End Select
+'  '*************************風袋の計算
+'    HU = Val((PIN + TIP + SUT + ESA + POR + HB + PET + PAR + DRY)) '2024.11.25_EXDRY追加
+'  '*************************合計する GW　四捨五入はここだけで行う
+''    GW = Format(Val(HU + NW), "0.0")
+'    GW = Val(HU) + Val(NW)   '丸めない
+'    Select Case coilNo
+'    Case 1: .GW1 = Format(Application.WorksheetFunction.Round(GW, 0), "0.0") '四捨五入繰り上げ
+'    Case 2: .GW2 = Format(Application.WorksheetFunction.Round(GW, 0), "0.0")
+'    Case 3: .GW3 = Format(Application.WorksheetFunction.Round(GW, 0), "0.0")
+'    Case 4: .GW4 = Format(Application.WorksheetFunction.Round(GW, 0), "0.0")
+'    End Select
+'  End With
+' '*************************表記フォームへの記載_丈1,No1のみとする
+'  With 表記用
+'  'クリア
+'   .PI = ""
+'   .TIP = ""
+'   .SUT = ""
+'   .ESA = ""
+'   .POR = ""
+'   .PAR = ""
+'   .PET = ""
+'   .HB = ""
+'   .NW = ""
+'   .HU = ""
+'   .GW = ""
+'   .DRY = ""
+'
+'   .PI = Format(PIN, "0.000")
+'   .TIP = Format(TIP, "0.00")
+'   .SUT = Format(SUT, "0.000")
+'   .ESA = Format(ESA, "0.000")
+'   .POR = Format(POR, "0.000")
+'   .PAR = Format(PAR, "0.0")
+'   .PET = Format(PET, "0.000")
+'   .HB = Format(HB, "0.00")
+'   .NW = Format(NW, "0.0")
+'   .DRY = Format(DRY, "0.000")
+'
+'   .HU = Format(Application.WorksheetFunction.Round(HU, 0), "0.0")
+'   .GW = Format(Application.WorksheetFunction.Round(GW, 0), "0.0")
+' '*************************検算用
+'  'クリア
+'   .PIsiki = ""
+'   .TIPsiki = ""
+'   .SUTsiki = ""
+'   .ESAsiki = ""
+'   .PORsiki = ""
+'   .PARsiki = ""
+'   .PETsiki = ""
+'   .NWsiki = ""
+'   .DRYsiki = ""
+'
+'   .HUsiki = ""
+'   .GWsiki = ""
+'
+'    Dim TempDiameter As String, HalfDiameter As String, UnitWeight  As Double
+'    If テスラ指定サイズ.TIP1000 Then
+'      TempDiameter = "1100"
+'      HalfDiameter = "550"
+'      UnitWeight = W1(2)
+'    ElseIf テスラ指定サイズ.TIP950 Then
+'      TempDiameter = "1000"
+'      HalfDiameter = "500"
+'      UnitWeight = W1(19)
+'    ElseIf テスラ指定サイズ.TIP820 Then
+'      TempDiameter = "900"
+'      HalfDiameter = "450"
+'      UnitWeight = W1(20)
+'    End If
+'
+'   .PIsiki = 4 & "*" & W1(1) & "*" & K1(1)
+'   .TIPsiki = "(" & CoilText & "+" & 1 & ")" & "*" & UnitWeight
+'   .SUTsiki = TempDiameter & "*" & PIN & "/ 10 ^ 3)" & "*" & 5 & "*" & W1(3) & "*" & K1(3) & "[約5周計算]"
+'    If TA > 0.82 Then
+'     .ESAsiki = TempDiameter & "*" & PIN & "/ 10 ^ 3)" & "*" & 2 & "*" & W1(4) & "*" & K1(4) & "[2周計算]"
+'    Else
+'     .ESAsiki = TempDiameter & "*" & PIN & "/ 10 ^ 3)" & "*" & W1(4) & "*" & K1(4) & "[1周計算]"
+'    End If
+'
+'   .PORsiki = "[" & "(" & HalfDiameter & "^ 2 * PIN" & "*" & 2 & ")" & "]" & "+" & "[" & "(" & "(" & TA & "+" & TA & "/ 2)" & "*" & TempDiameter & "*" & PIN & "/ 10 ^ 3" & ")" & ")" & _
+'   "/ 10 ^ 6" & "]" & "*" & W1(6) & "*" & K1(6) & "  " & "包み分は高さの半分とする"
+'   .PARsiki = W1(21) & "*" & 2
+'   .PETsiki = "[" & "(" & TempDiameter & "*" & PIN & "/ 10 ^ 3" & "+" & 0.2 & ")" & "*" & 4 & ")" & "]" & "+" & "[" & "(" & "(" _
+'   & TA & "+" & 0.2 & ")" & "*" & 4 & ")" & "*" & 2 & ")" & "+" & "(" & "(" _
+'   & TempDiameter & "*" & 4 & ")" & "*" & 2 & ") / 10 ^ 3" & "]" & "*" & W1(5) & "*" & K1(5) & "  " & "締める時の余分を200mmとした"
+'    If テスラ指定サイズ.Take1.Visible = True Then
+'      .NWsiki = CoilText & "*" & T1
+'    End If
+'
+'   .HUsiki = Format(PIN, "0.00") & "+" & Format(TIP, "0.00") & "+" & Format(SUT, "0.00") & "+" & Format(ESA, "0.00") & "+" _
+'   & Format(POR, "0.00") & "+" & Format(HB, "0.00") & "+" & Format(PAR, "0.0") & "+" & Format(PET, "0.00") & "+" & Format(DRY, "0.000")
+'
+'   .GWsiki = Format(HU, "0.000") & "+" & Format(NW, "0.0")
+'   'Format(PIN, "0.00") & "+" & Format(TIP, "0.00") & "+" & Format(SUT, "0.00") & "+" & Format(ESA, "0.00") & "+" _
+'   & Format(POR, "0.00") & "+" & Format(HB, "0.00") & "+" & Format(PAR, "0.0") & "+" & Format(PET, "0.00") & "+" & Format(NW, "0.0")
+'
+'   .DRYsiki = W1(22) & "*" & 1
+'  End With
+'
+''<<<<<<<<<<<<<<<<<<<検算用をシートへ移す<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+'  Dim KONNO As String
+'  Select Case coilNo
+'  Case 1
+'    i = 1
+'    KONNO = "丈1.1梱包目:"
+'  Case 2
+'    i = 15
+'    KONNO = "丈1.2梱包目:"
+'  Case 3
+'    i = 29
+'    KONNO = "丈2.1梱包目:"
+'  Case 4
+'    i = 43
+'    KONNO = "丈2.2梱包目:"
+'  End Select
+'
+'  With ThisWorkbook.Sheets(SheetsName)
+'    .Cells(i + 1, 3) = 表記用.PIsiki
+'    .Cells(i + 2, 3) = 表記用.TIPsiki
+'    .Cells(i + 3, 3) = 表記用.SUTsiki
+'    .Cells(i + 4, 3) = 表記用.ESAsiki
+'    .Cells(i + 5, 3) = 表記用.PORsiki
+'    .Cells(i + 6, 3) = 表記用.HBsiki
+'    .Cells(i + 7, 3) = 表記用.PARsiki
+'    .Cells(i + 8, 3) = 表記用.PETsiki
+'    .Cells(i + 9, 3) = 表記用.DRYsiki
+'
+'    If coilNo = 1 Or coilNo = 2 Then
+'      .Cells(i + 10, 3) = T1 & "*" & CoilText
+'    ElseIf coilNo = 3 Or coilNo = 4 Then
+'      .Cells(i + 10, 3) = T2 & "*" & CoilText
+'    End If
+'
+'    .Cells(i + 11, 3) = 表記用.HUsiki
+'    .Cells(i + 12, 3) = 表記用.GWsiki
+'
+'    .Cells(i, 1) = KONNO & CoilText & "本"
+'    .Cells(i + 1, 1) = "ﾋﾟﾝ"
+'    .Cells(i + 2, 1) = "ﾁｯﾌﾟﾎﾞｰﾙ"
+'    .Cells(i + 3, 1) = "ｽﾄﾚｯﾁﾌｨﾙﾑ"
+'    .Cells(i + 4, 1) = "ｴｻﾌｫｰﾑ"
+'    .Cells(i + 5, 1) = "ﾎﾟﾘｼｰﾄ"
+'    .Cells(i + 6, 1) = "ﾊｰﾄﾞﾎﾞｰﾄﾞ"
+'    .Cells(i + 7, 1) = "樹脂ﾊﾟﾚｯﾄ"
+'    .Cells(i + 8, 1) = "ﾍﾟｯﾄﾊﾞﾝﾄﾞ"
+'    .Cells(i + 9, 1) = "EX-DRY"
+'    .Cells(i + 10, 1) = "NW"
+'    .Cells(i + 11, 1) = "風袋"
+'    .Cells(i + 12, 1) = "GW"
+'
+'    .Cells(i + 1, 2) = Format(PIN, "0.000")
+'    .Cells(i + 1, 2).NumberFormatLocal = "0.000_ "
+'    .Cells(i + 2, 2) = Format(TIP, "0.00")
+'    .Cells(i + 2, 2).NumberFormatLocal = "0.00_ "
+'    .Cells(i + 3, 2) = Format(SUT, "0.000")
+'    .Cells(i + 3, 2).NumberFormatLocal = "0.000_ "
+'    .Cells(i + 4, 2) = Format(ESA, "0.000")
+'    .Cells(i + 4, 2).NumberFormatLocal = "0.000_ "
+'    .Cells(i + 5, 2) = Format(POR, "0.000")
+'    .Cells(i + 5, 2).NumberFormatLocal = "0.000_ "
+'    .Cells(i + 6, 2) = Format(HB, "0.000")
+'    .Cells(i + 6, 2).NumberFormatLocal = "0.00_ "
+'    .Cells(i + 7, 2) = Format(PAR, "0.0")
+'    .Cells(i + 7, 2).NumberFormatLocal = "0.0_ "
+'    .Cells(i + 8, 2) = Format(PET, "0.000")
+'    .Cells(i + 8, 2).NumberFormatLocal = "0.000_ "
+'    .Cells(i + 9, 2) = Format(DRY, "0.000")
+'    .Cells(i + 9, 2).NumberFormatLocal = "0.000_ "
+'
+'    .Cells(i + 10, 2) = Format(NW, "0.0")
+'    .Cells(i + 10, 2).NumberFormatLocal = "0.0_ "
+'    .Cells(i + 11, 2) = Format(Application.WorksheetFunction.Round(HU, 0), "0.0")
+'    .Cells(i + 11, 2).NumberFormatLocal = "0.0_ "
+'    .Cells(i + 12, 2) = Format(Application.WorksheetFunction.Round(GW, 0), "0.0") 'Format(GW, "0.0") '
+'    .Cells(i + 12, 2).NumberFormatLocal = "0.0_ "
+'  End With
+'
+''If テスラ指定サイズ.Take1.Visible = False Then ThisWorkbook.Sheets(SheetsName).Range("A1:C24").ClearContents '丈1非表示のときは1の部分をクリア
+''If テスラ指定サイズ.Take2.Visible = False Then ThisWorkbook.Sheets(SheetsName).Range("A25:C48").ClearContents '丈２非表示のときは2の部分をクリア
+'ThisWorkbook.Sheets(SheetsName).Activate
+'ThisWorkbook.Sheets(SheetsName).Cells.Select
+'With Selection.Font
+'  .name = "メイリオ"
+'  .size = 10.5
+'  .ThemeFont = xlThemeFontNone
+'End With
+'ThisWorkbook.Sheets(SheetsName).Cells.EntireColumn.AutoFit
+'
+'Call 風袋罫線設定
+'End Sub
+'
+'Public Function HB計算(CoilText As Double, coilNo As Long) As Double '2021.12.28**コード短縮化
+''質量係数は固定なので注意_シート設定
+'If Not IsNumeric(coilNo) Then Exit Function
+'Dim col As Double 'コイル巾
+'Dim TA As Double, TA2 As Double 'コイル高さ
+'Dim HB As Double, HB2 As Double 'ハードボード
+'Dim SheetsName As String: SheetsName = "風袋計算"
+'Dim ws As Worksheet, Flag As Boolean
+'Dim i As Long
+'Dim n As String: n = ThisWorkbook.Sheets("設定").Cells(Rows.count, 1).End(xlUp).Row
+'
+'   表記用.HB = "" '表記xﾌｵｰﾑｸﾘｱ
+' '*************************係数読み込み
+'  For i = 3 To n
+'      W1(i - 2) = ThisWorkbook.Sheets("設定").Cells(i, 2)
+'      K1(i - 2) = ThisWorkbook.Sheets("設定").Cells(i, 3)
+'  Next i
+' '*************************コイル直径を1100とする(パレットサイズと同等)
+'    Dim PI As Double:  PI = WorksheetFunction.PI()
+'    Dim GAI As Double
+'
+'    If テスラ指定サイズ.TIP1000 Then GAI = Val(1100 * PI / 10 ^ 3) 'M単位
+'    If テスラ指定サイズ.TIP950 Then GAI = Val(1000 * PI / 10 ^ 3)
+'    If テスラ指定サイズ.TIP820 Then GAI = Val(900 * PI / 10 ^ 3)
+' '*************************コイル高さ
+'    With テスラ指定サイズ
+'      Select Case True
+'      Case .CheckBox1: col = 40#
+'      Case .CheckBox2: col = 33#
+'      Case .CheckBox3: col = 73#
+'      Case .CheckBox4: col = 82.5
+'      Case .CheckBox5: col = 53.5
+'      Case .CheckBox6: col = 63#
+'      End Select
+'
+'      Select Case True
+'      Case .OptionButton7 Or .OptionButton8:   col = 40#
+'      Case .OptionButton9 Or .OptionButton10:  col = 33#
+'      Case .OptionButton1 Or .OptionButton2:   col = 73#
+'      Case .OptionButton3 Or .OptionButton4:   col = 82.5
+'      Case .OptionButton5 Or .OptionButton6:   col = 53.5
+'      Case .OptionButton11 Or .OptionButton12: col = 63#
+'      End Select
+'
+'      Dim TIPT As Double 'ﾁｯﾌﾟﾎﾞｰﾙの高さ　1枚0.7mm
+'      TIPT = Val(((CoilText + 1) * 0.7) / 10 ^ 3) 'プラス1枚(一番上)
+'      TA = Val((CoilText * col) + TIPT) / 10 ^ 3 'ﾃｷｽﾄﾎﾞｯｸｽの数字×ﾁｪｯｸの入っているｺｲﾙ 'M単位
+'    End With
+' '*************************HB
+'   '固定物2種とそれ以外を分ける　500*2000 5700*2000
+'   '固定物八角HB
+'    With テスラ指定サイズ
+'      Dim HBFlag As Boolean
+'      Select Case True
+'      Case (.CheckBox1) And (CoilText = 14): HBFlag = True
+'      Case (.CheckBox2) And (CoilText = 15): HBFlag = True
+'      Case (.CheckBox3) And (CoilText = 8):  HBFlag = True
+'      Case (.CheckBox3) And (CoilText = 7):  HBFlag = True
+'      Case (.CheckBox4) And (CoilText = 7):  HBFlag = True
+'      Case (.CheckBox4) And (CoilText = 6):  HBFlag = True
+'      Case (.CheckBox5) And (CoilText = 10): HBFlag = True
+'      Case (.CheckBox5) And (CoilText = 11): HBFlag = True
+'      Case (.CheckBox6) And (CoilText = 9):  HBFlag = True
+'      Case (.CheckBox6) And (CoilText = 8):  HBFlag = True
+'
+'      Case .OptionButton5 Or .OptionButton6: HBFlag = True '53.5サイズ
+'
+'      Case Else:                             HBFlag = False
+'      End Select
+'      '計算と計算式******やや長いHB_700mmぐらい？
+'      If HBFlag Then
+'        If col = 53.5 And (CoilText = 11) Then  '11本梱包_2024.11.12修正  デフォルト本数
+'          HB = 2 * W1(10) * K1(10) + 2 * W1(18) * K1(18) '上下2枚胴巻き2枚
+'          表記用.HBsiki = 2 & "*" & W1(10) & "*" & K1(10) & "+" & 2 & "*" & W1(18) & "*" & K1(18) & "[上下2枚胴巻き2枚]"
+'        Else 'それ以外はHBを計算重量
+'          HB = (GAI + 0.7) * TA * W1(7) * K1(7) + 2 * W1(10) * K1(10)
+'          表記用.HBsiki = "(" & GAI & "+" & 0.7 & ")" & "*" & TA & "*" & W1(7) & "*" & K1(7) & "+" & 2 & "*" & W1(10) & "*" & K1(10) & "[計算重量:外周長いHB]"
+'        End If
+'      Else
+'        HB = (GAI + 0.7) * TA * W1(7) * K1(7) + 2 * W1(10) * K1(10)
+'        表記用.HBsiki = "(" & GAI & "+" & 0.7 & ")" & "*" & TA & "*" & W1(7) & "*" & K1(7) & "+" & 2 & "*" & W1(10) & "*" & K1(10) & "[計算重量:外周長いHB]"
+'      End If
+'      '書き込み
+'      Dim HBrange(1 To 2) As Range
+''      For i = 1 To 4
+'        Select Case coilNo
+'        Case 1
+'          If テスラ指定サイズ.CoilH1 <> "" Then
+'            Set HBrange(1) = ThisWorkbook.Sheets(SheetsName).Cells(7, 3)
+'            Set HBrange(2) = ThisWorkbook.Sheets(SheetsName).Cells(7, 2)
+'          End If
+'        Case 2
+'          If テスラ指定サイズ.CoilH2 <> "" Then
+'            Set HBrange(1) = ThisWorkbook.Sheets(SheetsName).Cells(21, 3)
+'            Set HBrange(2) = ThisWorkbook.Sheets(SheetsName).Cells(21, 2)
+'          End If
+'        Case 3
+'          If テスラ指定サイズ.CoilH3 <> "" Then
+'            Set HBrange(1) = ThisWorkbook.Sheets(SheetsName).Cells(35, 3)
+'            Set HBrange(2) = ThisWorkbook.Sheets(SheetsName).Cells(35, 2)
+'          End If
+'        Case 4
+'          If テスラ指定サイズ.CoilH4 <> "" Then
+'            Set HBrange(1) = ThisWorkbook.Sheets(SheetsName).Cells(49, 3)
+'            Set HBrange(2) = ThisWorkbook.Sheets(SheetsName).Cells(49, 2)
+'          End If
+'        End Select
+''      Next i
+'      If Not HBrange(1) Is Nothing Then HBrange(1) = 表記用.HBsiki
+'      If Not HBrange(2) Is Nothing Then HBrange(2) = Format(HB, "0.000")
+'      Set HBrange(1) = Nothing
+'      Set HBrange(2) = Nothing
+'    End With
+'HB計算 = Format(HB, "0.000")
+'表記用.HB = Format(HB, "0.000")
+'End Function
+
+
