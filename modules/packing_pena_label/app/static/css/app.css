@@ -762,3 +762,9 @@ body.print-only{background:#fff; color:var(--ink)}
 .card>.tbl:not(.sizetbl){width:calc(100% - 20px)}
 .tfig .tf-hole{fill:var(--panel); opacity:.9}
 .tfig .tf-center{stroke:currentColor; stroke-width:.8; stroke-dasharray:8 3 2 3; opacity:.55}
+
+/* 色の帯の無いサイズ(足したサイズ・決めていない名前)。暗い配色でも見出しが読めるよう明るい帯にする(統合 1.2.38) */
+.sz-extra .sz-head{background:#e4dcf5}
+.sz-plain .sz-head{background:#dfe6ef}
+.size-row .sz-tag{font-size:10px; font-weight:700; padding:0 5px; margin-left:4px; border-radius:8px;
+  background:#5b3fa0; color:#fff; vertical-align:1px}

@@ -131,8 +131,25 @@ class Workflow:
                 self.master.apply_extra(rows)
                 self.label_sheets.invalidate()
                 self.label_sheets.apply_to(self.master, self.materials.db_path, force=True)
+                self._drop_vanished_selection()
         except Exception as exc:                      # noqa: BLE001
             log.warning("足したサイズを読み込めません: %s", exc)
+
+    def _drop_vanished_selection(self) -> None:
+        """選んでいたサイズが消えた(マスタ管理で消した足したサイズ)なら、選択と現状値を外す(統合 1.2.38)。"""
+        st = self.load_state()
+        gone_ob = bool(st.selected_ob) and self.master.get(st.selected_ob) is None
+        gone_cb = bool(st.selected_cb) and not any(
+            c.cb_key == "CheckBox%d" % st.selected_cb for c in self.master.all())
+        if not (gone_ob or gone_cb):
+            return
+        if gone_ob:
+            st.selected_ob = 0
+        if gone_cb:
+            st.selected_cb = 0
+        st.lbl_kensa_no = st.lbl_size1 = st.lbl_weight1 = st.lbl_size2 = st.lbl_weight2 = ""
+        self.save_state(st)
+        log.info("選んでいたサイズが消えたので、選択を外しました")
 
     def refresh_label_sheets(self, force: bool = False) -> int:
         """共有マスタの ラベル台紙一覧 を読み直して上書きする。

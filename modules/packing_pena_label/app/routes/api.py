@@ -528,11 +528,17 @@ class ApiRoutes:
             return {"ok": False, "level": "warn",
                     "message": "1 つ以上のサイズにチェックを入れてください"}
         ordered = [b for b in known if b in want]
+        # 外した「足したサイズ」を覚える(足したサイズは、外していなければどの PC にも出す。統合 1.2.38)
+        extras = list(dict.fromkeys(c.base_name for c in self.wf.master.all()
+                                    if self.wf.master.is_extra(c.ob_idx)))
+        hidden = [b for b in extras if b not in want]
         current = load_local_overrides(self.cfg)
         current["visible_sizes"] = ordered
+        current["hidden_extra_sizes"] = hidden
         save_local_overrides(current, self.cfg)
         before = list(self.cfg.visible_sizes or [])
         self.cfg.visible_sizes = ordered
+        self.cfg.hidden_extra_sizes = hidden
         shown = "、".join(ordered)
         log.info("出すサイズを変えました: %s → %s", before, ordered)
         return {"ok": True, "level": "info", "sizes": ordered,
@@ -558,18 +564,20 @@ class ApiRoutes:
         self.wf.refresh_label_sheets(force=True)
         msg = ("サイズを足しました: %s(型番 %s)。全ラインで選べるようになります。"
                % (r["baseName"], r["kataban"]))
+        # 足したサイズはどの PC の指定サイズの画面にも出る(統合 1.2.38。以前は足した PC だけで、
+        # ほかの PC は各自チェックを入れる必要があった)。「このPCに出す」を外したときだけ、この PC で外す
+        hidden = [b for b in (self.cfg.hidden_extra_sizes or []) if b != r["baseName"]]
+        if not body.get("show", True):
+            hidden.append(r["baseName"])
+        if hidden != list(self.cfg.hidden_extra_sizes or []):
+            current = load_local_overrides(self.cfg)
+            current["hidden_extra_sizes"] = hidden
+            save_local_overrides(current, self.cfg)
+            self.cfg.hidden_extra_sizes = hidden
         if body.get("show", True):
-            # 足した PC では、そのまま画面に出す(ほかの PC は各自の設定でチェックを入れる)
-            want = list(self.cfg.visible_sizes or [])
-            if want and r["baseName"] not in want:
-                want.append(r["baseName"])
-                current = load_local_overrides(self.cfg)
-                current["visible_sizes"] = want
-                save_local_overrides(current, self.cfg)
-                self.cfg.visible_sizes = want
-            msg += "\nこのPCの指定サイズの画面に出しました。ほかのPCは設定の「サイズ」でチェックを入れてください。"
+            msg += "\nどのPCの指定サイズの画面にも出ます(出したくないPCは、設定の「サイズ」でチェックを外す)。"
         else:
-            msg += "\nまだどのPCの画面にも出ていません。出すPCで、設定の「サイズ」でチェックを入れてください。"
+            msg += "\nこのPCの画面には出していません(ほかのPCには出ます)。"
         if r.get("backup"):
             msg += "\n書く前の控え: %s" % r["backup"]
         return {"ok": True, "level": "info", "message": msg, **r}

@@ -270,7 +270,7 @@ class PageRoutes:
         want = [str(x).strip() for x in (self.cfg.visible_sizes or []) if str(x).strip()]
         if not want:
             return None
-        return {_dims_of(b) for b in want}
+        return {_dims_of(b) for b in self.visible_bases()}
 
     def visible_bases(self) -> List[str]:
         """画面に出すサイズ名。設定が空なら全件。
@@ -279,11 +279,18 @@ class PageRoutes:
         出すものを設定（``visible_sizes``）で絞れるようにしてある。
         """
         want = [str(x).strip() for x in (self.cfg.visible_sizes or []) if str(x).strip()]
-        known = [c.base_name for c in self.wf.master.all()]
+        known = list(dict.fromkeys(c.base_name for c in self.wf.master.all()))
         if not want:
             return known
         # 設定に書かれていても存在しないサイズは無視する
-        return [b for b in want if b in known]
+        out = [b for b in want if b in known]
+        # 足したサイズ(共有の資材マスタ)は、この PC で外していなければ出す(統合 1.2.38)
+        hidden = {str(x).strip() for x in (self.cfg.hidden_extra_sizes or [])}
+        for c in self.wf.master.all():
+            if (self.wf.master.is_extra(c.ob_idx) and c.base_name not in out
+                    and c.base_name not in hidden):
+                out.append(c.base_name)
+        return out
 
     def _size_rows(self, state) -> str:
         """サイズ選択欄。OB（丈1/丈2 個別）と CB（同時）の両方を描く。"""
@@ -302,7 +309,10 @@ class PageRoutes:
             cfgs = sorted(by_base[base], key=lambda c: c.ob_idx)
             c1 = cfgs[0]
             c2 = cfgs[1] if len(cfgs) > 1 else cfgs[0]
-            cls = _SIZE_CLASS.get(base, "")
+            # 足したサイズには色の帯が無い。暗い配色では見出しの文字を濃くしているので、帯が無いと
+            # 濃い地に濃い字で見えなかった(統合 1.2.38・現場の指摘)。足したサイズにも帯を付ける
+            extra = self.wf.master.is_extra(c1.ob_idx)
+            cls = _SIZE_CLASS.get(base, "") or ("sz-extra" if extra else "sz-plain")
             note = _SIZE_NOTE.get(base, "") or self.wf.master.note_of(base)
 
             if c1.cb_key == SM.NAMED_CB_KEY:
@@ -318,7 +328,8 @@ class PageRoutes:
 
             out.append(
                 f'<div class="size-row {cls}">'
-                f'<div class="sz-head">{esc(base)}</div>'
+                f'<div class="sz-head">{esc(base)}'
+                + (' <span class="sz-tag">追加</span>' if extra else '') + '</div>'
                 f'<div class="sz-opts">'
                 f'<label{ob_hidden}><input type="radio" name="size" data-kind="ob" '
                 f'data-ob="{c1.ob_idx}" {"checked" if state.selected_ob == c1.ob_idx else ""}>'
@@ -1430,7 +1441,7 @@ class PageRoutes:
         from ..services import size_extra as SX
         self.wf.refresh_sizes()
         master = self.wf.master
-        want = [str(x).strip() for x in (self.cfg.visible_sizes or []) if str(x).strip()]
+        shown_set = set(self.visible_bases())
         firsts = {}
         for c in master.all():
             firsts.setdefault(c.base_name, c)
@@ -1438,7 +1449,7 @@ class PageRoutes:
         rows = []
         for i, base in enumerate(order):
             c = firsts[base]
-            on = (not want) or base in want
+            on = base in shown_set
             origin = "足したサイズ(共有の資材マスタ)" if master.is_extra(c.ob_idx) else "同梱"
             rows.append(
                 f'<tr><td class="ck"><input type="checkbox" id="vs_{i}" data-vsize="{esc(base)}"'
@@ -1446,11 +1457,12 @@ class PageRoutes:
                 f'<td><label for="vs_{i}">{esc(base)}</label></td>'
                 f'<td>{esc(c.kataban)}</td><td class="num">{esc(fmt_width(c.width_mm))}</td>'
                 f'<td>{esc(origin)}</td></tr>')
-        shown = sum(1 for b in order if (not want) or b in want)
+        shown = sum(1 for b in order if b in shown_set)
         visible = (
             f'<div class="card"><h2>指定サイズの画面に出すサイズ {_where("local")}</h2>'
             f'<p class="hint">チェックを外したサイズは、指定サイズの画面と全サイズの一覧に出ません'
             f'(いまラインに来ないサイズの選び間違いを防ぐため)。<b>このPCだけ</b>の設定です。'
+            f'足したサイズ(共有の資材マスタ)は、どのPCにも最初から出ます(外したPCだけ出ません)。'
             f'保存には合言葉が要ります。いま {shown} / {len(order)} サイズを出しています。</p>'
             f'<table class="tbl sizetbl"><thead><tr><th>出す</th><th>サイズ</th><th>型番(丈1)</th>'
             f'<th>巾(mm)</th><th>定義</th></tr></thead><tbody>{"".join(rows)}</tbody></table>'
@@ -1479,7 +1491,7 @@ class PageRoutes:
             f'<label>記号(任意)<input type="text" id="szS" maxlength="10"{disabled}></label>'
             f'<label class="wide">備考(任意。画面に赤字で出す)<input type="text" id="szN" maxlength="60" '
             f'placeholder="例: 2026.10.14追加"{disabled}></label>'
-            f'<label class="ckline"><input type="checkbox" id="szShow" checked{disabled}> このPCの指定サイズの画面に出す</label>'
+            f'<label class="ckline"><input type="checkbox" id="szShow" checked{disabled}> このPCの指定サイズの画面に出す(ほかのPCには最初から出ます)</label>'
             f'</div>'
             f'<div class="btn-row"><button type="button" class="btn btn-primary" id="szAdd"{disabled}>'
             f'サイズを足す</button></div>')
@@ -2149,7 +2161,7 @@ class PageRoutes:
   // 行は「__行」(取り込み元の rowid) で指す。管理番号は業務の列であって
   // 行の名前ではない（重複も欠番もありうる）。ここを取り違えると
   // 「直したつもりが別の行だった」になる。
-  var M = {table:"", columns:[], editableColumns:[], fixedRows:false,
+  var M = {table:"", columns:[], editableColumns:[], fixedRows:false, canDelete:false,
            rowKey:"__行", rows:[], editable:false, cur:null,
            sort:"", sortDir:"asc"};
 
@@ -2217,6 +2229,7 @@ class PageRoutes:
         M.sort = j.sort || ""; M.sortDir = j.sortDir || "asc";
         M.editableColumns = j.editableColumns || j.columns;
         M.fixedRows = !!j.fixedRows;
+        M.canDelete = !!j.canDelete;
         mEl("mNew").disabled = !j.editable || M.fixedRows;
         mEl("mNote").textContent =
           (j.viewOnlyWhy ? j.viewOnlyWhy + " " : "") +
@@ -2296,7 +2309,7 @@ class PageRoutes:
     });
     mEl("mEditTitle").textContent =
       row ? ("行を直す（" + M.rowKey + "=" + row[M.rowKey] + "）") : "行を足す";
-    mEl("mDelete").hidden = !row || M.fixedRows;
+    mEl("mDelete").hidden = !row || !M.canDelete;
     mEl("mEdit").hidden = false;
     mResult("");
   }

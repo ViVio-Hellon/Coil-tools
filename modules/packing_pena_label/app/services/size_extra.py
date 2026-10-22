@@ -15,10 +15,15 @@ JSON(同梱・設定のサイズ構成マスタ)は土台のまま、この表�
     記号     … 型番マスタの記号(画面に出すだけ。計算には使わない)
     備考     … 指定サイズの画面に赤字で出す注記
     登録日時 … 足した日時
+    削除日時 … マスタ管理で消した日時(統合 1.2.38)。入っている行は読まない
 
 サイズ名と巾は**あとから直さない**(台紙・状態がこの番号とサイズで結び付く)。
-間違えたときは、そのサイズを画面に出さないようにして、正しいものを足し直す。
+間違えたときは、マスタ管理で消して(または画面に出さないようにして)、正しいものを足し直す。
 型番・記号・備考はマスタ管理から直せる。
+
+**消すのは論理削除**(行は残し、削除日時を入れる。統合 1.2.38・現場の指摘)。管理番号を新しいサイズで
+使い回すと、各 PC の手元に残った台紙の中身(前のサイズの検番・重量・型番)が新しいサイズに出てしまう。
+消したサイズと同じ寸法は、もう一度足せる(番号は新しくなる)。
 """
 
 from __future__ import annotations
@@ -40,6 +45,8 @@ log = logging.getLogger(__name__)
 
 TABLE_NAME = "ペナラベル追加サイズ"
 COLUMNS = ("管理番号", "サイズ名", "巾", "型番", "記号", "備考", "登録日時")
+#: 消した日時の列(論理削除。master_admin の Managed.soft_delete と同じ名前)
+DELETED_COLUMN = "削除日時"
 
 #: 足したサイズの台紙番号はここから(同梱の 1..14 と重ねない)
 FIRST_OB = FIRST_EXTRA_OB
@@ -96,6 +103,8 @@ def read_rows(path: str) -> List[dict]:
         try:
             cur = conn.execute('SELECT * FROM "%s" ORDER BY "管理番号"' % TABLE_NAME)
             for r in cur.fetchall():
+                if str(dict(r).get(DELETED_COLUMN) or "").strip():
+                    continue                    # 消したサイズ(統合 1.2.38)
                 row = _row(dict(r))
                 if row:
                     out.append(row)
@@ -185,10 +194,16 @@ def add(repo, master, thickness, width, kataban, symbol="", note="") -> dict:
     try:
         conn.execute(
             'CREATE TABLE IF NOT EXISTS "%s" ("管理番号" INTEGER, "サイズ名" TEXT, "巾" REAL, '
-            '"型番" TEXT, "記号" TEXT, "備考" TEXT, "登録日時" TEXT)' % TABLE_NAME)
+            '"型番" TEXT, "記号" TEXT, "備考" TEXT, "登録日時" TEXT, "%s" TEXT)'
+            % (TABLE_NAME, DELETED_COLUMN))
+        # 番号は消したサイズの分も数える(使い回さない。統合 1.2.38)
         used = [int(r[0]) for r in conn.execute('SELECT "管理番号" FROM "%s"' % TABLE_NAME)
                 if str(r[0]).lstrip("-").isdigit()]
-        for r in conn.execute('SELECT "サイズ名" FROM "%s"' % TABLE_NAME):
+        has_deleted = DELETED_COLUMN in MA.columns(conn, TABLE_NAME)
+        alive = ('SELECT "サイズ名" FROM "%s" WHERE COALESCE("%s", \'\') = \'\''
+                 % (TABLE_NAME, DELETED_COLUMN)) if has_deleted else \
+            'SELECT "サイズ名" FROM "%s"' % TABLE_NAME
+        for r in conn.execute(alive):
             other = normalize_size_name(str(r[0] or ""))
             if _dims(other) == _dims(name):
                 raise MA.Refused(MA.REFUSE_BAD_VALUE, "同じ寸法のサイズがもうあります: %s" % other)

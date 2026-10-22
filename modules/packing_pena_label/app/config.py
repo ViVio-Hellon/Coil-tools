@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 #: アプリケーションID（ローカル領域のフォルダ名、多重起動判定、/api/health の識別子）
 APP_ID = "PackingPenaLabel"
 APP_NAME = "梱包ペナ ラベル・風袋計算"
-APP_VERSION = "1.5.38"
+APP_VERSION = "1.5.39"
 #: 版を切った日。画面のバージョン表示に添える。
 #: **中身を直したら必ずここを上げる**。上げ忘れると、
 #: 現場が「新しいファイルに差し替わったか」を画面から判断できない。
@@ -150,6 +150,11 @@ class Config:
     #: 名前は `data/size_master.json` の baseName（表記統一後）で書く。
     visible_sizes: List[str] = field(
         default_factory=lambda: ["1.0mm×53.5mm", "0.8mm×53.5mm"])
+
+    #: この PC で**出さない**ことにした「足したサイズ」(統合 1.2.38)。
+    #: 足したサイズ(共有の資材マスタ)は**どの PC でも最初から出す**。ここに書いたものだけ出さない。
+    #: 以前は足した PC にだけ出て、ほかの PC は各自の設定でチェックを入れる必要があった
+    hidden_extra_sizes: List[str] = field(default_factory=list)
 
     #: 監視レベル（基盤仕様書 3章）。入力・計算・帳票アプリなので 1
     monitor_level: int = 1

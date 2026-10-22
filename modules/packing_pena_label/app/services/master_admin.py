@@ -100,6 +100,10 @@ class Managed:
     #: 指定があるとき、その表は **行数が決まっている** とみなし、
     #: 行の追加・削除も断る（台紙は 14 枚で固定、といった表）。
     editable: Tuple[str, ...] = ()
+    #: 列を絞った表(行数が決まっている表)でも、行を消すのは許す(統合 1.2.38)
+    deletable: bool = False
+    #: 消すときは行を残し、この列に日時を入れる(論理削除)。番号を使い回さないため(統合 1.2.38)
+    soft_delete: str = ""
 
 
 #: **このツールが使う表だけを出す。**
@@ -116,9 +120,12 @@ MANAGED: Tuple[Managed, ...] = (
             editable=("シート名", "型番")),
     # 設定の「サイズ」から足したサイズ(統合 1.2.16。services/size_extra.py)。
     # サイズ名・巾・管理番号は台紙と結び付くので直させない(間違えたら出さずに足し直す)
+    # 消すのは許す(統合 1.2.38・現場の指摘: 足したサイズを消せない)。行は残して「削除日時」を
+    # 入れる。管理番号(台紙の番号)を新しいサイズで使い回すと、各 PC の手元に残った台紙の中身
+    # (前のサイズの検番・重量・型番)が新しいサイズに出てしまうため
     Managed("ペナラベル追加サイズ", "ペナラベル追加サイズ", "サ",
-            "設定の「サイズ」から足したサイズ(型番・記号・備考を直せる)",
-            editable=("型番", "記号", "備考")),
+            "設定の「サイズ」から足したサイズ(型番・記号・備考を直せる。消すと画面に出なくなる)",
+            editable=("型番", "記号", "備考"), deletable=True, soft_delete="削除日時"),
 )
 BY_TABLE: Dict[str, Managed] = {m.table: m for m in MANAGED}
 
@@ -139,6 +146,12 @@ def fixed_rows(table: str) -> bool:
     """行数が決まっている表か（追加・削除を断る）。"""
     m = BY_TABLE.get(table)
     return bool(m and m.editable)
+
+
+def can_delete(table: str) -> bool:
+    """行を消せる表か。"""
+    m = BY_TABLE.get(table)
+    return bool(m) and (not m.editable or m.deletable)
 
 
 def view_only_why(table: str) -> str:
@@ -301,6 +314,7 @@ def page(repo, table: str, keyword: str = "",
         "columns": cols,
         "editableColumns": editable_columns(table, cols),
         "fixedRows": fixed_rows(table),
+        "canDelete": can_delete(table),
         "rowKey": ROW_KEY,
         "rows": rows,
         "sort": used,
@@ -426,18 +440,29 @@ def save_row(repo, table: str, row_id: Optional[int],
 def delete_row(repo, table: str, row_id: int) -> dict:
     table = _check_table(table)
     path = _require_editable(repo, table)
-    if fixed_rows(table):
+    if not can_delete(table):
         raise Refused(REFUSE_NOT_CREATABLE,
                       "この表は行を消せません（並びが決まっています）。")
+    soft = BY_TABLE[table].soft_delete
     conn = _connect(path, write=True)
     try:
         hit = conn.execute("SELECT rowid FROM %s WHERE rowid=?"
                            % _quote(table), (int(row_id),)).fetchone()
         if hit is None:
             raise Refused(REFUSE_NO_ROW, "その行はもうありません。読み直してください。")
+        if soft:
+            ensure_column(conn, table, soft)
+            done = conn.execute("SELECT %s FROM %s WHERE rowid=?" % (_quote(soft), _quote(table)),
+                                (int(row_id),)).fetchone()[0]
+            if str(done or "").strip():
+                raise Refused(REFUSE_NO_ROW, "その行はもう消してあります(%s)。" % done)
         backup = _backup(path)
-        conn.execute("DELETE FROM %s WHERE rowid=?" % _quote(table),
-                     (int(row_id),))
+        if soft:
+            conn.execute("UPDATE %s SET %s=? WHERE rowid=?" % (_quote(table), _quote(soft)),
+                         (time.strftime("%Y-%m-%d %H:%M:%S"), int(row_id)))
+        else:
+            conn.execute("DELETE FROM %s WHERE rowid=?" % _quote(table),
+                         (int(row_id),))
         conn.commit()
     except Refused:
         conn.rollback()
@@ -451,9 +476,19 @@ def delete_row(repo, table: str, row_id: int) -> dict:
         conn.close()
 
     _refresh(repo)
-    log.info("資材マスタから 1 行消しました: %s rowid=%s", table, row_id)
-    return {"ok": True, "action": "削除", "backup": backup,
-            "message": "削除しました。次の計算から反映されます。"}
+    log.info("資材マスタから 1 行消しました: %s rowid=%s%s", table, row_id,
+             "(論理削除)" if soft else "")
+    message = "削除しました。次の計算から反映されます。"
+    if soft:
+        message = ("削除しました。画面に出なくなります(行は残して「%s」を入れました。"
+                   "番号は新しいサイズで使い回しません)。" % soft)
+    return {"ok": True, "action": "削除", "backup": backup, "message": message}
+
+
+def ensure_column(conn: sqlite3.Connection, table: str, column: str) -> None:
+    """列が無ければ足す(あとから足した列。論理削除の「削除日時」など)。"""
+    if column not in columns(conn, table):
+        conn.execute("ALTER TABLE %s ADD COLUMN %s TEXT" % (_quote(table), _quote(column)))
 
 
 def _refresh(repo) -> None:
