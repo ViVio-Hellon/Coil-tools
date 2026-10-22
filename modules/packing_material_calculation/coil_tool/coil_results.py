@@ -9,7 +9,9 @@
 - BOX実績_作業開始_日付 が**いまの年月**の行だけを使い、同じロットは作業開始がいちばん新しい行
   (形式の決まりは梱包明細と同じ部品 `common/ls4_source.py`。仕様は `docs/仕掛ファイルの仕様.md`)
 - 第1パス(梱包課共有のフォルダ・名前) → 第2パス(仕掛台帳の第2パスのフォルダ・LS4LOT の代わりの名前)。
-  第1パスに無いロットだけ第2パスから足す。LS4LOT の生成時刻と合わないときの受け皿
+  第1パスに無いロットは第2パスから足す。LS4LOT の生成時刻と合わないときの受け皿。
+  **第1パスにあっても、外径(内径・肉厚)・検入数が空なら、第2パスの同じロットの行で空の項目だけ埋める**
+  (統合 1.2.45・現場の指摘: 第1パスが読めても検入数が埋まらないことがあった。以前は第1パスの行だけを使った)
 - 外径が出せない(内径・肉厚が空・0)ロットは、いままでの参照物(受注の外径 MAX)を使う
 - 共有のファイルは手元へ写してから読む(`source_db` → `common/source_copy.py`)
 """
@@ -96,37 +98,44 @@ def import_results(conn: Any):
                                  f"{config.konpo_db_dir()} に {config.konpo_db_file()}"
                                  + (f" / 第2パスに {config.ls4_db2_file()}"
                                     if len(config.lot_db_dirs()) > 1 else ""))
-    merged: dict[str, tuple[dict, Path]] = {}
+    merged: dict[str, dict] = {}
+    filled = 0
     notes: list[str] = []
+    errors: list[str] = []
     for index, path in enumerate(files):
         try:
             rows, total = read_rows(path)
         except source_db.SourceError as exc:
-            if index == 0:
-                return TableResult(table=TABLE, ok=False, source=str(path), error=str(exc))
-            notes.append(f"第2パス: {exc}")
+            # 片方が読めなくても、もう片方で埋める(統合 1.2.45。以前は先のファイルが読めないと止めた)
+            errors.append(str(exc))
+            notes.append(f"{path.name} を読めません: {exc}")
             continue
         added = 0
         for row in rows:
             lot = str(row.get(ls4_source.COL_LOT) or "").strip()
-            if lot and lot not in merged:
-                merged[lot] = (row, path)
+            if not lot:
+                continue
+            if lot not in merged:
+                merged[lot] = _entry(row, path)
                 added += 1
+            elif _fill_from(merged[lot], row, path):
+                filled += 1
         year, month = ls4_source.this_month()
         notes.append(f"{path.name}: {year}-{month:02d} の行 {added:,}ロット(全 {total:,}行)"
                      + ("を第2パスから足しました" if index else ""))
+    if filled:
+        notes.append(f"第1パスで外径・検入数が空だった {filled:,}ロットを第2パスで埋めました")
+    if len(errors) == len(files):
+        return TableResult(table=TABLE, ok=False, source=str(files[0]), error=" / ".join(errors))
     try:
         ensure_columns(conn)
         with conn:
             conn.execute(f'DELETE FROM "{TABLE}"')
-            for lot, (row, path) in merged.items():
-                outer = ls4_source.outer_diameter(row)
+            for lot, e in merged.items():
                 conn.execute(
                     f'INSERT INTO "{TABLE}" (ロット番号, 内径, 肉厚, 外径, 枚本数, 作業開始, 元ファイル)'
                     " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (lot, _num(row.get(ls4_source.COL_INNER)), _num(row.get(ls4_source.COL_THICK)),
-                     outer, ls4_source.coil_count(row),
-                     str(row.get(ls4_source.COL_START) or ""), str(path)))
+                    (lot, e["inner"], e["thick"], e["outer"], e["count"], e["start"], e["source"]))
             conn.execute(
                 "INSERT OR REPLACE INTO 取り込み履歴 (テーブル名, 取り込み日時, 元ファイル, 件数)"
                 " VALUES (?, ?, ?, ?)", (TABLE, db.now_db_string(), str(files[0]), len(merged)))
@@ -140,6 +149,32 @@ def import_results(conn: Any):
     log.info("コイル実績: %d ロット (%s)", len(merged), " / ".join(notes))
     return TableResult(table=TABLE, ok=True, rows=len(merged), source=str(files[0]),
                        note="・".join(notes))
+
+
+def _entry(row: dict, path: Path) -> dict:
+    """1 ロットの値(外径・検入数と、どのファイルから取ったか)。"""
+    outer = ls4_source.outer_diameter(row)
+    return {"inner": _num(row.get(ls4_source.COL_INNER)), "thick": _num(row.get(ls4_source.COL_THICK)),
+            "outer": outer, "count": ls4_source.coil_count(row),
+            "start": str(row.get(ls4_source.COL_START) or ""), "source": str(path)}
+
+
+def _fill_from(entry: dict, row: dict, path: Path) -> bool:
+    """第1パスで空だった外径・検入数を、第2パスの同じロットの行で埋める。埋めたら True。
+
+    **値のある項目は第1パスのまま**(第2パスで上書きしない)。外径は内径・肉厚をそろえて取る。
+    """
+    other = _entry(row, path)
+    took = []
+    if entry["outer"] is None and other["outer"] is not None:
+        entry.update(inner=other["inner"], thick=other["thick"], outer=other["outer"])
+        took.append("外径")
+    if entry["count"] is None and other["count"] is not None:
+        entry["count"] = other["count"]
+        took.append("検入数")
+    if took:
+        entry["source"] = f'{entry["source"]} ({"・".join(took)}は {path})'
+    return bool(took)
 
 
 def _num(value: Any) -> Optional[float]:

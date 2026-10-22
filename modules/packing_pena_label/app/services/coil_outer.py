@@ -10,6 +10,7 @@
   名前が LS4LOT のままなら読まない(内径・肉厚が無い形式なので)。決まりは
   `common/ls4_source.py`、読み方は資材計算の `coil_tool/coil_results.py` をそのまま使う
   (いまの年月の行だけ・同じロットは作業開始がいちばん新しい行・共有のファイルは手元へ写してから)
+- 第1パスの行に内径・肉厚が無ければ、第2パスの同じロットの行も探す(統合 1.2.45・現場の指摘)
 - 読んだ内容はファイルの更新日時と大きさで覚えておき、変わったときだけ読み直す
 
 近いチップボール: チップボールごとに風袋計算が使う外径(TIP1000 = 1100mm・TIP950 = 1000mm・
@@ -104,6 +105,7 @@ def lookup(lot: str) -> dict:
         return {"found": False, "reason": f"仕掛ファイルを探せません: {exc}"}
     if not files:
         return {"found": False, "reason": "仕掛ファイル(実績の形式)が見つかりません"}
+    empty_in = ""
     for path in files:
         try:
             row = _rows_of(path).get(lot)
@@ -115,11 +117,16 @@ def lookup(lot: str) -> dict:
             continue
         outer = ls4_source.outer_diameter(row)
         if outer is None:
-            return {"found": False, "file": str(path),
-                    "reason": f"ロット {lot} の内径・肉厚が入っていません"}
+            # 第1パスの行に内径・肉厚が無ければ、第2パスの同じロットも探す(統合 1.2.45・現場の指摘)
+            empty_in = empty_in or str(path)
+            continue
         return {"found": True, "outer": outer,
                 "inner": row.get(ls4_source.COL_INNER), "thick": row.get(ls4_source.COL_THICK),
                 "file": str(path)}
+    if empty_in:
+        return {"found": False, "file": empty_in,
+                "reason": f"ロット {lot} の内径・肉厚が入っていません"
+                          + ("(第2パスにもありません)" if len(files) > 1 else "")}
     return {"found": False,
             "reason": "・".join(reasons) or f"仕掛ファイルの今月の行にロット {lot} がありません"}
 

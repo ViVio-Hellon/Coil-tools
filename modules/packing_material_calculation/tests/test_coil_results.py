@@ -37,8 +37,9 @@ def _results(path: Path, rows: list[tuple]) -> Path:
     for row in rows:
         lot, started, inner, thick = row[:4]
         count = row[4] if len(row) > 4 else ""
+        yoko, tate = (row[5], row[6]) if len(row) > 6 else ("12", "2")
         conn.execute('INSERT INTO "実績" VALUES (?, ?, ?, ?, ?, ?, ?)',
-                     (lot, "12", "2", started, inner, thick, count))
+                     (lot, yoko, tate, started, inner, thick, count))
     conn.commit()
     conn.close()
     return path
@@ -89,6 +90,59 @@ def test_第2パスは第1パスに無いロットだけ足す(place, tmp_path):
     coil_results.import_results(conn)
     assert coil_results.outer_for(conn, "A000001") == 908.0        # 第1パスの値
     assert coil_results.outer_for(conn, "D000001") == 800.0
+
+
+def test_第1パスで外径_検入数が空なら第2パスで空の項目だけ埋める(place, tmp_path, monkeypatch):
+    """統合 1.2.45・現場の指摘: 第1パスが読めても検入数が埋まらないことがあった。"""
+    konpo, conn = place
+    second = tmp_path / "lot2"
+    user_settings.save(config.KEY_KONPO_DB_FILE, "実績_LS4")
+    user_settings.save(config.KEY_LOT_DB_DIR_2, str(second))
+    now = f"{_ym()}-05 08:00:00"
+    _results(konpo / "実績_LS4.sqlite3", [
+        ("A000001", now, "508", "200", "", "", ""),     # 検入数が出せない(枚本数・横割縦割が空)
+        ("B000001", now, "", "", "18"),                  # 外径が出せない(内径・肉厚が空)
+        ("C000001", now, "", "", "", "", ""),            # どちらも出せない
+        ("E000001", now, "", "", "", "", ""),            # 第2パスにも無い
+    ])
+    _results(second / "実績_LS4.sqlite3", [
+        ("A000001", now, "600", "300", "16"),
+        ("B000001", now, "500", "150", "99"),
+        ("C000001", now, "400", "100", "", "5", "4"),
+    ])
+    result = coil_results.import_results(conn)
+    assert result.ok, result
+    assert "外径・検入数が空だった 3ロットを第2パスで埋めました" in result.note
+    assert coil_results.outer_for(conn, "A000001") == 908.0, "値のある外径は第1パスのまま"
+    assert coil_results.count_for(conn, "A000001") == 16, "空の検入数は第2パスで"
+    assert coil_results.outer_for(conn, "B000001") == 800.0, "空の外径は第2パスで"
+    assert coil_results.count_for(conn, "B000001") == 18, "値のある検入数は第1パスのまま"
+    assert (coil_results.outer_for(conn, "C000001"), coil_results.count_for(conn, "C000001")) == (600.0, 20)
+    assert (coil_results.outer_for(conn, "E000001"), coil_results.count_for(conn, "E000001")) == (None, None)
+    src = conn.execute('SELECT 元ファイル FROM "コイル実績" WHERE ロット番号 = ?', ("A000001",)).fetchone()[0]
+    assert "検入数は" in src and str(second) in src
+    # 画面: 受注を選ぶと第2パスで埋めた検入数が入る
+    monkeypatch.setattr(lot_service, "expand_order",
+                        lambda c, o: OrderInfo(受注番号=o, コイル外径_MAX="1000.00"))
+    state = CalcState(LOT="A000001")
+    assert lot_service.load_into(conn, state, "O1")
+    assert (state.外径, state.検入数) == ("908.00", "16")
+
+
+def test_第1パスが読めなくても第2パスで埋める(place, tmp_path):
+    konpo, conn = place
+    second = tmp_path / "lot2"
+    user_settings.save(config.KEY_KONPO_DB_FILE, "実績_LS4")
+    user_settings.save(config.KEY_LOT_DB_DIR_2, str(second))
+    c = sqlite3.connect(konpo / "実績_LS4.sqlite3")
+    c.execute('CREATE TABLE "仕掛" ("ﾛｯﾄ番号" TEXT)')      # 実績の列が無い
+    c.commit()
+    c.close()
+    _results(second / "実績_LS4.sqlite3", [("A000001", f"{_ym()}-05 08:00:00", "600", "300", "16")])
+    result = coil_results.import_results(conn)
+    assert result.ok, result
+    assert "読めません" in result.note
+    assert coil_results.count_for(conn, "A000001") == 16
 
 
 def test_受注を選ぶと実績の外径を入れる_無ければ外径MAX(place, monkeypatch):

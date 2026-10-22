@@ -36,10 +36,11 @@ def _results_file(rows):
 class _FakeResults:
     """資材計算の coil_results の代わり(仕掛パスの設定だけ差し替える。読み方は本物)。"""
 
-    def __init__(self, path, wanted=True):
+    def __init__(self, path, wanted=True, second=None):
         from modules.packing_material_calculation.coil_tool import coil_results as real
         self.real = real
         self.path = path
+        self.second = second
         self._wanted = wanted
 
     def wanted(self):
@@ -47,7 +48,7 @@ class _FakeResults:
 
     def sources(self):
         from pathlib import Path
-        return [Path(self.path)]
+        return [Path(p) for p in (self.path, self.second) if p]
 
     def read_rows(self, path):
         return self.real.read_rows(path)
@@ -104,6 +105,20 @@ class ChooseTest(unittest.TestCase):
             tip, note = CO.choose("W222222", "TIP820")
             self.assertIsNone(tip)
             self.assertIn("内径・肉厚が入っていません", note)
+
+    def test_第1パスに内径_肉厚が無ければ第2パスも探す(self):
+        """統合 1.2.45・現場の指摘(資材計算と同じ): 第1パスの行が空なら第2パスで埋める。"""
+        second = _results_file([("W222222", 400.0, 250.0)])                # 900mm
+        with self._with(_FakeResults(self.path, second=second)):
+            tip, note = CO.choose("W222222", "TIP1000")
+        self.assertEqual(tip, "TIP820")
+        self.assertIn("コイル外径 900mm", note)
+        empty = _results_file([("W222222", 0, 0)])
+        CO.forget()                       # 探したファイルを覚えているので忘れさせる
+        with self._with(_FakeResults(self.path, second=empty)):
+            tip, note = CO.choose("W222222", "TIP1000")
+        self.assertIsNone(tip)
+        self.assertIn("第2パスにもありません", note)
 
     def test_実績の形式でなければ何もしない(self):
         with self._with(_FakeResults(self.path, wanted=False)):
