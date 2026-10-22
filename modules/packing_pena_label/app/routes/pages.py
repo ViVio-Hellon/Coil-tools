@@ -415,6 +415,9 @@ class PageRoutes:
             "検査番号・サイズの見出しはいまの入力ですが、<b>風袋・NW・GW は前に「計算」を"
             "押したときのもの</b>です。",
             ".blocks") if stale else ""
+        if stale and print_view:
+            # 止めた印刷を記録に残す(混ざった紙を止めた証拠。統合 1.2.39)
+            self.wf.record_print("/tare/print", {}, stopped=True)
         tools = ('' if print_view else
                  '<div class="btn-row no-print" style="margin-bottom:10px">'
                  f'<a class="btn" href="{self.base}/tare/print" target="_blank" rel="noopener">'
@@ -778,6 +781,10 @@ class PageRoutes:
             'ヘッダー帯の <b>本数・高さ・NW・GW</b> は「計算」を押したときの'
             'ものです。検番・重量だけが新しくなっています。',
             ".sheet") if stale else ""
+        if stale and not guides:
+            # 止めた印刷を記録に残す(混ざったラベルを止めた証拠。統合 1.2.39。枠線の確認は除く)
+            self.wf.record_print("/labels/print", {"ob": [",".join(map(str, ob_list))]},
+                                 stopped=True)
 
         font_css = self._barcode_font_css()
         pages = LS.render_blocks(
@@ -2510,11 +2517,15 @@ class PageRoutes:
                 "待ち受け: %s" % mode)
 
     def print_log(self) -> str:
-        """計算・印刷の記録(統合 1.2.31・現場の指示)。
+        """計算・印刷の記録(統合 1.2.31・現場の指示。1.2.39 で強くした)。
 
-        どの取得元(SQLite / Access / CSV / 古い内容)の、いつ時点の資材重量で計算し・刷ったか。
-        新しい順に 300 件。記録はこの PC の状態DB(`work_log`)にある(5000 件を超えたら古いものから消す)。
+        どの取得元(SQLite / Access / CSV / 古い内容)の、いつ時点の資材重量で、**どの版で・どの PC
+        (ライン)で**計算し・印刷画面を開き・印刷を止めたか。新しい順に 300 件(この PC の状態DB
+        `work_log`。5000 件を超えたら古いものから消す)。消えない控えは月ごとのファイル
+        (`services/work_record.py`)。下に資材マスタの編集履歴(全ライン)。
         """
+        from ..services import master_admin as MA
+        from ..services import work_record as WR
         rows = []
         for r in self.wf.recent_log(300):
             d = r.get("data") or {}
@@ -2524,7 +2535,20 @@ class PageRoutes:
                 src = f'<b class="logstale">{src}(古い内容)</b>'
             when = esc(m.get("asOf") or "")
             what = esc(r.get("title", ""))
+            ver = d.get("version") or {}
+            ver_txt = (" / ".join(x for x in (
+                ("統合 " + ver["app"]) if ver.get("app") else "",
+                ("ペナ " + ver["pena"]) if ver.get("pena") else "") if x)
+                or '<span class="logold">(記録なし)</span>')
+            if ver.get("stamp"):
+                ver_txt += f'<br><span class="logsub">中身 {esc(ver["stamp"])}</span>'
+            w = d.get("who") or {}
+            who_txt = (esc(w.get("pc", "")) + (f'<br><span class="logsub">{esc(w["line"])}</span>'
+                                                if w.get("line") else "")) \
+                if w else '<span class="logold">(記録なし)</span>'
             detail = []
+            if d.get("stopReason"):
+                detail.append(f'<b class="logstale">{esc(d["stopReason"])}</b>')
             for sh in d.get("sheets") or []:
                 detail.append(f'{esc(sh.get("size", ""))} 重量{esc(sh.get("weight", ""))} '
                               f'NW {esc("/".join(x for x in sh.get("NW") or [] if x))} '
@@ -2533,31 +2557,77 @@ class PageRoutes:
             for k, c in sorted((d.get("coils") or {}).items()):
                 detail.append(f'梱包{esc(k)}: {esc(c.get("本数", ""))}本 '
                               f'NW {esc(c.get("NW", ""))} GW {esc(c.get("GW", ""))}')
+            for k, c in sorted((d.get("notOnLabel") or {}).items()):
+                detail.append(f'<span class="logold">梱包{esc(k)}: {esc(c.get("本数", ""))}本 '
+                              f'(ラベルに載らない梱包。NW・GW は使っていない)</span>')
             if d.get("combo"):
                 detail.append(f'{esc(d["combo"])} 重量 {esc("・".join(d.get("weights") or []))}')
             if d.get("width") and not detail:
                 detail.append(f'巾 {esc(d["width"])}mm')
-            if d.get("inputChanged"):
+            if d.get("inputChanged") and not d.get("stopReason"):
                 detail.append('<b class="logstale">入力が変わったまま(印刷は止めていた)</b>')
-            kind_cls = "logprint" if r.get("kind") == "印刷" else "logcalc"
+            kind = r.get("kind", "")
+            if kind == "印刷":                       # 1.2.38 までの記録の名前
+                kind = self.wf.KIND_PRINT
+            kind_cls = {self.wf.KIND_PRINT: "logprint",
+                        self.wf.KIND_STOPPED: "logstop"}.get(kind, "logcalc")
             rows.append(
                 f'<tr><td class="nowrap">{esc(r.get("at", ""))}</td>'
-                f'<td><span class="{kind_cls}">{esc(r.get("kind", ""))}</span></td>'
+                f'<td class="nowrap"><span class="{kind_cls}">{esc(kind)}</span></td>'
                 f'<td class="nowrap">{what}</td><td>{esc(d.get("kensaNo", ""))}</td>'
+                f'<td class="nowrap">{who_txt}</td><td class="nowrap">{ver_txt}</td>'
                 f'<td>{src}</td><td class="nowrap">{when}</td>'
                 f'<td>{"<br>".join(detail)}</td></tr>')
+        st = WR.status(self.cfg)
+        keep = (f'<p class="hint"><b>消えない控え</b>: 1 件ごとに月ごとのファイルへ足しています(消さない・書き換えない)。'
+                f'この PC: <code>{esc(st["local"])}</code>'
+                + (f'<br><b class="logstale">書けていません: {esc(st["localProblem"])}</b>' if st["localProblem"] else "")
+                + ('<br>設定の保存先: <code>%s</code>' % esc(st["shared"]) if st["shared"] else
+                   '<br><b class="logstale">この PC の中にしかありません。</b>設定の「計算・印刷の記録の保存先フォルダー」に'
+                   '共有フォルダーを入れると、そこへも PC ごとに書きます(PC の入れ替えや状態DB の破損でも残るように)。')
+                + (f'<br><b class="logstale">設定の保存先に書けていません: {esc(st["sharedProblem"])}</b>'
+                   if st["sharedProblem"] else "")
+                + '</p>')
         body = ('<div class="card"><h2>計算・印刷の記録</h2>'
-                '<p class="hint">どの取得元の、いつ時点の資材重量で計算し・刷ったかを残しています'
-                '(新しい順に 300 件。この PC の分)。<b>資材マスタの時点</b>は、読んだ資材マスタの'
-                'ファイルの更新日時です。<b>印刷</b>は印刷の画面を開いた記録です'
-                '(ブラウザは、刷ったか・やめたかを教えません)。印刷の行の資材重量は、'
-                'その紙の値を計算したときのものです。</p>'
+                '<p class="hint">どの取得元の、いつ時点の資材重量で、<b>どの版で・どの PC(ライン)で</b>'
+                '計算し・印刷画面を開き・印刷を止めたかを残しています(新しい順に 300 件。この PC の分)。'
+                '<b>資材マスタの時点</b>は、読んだ資材マスタのファイルの更新日時です。'
+                '<b>版</b>は統合ツールとペナラベルの版と、動いているファイルの中身から作った値(切り替えの前か後かが分かる)。<br>'
+                '<b>印刷画面</b>は印刷の画面を開いて閉じた記録で、<b>刷った証拠にはなりません</b>'
+                '(ブラウザは、刷ったか・やめたかを教えません)。<b>止めた印刷</b>は、入力が変わったまま'
+                '(計算し直していない)で印刷を止めた記録です(混ざったラベルを止めた証拠)。'
+                '印刷の行の資材重量は、その紙の値を計算したときのものです。'
+                'ラベルに載らない梱包(隠れている丈・NW が無い)は灰色で分けています。</p>'
+                + keep
                 + ('<div class="scroll"><table class="tbl"><thead><tr><th>時刻</th><th>種類</th>'
-                   '<th>何を</th><th>検査番号</th><th>資材重量の取得元</th><th>資材マスタの時点</th>'
+                   '<th>何を</th><th>検査番号</th><th>PC・ライン</th><th>版</th>'
+                   '<th>資材重量の取得元</th><th>資材マスタの時点</th>'
                    '<th>中身</th></tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>'
                    if rows else '<div class="empty">まだ記録がありません。</div>')
-                + '<style>.logstale{color:var(--err)}.logprint{font-weight:700}'
-                  '.nowrap{white-space:nowrap}</style></div>')
+                + '</div>')
+        hist = MA.history(self.wf.materials, 300)
+        hrows = "".join(
+            f'<tr><td class="nowrap">{esc(h.get("日時", ""))}</td>'
+            f'<td class="nowrap">{esc(h.get("PC", ""))}'
+            + (f'<br><span class="logsub">{esc(h.get("ライン", ""))}</span>' if h.get("ライン") else "")
+            + f'</td><td>{esc(h.get("利用者", ""))}</td><td class="nowrap">{esc(h.get("表", ""))}</td>'
+            f'<td>{esc(h.get("行の名前", "") or h.get("行", ""))}</td><td class="nowrap">{esc(h.get("操作", ""))}</td>'
+            f'<td>{esc(h.get("列", ""))}</td><td>{esc(h.get("前", ""))}</td><td>{esc(h.get("後", ""))}</td></tr>'
+            for h in hist["rows"])
+        body += ('<div class="card"><h2>資材マスタの編集履歴(全ライン)</h2>'
+                 '<p class="hint">マスタ管理・サイズを足す で資材マスタを直したときに、<b>誰が(PC・ライン・Windows の利用者名)'
+                 '・いつ・どの表のどの行の・どの値を何から何に</b>変えたかを、資材マスタの中(表「'
+                 + esc(MA.HISTORY_TABLE) + '」)に残しています(新しい順に 300 件)。'
+                 '上の記録の「資材マスタの時点」が変わった理由は、ここで追えます。'
+                 'このツールの外(Access など)で直したものは残りません。</p>'
+                 + (f'<p class="hint logstale">{esc(hist["note"])}</p>' if hist.get("note") else "")
+                 + ('<div class="scroll"><table class="tbl"><thead><tr><th>日時</th><th>PC・ライン</th>'
+                    '<th>利用者</th><th>表</th><th>行</th><th>操作</th><th>列</th><th>前</th><th>後</th>'
+                    '</tr></thead><tbody>' + hrows + '</tbody></table></div>'
+                    if hrows else '<div class="empty">まだ編集履歴がありません。</div>')
+                 + '<style>.logstale{color:var(--err)}.logprint{font-weight:700}'
+                   '.logstop{font-weight:700;color:var(--err)}.logold{opacity:.6}'
+                   '.logsub{font-size:11px;opacity:.75}.nowrap{white-space:nowrap}</style></div>')
         return self._shell("計算・印刷の記録", body, "")
 
     def diag(self) -> str:

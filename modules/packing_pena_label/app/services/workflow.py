@@ -26,6 +26,7 @@ from ..models import FormState, TIP_CHOICES
 from ..repositories import material_repo as M
 from ..repositories.access_bridge import AccessError
 from . import coil_outer
+from . import work_record as WR
 from . import label_layout as LL
 from . import list_calc as LC
 from . import size_master as SM
@@ -521,13 +522,16 @@ class Workflow:
         self.store.set_kv(self._TARE_MATERIAL_KEY, material)
 
         self.save_state(state)
-        self._log("計算", "風袋計算", {
+        coils, off_label = self._split_label_coils(
+            {str(k): {"本数": str(state.coil_h.get(k, "") or ""),
+                      "NW": state.nw.get(k, ""), "GW": state.gw.get(k, "")}
+             for k in (1, 2, 3, 4) if str(state.coil_h.get(k, "") or "").strip()},
+            self.visible_slots(state))
+        self._log(self.KIND_CALC, "風袋計算", {
             "kensaNo": state.lbl_kensa_no,
             "sizes": [x for x in (state.lbl_size1, state.lbl_size2) if x],
             "weights": [x for x in (state.lbl_weight1, state.lbl_weight2) if x],
-            "coils": {str(k): {"本数": str(state.coil_h.get(k, "") or ""),
-                               "NW": state.nw.get(k, ""), "GW": state.gw.get(k, "")}
-                      for k in (1, 2, 3, 4) if str(state.coil_h.get(k, "") or "").strip()},
+            "coils": coils, "notOnLabel": off_label,
             "material": material})
 
         return Result(True, "計算しました", "info", {
@@ -714,7 +718,7 @@ class Workflow:
         # どの取得元の、いつ時点の資材重量で計算したか(統合 1.2.31)
         data["material"] = dict(self.materials.describe(),
                                 calcAt=time.strftime("%Y-%m-%d %H:%M:%S"))
-        self._log("計算", "羅列計算", {"width": data["width"], "material": data["material"]})
+        self._log(self.KIND_CALC, "羅列計算", {"width": data["width"], "material": data["material"]})
         self.store.set_kv("list_result", data)
 
         return Result(True, "羅列計算を作成しました", "info",
@@ -815,7 +819,13 @@ class Workflow:
     def _log(self, kind: str, title: str, payload: dict) -> None:
         """記録を残す。残せなくても計算・印刷は止めない(ログに理由を出す)。"""
         try:
+            # どの版で・どの PC(ライン)で、を添える(統合 1.2.39。切り替えの前か後か・どの版で刷ったかを
+            # 記録から言えるように)
+            payload = dict(payload, version=WR.versions(), who=WR.who(self.cfg))
             self.store.add_log(kind, title, payload)
+            # 消えない控え(この PC の月ごとのファイルと、共有ログの出力先)。書けなくても止めない
+            WR.append(self.cfg, {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "kind": kind,
+                                 "title": title, **payload})
             m = payload.get("material") or {}
             log.info("[記録] %s %s 検番=%s 資材重量=%s %s時点%s", kind, title,
                      payload.get("kensaNo", ""), m.get("label", "-"), m.get("asOf", ""),
@@ -831,17 +841,31 @@ class Workflow:
         "/all-size/print": "全サイズ",
     }
 
-    def record_print(self, path: str, query: Dict[str, List[str]]) -> Result:
-        """印刷の画面を開いた(刷った)ことを残す(統合 1.2.31・現場の指示)。
+    #: 記録の種類(統合 1.2.39 で名前を正した)
+    KIND_CALC = "計算"
+    #: 印刷の画面(ブラウザの印刷ダイアログ)を開いて閉じた。**刷った証拠にはならない**
+    #: (ブラウザは、刷ったか・やめたかを教えない)。以前は「印刷」と書いていた
+    KIND_PRINT = "印刷画面"
+    #: 入力が変わったまま(計算し直していない)で、印刷を止めた。混ざったラベルを止めた証拠
+    KIND_STOPPED = "止めた印刷"
+
+    def record_print(self, path: str, query: Dict[str, List[str]],
+                     stopped: bool = False) -> Result:
+        """印刷の画面を開いたこと・止めた印刷を残す(統合 1.2.31・現場の指示。1.2.39 で止めた印刷も)。
 
         印刷の画面(ブラウザの印刷ダイアログ)を閉じたときに、画面から知らせてくる。
-        ブラウザは「刷ったか・やめたか」を教えないので、**印刷の画面を開いたこと**を残す。
+        ブラウザは「刷ったか・やめたか」を教えないので、**印刷の画面を開いたこと**を残す
+        (刷った証拠にはならない)。``stopped`` は、入力が変わったまま印刷ビューを開き、
+        「印刷（停止中）」で断ったとき(サーバが印刷ビューを描くときに残す)。
         資材重量は、その紙の値を計算したときのもの(計算の記録と同じ)を写す。
         """
         title = self.PRINT_KINDS.get(path)
         if not title:
             return Result(False, "記録しない画面です", "info")
         payload: dict = {"path": path}
+        if stopped:
+            payload["stopReason"] = ("入力が変わったまま「計算」し直していないので、印刷を止めた"
+                                     "(前の計算の NW・GW と新しい検番が混ざるのを防いだ)")
         if path.startswith("/all-size"):
             combo = (query.get("combo") or [""])[0]
             st = self.all_size.load_state()
@@ -865,21 +889,36 @@ class Workflow:
                     if not v:
                         continue
                     ph = v.get("printHeader") or {}
+                    # 本数の入った梱包だけ(本数が空の段は「NW 0 の梱包」に見えるので入れない。統合 1.2.39)
+                    infos = [c for c in v.get("coilInfo") or [] if str(c.get("coilH", "") or "").strip()]
                     sheets.append({"size": ph.get("sizeName", ""), "kensaNo": ph.get("kensaNo", ""),
                                    "weight": ph.get("weight", ""), "labels": len(v.get("labels") or []),
-                                   "NW": [c.get("nw", "") for c in v.get("coilInfo") or []],
-                                   "GW": [c.get("gw", "") for c in v.get("coilInfo") or []]})
+                                   "NW": [c.get("nw", "") for c in infos],
+                                   "GW": [c.get("gw", "") for c in infos]})
                 payload["sheets"] = sheets
                 payload["inputChanged"] = self.calc_is_stale()
             else:
-                payload["coils"] = {str(k): {"本数": v.get("coilText", ""),
-                                             "NW": (v.get("display") or {}).get("NW", ""),
-                                             "GW": (v.get("display") or {}).get("GW", "")}
-                                    for k, v in (self.store.all_tare() or {}).items()
-                                    if int(k) in self.visible_slots(state)}
+                coils = {str(k): {"本数": v.get("coilText", ""),
+                                  "NW": (v.get("display") or {}).get("NW", ""),
+                                  "GW": (v.get("display") or {}).get("GW", "")}
+                         for k, v in (self.store.all_tare() or {}).items()}
+                payload["coils"], payload["notOnLabel"] = self._split_label_coils(
+                    coils, self.visible_slots(state))
                 payload["inputChanged"] = self.tare_is_stale(state)
-        self._log("印刷", title, payload)
+        self._log(self.KIND_STOPPED if stopped else self.KIND_PRINT, title, payload)
         return Result(True, "記録しました", "info")
+
+    @staticmethod
+    def _split_label_coils(coils: Dict[str, dict], visible: List[int]):
+        """ラベルに載る梱包と載らない梱包に分ける(統合 1.2.39・現場の指摘)。
+
+        載らない梱包(隠れている丈・NW が 0 か空)を記録に混ぜると「NW 0 の梱包」に見えて誤解される。
+        """
+        on, off = {}, {}
+        for k, c in coils.items():
+            nw = V.weight_number(str(c.get("NW", "") or ""))
+            (on if int(k) in visible and nw is not None else off)[k] = c
+        return on, off
 
     def recent_log(self, limit: int = 300) -> List[dict]:
         return self.store.recent_log(limit)

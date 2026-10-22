@@ -72,6 +72,19 @@ SETTINGS: List[SettingSpec] = [
         help=("VBA の定数 PATH_梱包_日報DebugPrint に相当。"
               "空欄ならローカル領域の logs のみに出力する。"),
         default_hint="ローカルの logs のみ"),
+    SettingSpec(
+        key="record_dir", label="計算・印刷の記録の保存先フォルダー", kind="dir",
+        group=GROUP_REF, need_write=True,
+        placeholder=r"\\サーバー名\共有\ペナラベル記録",
+        help=("計算・印刷の記録を、月ごとのファイル(足すだけ・消さない)にして、"
+              "この PC のローカル領域の records に加えてここにも書く(<PC名> のフォルダーを作って PC ごとに)。"
+              "共有フォルダーを入れると、PC の入れ替えや状態DB の破損でも記録が残る。"),
+        default_hint="未設定(この PC の records にだけ書く)"),
+    SettingSpec(
+        key="line_name", label="ライン名（このPC）", kind="text",
+        group=GROUP_REF, placeholder="例: 2ライン",
+        help="計算・印刷の記録と資材マスタの編集履歴に、PC 名と一緒に残す。",
+        default_hint="未設定(PC 名だけを残す)"),
 
     # ---------------- マスタ ----------------
     SettingSpec(

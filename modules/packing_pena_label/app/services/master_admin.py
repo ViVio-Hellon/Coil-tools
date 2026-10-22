@@ -129,6 +129,74 @@ MANAGED: Tuple[Managed, ...] = (
 )
 BY_TABLE: Dict[str, Managed] = {m.table: m for m in MANAGED}
 
+# ---------------------------------------------------------------- 編集履歴
+#: 資材マスタの編集履歴(統合 1.2.39・現場の指示)。**誰が・いつ・どの値を何から何に変えたか。**
+#: 書き先は資材マスタそのもの(全ラインで 1 か所)。直した書き込みと同じまとまりで書くので、
+#: 直したのに履歴だけ無い・履歴だけあって直っていない、は起きない。
+#: 「誰が」はログインが無いので、PC 名・ライン名・Windows の利用者名で残す
+HISTORY_TABLE = "資材マスタ編集履歴"
+HISTORY_COLUMNS = ("日時", "PC", "ライン", "利用者", "表", "行", "行の名前", "操作", "列", "前", "後")
+#: 行の名前に使う列(先にあるものを使う)
+_ROW_NAME_COLUMNS = ("梱包資材名", "サイズ名", "シート名", "管理番号")
+
+
+def _ensure_history(conn: sqlite3.Connection) -> None:
+    conn.execute("CREATE TABLE IF NOT EXISTS %s (%s)" % (
+        _quote(HISTORY_TABLE), ", ".join("%s TEXT" % _quote(c) for c in HISTORY_COLUMNS)))
+
+
+def _row_name(row: Dict[str, Any]) -> str:
+    parts = []
+    for c in _ROW_NAME_COLUMNS:
+        v = row.get(c)
+        if v not in (None, ""):
+            parts.append("%s=%s" % (c, v))
+        if len(parts) == 2:
+            break
+    return " ".join(parts)
+
+
+def write_history(conn: sqlite3.Connection, who: Optional[Dict[str, str]], table: str,
+                  row_id: Any, row_name: str, action: str, changes) -> int:
+    """編集履歴を足す(呼ぶ側の書き込みと同じまとまりで。commit は呼ぶ側)。
+
+    ``changes`` は (列, 前, 後) の並び。値が変わっていない列は書かない。戻り値は書いた行数。
+    """
+    who = who or {}
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    _ensure_history(conn)
+    rows = [(stamp, who.get("pc", ""), who.get("line", ""), who.get("user", ""), table,
+             str(row_id), row_name, action, col,
+             "" if before is None else str(before), "" if after is None else str(after))
+            for col, before, after in changes
+            if ("" if before is None else str(before)) != ("" if after is None else str(after))]
+    if rows:
+        conn.executemany("INSERT INTO %s VALUES (%s)" % (
+            _quote(HISTORY_TABLE), ", ".join("?" * len(HISTORY_COLUMNS))), rows)
+    return len(rows)
+
+
+def history(repo, limit: int = 300) -> Dict[str, Any]:
+    """編集履歴(新しい順)。表が無ければ空。"""
+    path = source_path(repo)
+    if not path or not os.path.exists(path):
+        return {"rows": [], "path": path or "", "note": "資材マスタ(SQLite)がありません"}
+    try:
+        conn = _connect(path)
+        try:
+            cur = conn.execute("SELECT rowid AS r, * FROM %s ORDER BY rowid DESC LIMIT ?"
+                               % _quote(HISTORY_TABLE), (int(limit),))
+            rows = [{k: ("" if r[k] is None else str(r[k])) for k in r.keys() if k != "r"}
+                    for r in cur.fetchall()]
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        if "no such table" in str(exc):
+            return {"rows": [], "path": path, "note": ""}
+        return {"rows": [], "path": path, "note": "編集履歴を読めません: %s" % exc}
+    return {"rows": rows, "path": path, "note": ""}
+
+
 #: 直せない表と、その理由。**出さないのではなく、理由を出す。**
 VIEW_ONLY_WHY: Dict[str, str] = {}
 DEFAULT_VIEW_ONLY = "このツールが直す表ではありません。中身の確認だけできます。"
@@ -361,7 +429,7 @@ def _require_editable(repo, table: str) -> str:
 
 
 def save_row(repo, table: str, row_id: Optional[int],
-             values: Dict[str, Any]) -> dict:
+             values: Dict[str, Any], who: Optional[Dict[str, str]] = None) -> dict:
     """1 行を直す（``row_id`` が無ければ新しく足す）。
 
     **書き先は共有マスタただ 1 つ。** 書いたらキャッシュを捨て、
@@ -404,13 +472,16 @@ def save_row(repo, table: str, row_id: Optional[int],
             cur = conn.execute(sql, [data[c] for c in names])
             new_id = cur.lastrowid
             action = "追加"
+            write_history(conn, who, table, new_id, _row_name(data), action,
+                          [(c, "", data[c]) for c in names])
         else:
-            hit = conn.execute("SELECT rowid FROM %s WHERE rowid=?"
+            hit = conn.execute("SELECT * FROM %s WHERE rowid=?"
                                % _quote(table), (int(row_id),)).fetchone()
             if hit is None:
                 raise Refused(REFUSE_NO_ROW,
                               "その行はもうありません（誰かが消した可能性があります）。"
                               "読み直してください。")
+            before = {k: hit[k] for k in hit.keys()}
             names = list(data)
             sql = ("UPDATE %s SET %s WHERE rowid=?"
                    % (_quote(table),
@@ -418,6 +489,8 @@ def save_row(repo, table: str, row_id: Optional[int],
             conn.execute(sql, [data[c] for c in names] + [int(row_id)])
             new_id = int(row_id)
             action = "更新"
+            write_history(conn, who, table, new_id, _row_name(dict(before, **data)), action,
+                          [(c, before.get(c), data[c]) for c in names])
         conn.commit()
     except Refused:
         conn.rollback()
@@ -437,7 +510,7 @@ def save_row(repo, table: str, row_id: Optional[int],
             "message": "%s しました。次の計算から反映されます。" % action}
 
 
-def delete_row(repo, table: str, row_id: int) -> dict:
+def delete_row(repo, table: str, row_id: int, who: Optional[Dict[str, str]] = None) -> dict:
     table = _check_table(table)
     path = _require_editable(repo, table)
     if not can_delete(table):
@@ -446,10 +519,11 @@ def delete_row(repo, table: str, row_id: int) -> dict:
     soft = BY_TABLE[table].soft_delete
     conn = _connect(path, write=True)
     try:
-        hit = conn.execute("SELECT rowid FROM %s WHERE rowid=?"
+        hit = conn.execute("SELECT * FROM %s WHERE rowid=?"
                            % _quote(table), (int(row_id),)).fetchone()
         if hit is None:
             raise Refused(REFUSE_NO_ROW, "その行はもうありません。読み直してください。")
+        before = {k: hit[k] for k in hit.keys()}
         if soft:
             ensure_column(conn, table, soft)
             done = conn.execute("SELECT %s FROM %s WHERE rowid=?" % (_quote(soft), _quote(table)),
@@ -458,11 +532,16 @@ def delete_row(repo, table: str, row_id: int) -> dict:
                 raise Refused(REFUSE_NO_ROW, "その行はもう消してあります(%s)。" % done)
         backup = _backup(path)
         if soft:
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
             conn.execute("UPDATE %s SET %s=? WHERE rowid=?" % (_quote(table), _quote(soft)),
-                         (time.strftime("%Y-%m-%d %H:%M:%S"), int(row_id)))
+                         (stamp, int(row_id)))
+            write_history(conn, who, table, row_id, _row_name(before), "削除",
+                          [(soft, "", stamp)])
         else:
             conn.execute("DELETE FROM %s WHERE rowid=?" % _quote(table),
                          (int(row_id),))
+            write_history(conn, who, table, row_id, _row_name(before), "削除",
+                          [(c, v, "") for c, v in before.items()])
         conn.commit()
     except Refused:
         conn.rollback()

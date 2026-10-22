@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 #: アプリケーションID（ローカル領域のフォルダ名、多重起動判定、/api/health の識別子）
 APP_ID = "PackingPenaLabel"
 APP_NAME = "梱包ペナ ラベル・風袋計算"
-APP_VERSION = "1.5.39"
+APP_VERSION = "1.5.40"
 #: 版を切った日。画面のバージョン表示に添える。
 #: **中身を直したら必ずここを上げる**。上げ忘れると、
 #: 現場が「新しいファイルに差し替わったか」を画面から判断できない。
@@ -95,6 +95,11 @@ class Config:
     aim_ref_path: str = ""
     #: VBA 定数 PATH_梱包_日報DebugPrint に相当（共有ログ出力先）
     debug_print_path: str = ""
+    #: ライン名(この PC)。計算・印刷の記録と資材マスタの編集履歴に、PC 名と一緒に残す(統合 1.2.39)
+    line_name: str = ""
+    #: 計算・印刷の記録の保存先フォルダー(統合 1.2.39・現場の指示)。この PC の records/ には
+    #: いつも書き、ここを入れるとここにも <PC名>/ の下へ書く(共有フォルダーを入れると PC を入れ替えても残る)
+    record_dir: str = ""
 
     # ---- 差し替え可能なファイル・フォルダー ----
     # いずれも空文字なら「アプリ同梱の既定値」を使う。

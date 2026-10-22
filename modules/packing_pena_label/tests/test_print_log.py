@@ -41,7 +41,7 @@ class PrintLogTest(HttpTestCase):
         _, j = self.post("/api/print-log", {"path": "/labels/print", "search": "?ob=14"})
         self.assertTrue(j["ok"], j)
         row = self._log()[0]
-        self.assertEqual((row["kind"], row["title"]), ("印刷", "小ラベル"))
+        self.assertEqual((row["kind"], row["title"]), ("印刷画面", "小ラベル"))
         self.assertEqual(row["data"]["material"]["asOf"], calc["asOf"])
         self.assertEqual(row["data"]["sheets"][0]["kensaNo"], "Z987654")
         self.assertTrue(any(row["data"]["sheets"][0]["GW"]))

@@ -162,7 +162,7 @@ def _dims(name: str) -> Tuple[float, float]:
     return tuple(float(n) for n in nums[:2]) if len(nums) >= 2 else (0.0, 0.0)
 
 
-def add(repo, master, thickness, width, kataban, symbol="", note="") -> dict:
+def add(repo, master, thickness, width, kataban, symbol="", note="", who=None) -> dict:
     """サイズを 1 つ足す。共有の資材マスタ(SQLite)に書く。
 
     断るとき: 書き先が無い・読み取り専用 / 数の形が違う / 同じ寸法のサイズがもうある /
@@ -211,9 +211,12 @@ def add(repo, master, thickness, width, kataban, symbol="", note="") -> dict:
         ob = top + 1 if top % 2 == 0 else top + 2
         backup = MA._backup(path)
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        conn.execute('INSERT INTO "%s" (%s) VALUES (?,?,?,?,?,?,?)'
-                     % (TABLE_NAME, ", ".join('"%s"' % c for c in COLUMNS)),
-                     (ob, name, width_mm, kata, sym, memo, stamp))
+        values = (ob, name, width_mm, kata, sym, memo, stamp)
+        cur = conn.execute('INSERT INTO "%s" (%s) VALUES (?,?,?,?,?,?,?)'
+                           % (TABLE_NAME, ", ".join('"%s"' % c for c in COLUMNS)), values)
+        # 資材マスタの編集履歴にも残す(統合 1.2.39)
+        MA.write_history(conn, who, TABLE_NAME, cur.lastrowid, "サイズ名=%s 管理番号=%d" % (name, ob),
+                         "追加", list(zip(COLUMNS, [""] * len(COLUMNS), values)))
         conn.commit()
     except MA.Refused:
         conn.rollback()

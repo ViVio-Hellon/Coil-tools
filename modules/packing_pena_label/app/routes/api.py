@@ -241,12 +241,17 @@ class ApiRoutes:
                          "message": "行の指定が不正です"}
         try:
             r = MA.save_row(self.wf.materials, str(body.get("table") or ""),
-                            row_id, body.get("values") or {})
+                            row_id, body.get("values") or {}, who=self._who())
         except MA.Refused as exc:
             return exc.status, {"ok": False, "level": "warn",
                                 "refuse": exc.kind, "message": exc.message}
         self.wf.refresh_label_sheets(force=True)
         return {"level": "info", **r}
+
+    def _who(self) -> dict:
+        """編集履歴の「誰が」(PC 名・ライン名・Windows の利用者名。統合 1.2.39)。"""
+        from ..services import work_record as WR
+        return WR.who(self.cfg)
 
     def _master_delete(self, body):
         from ..services import master_admin as MA
@@ -261,7 +266,7 @@ class ApiRoutes:
                          "message": "行の指定が不正です"}
         try:
             r = MA.delete_row(self.wf.materials,
-                              str(body.get("table") or ""), row_id)
+                              str(body.get("table") or ""), row_id, who=self._who())
         except MA.Refused as exc:
             return exc.status, {"ok": False, "level": "warn",
                                 "refuse": exc.kind, "message": exc.message}
@@ -556,7 +561,7 @@ class ApiRoutes:
         try:
             r = SX.add(self.wf.materials, self.wf.master,
                        body.get("thickness"), body.get("width"), body.get("kataban"),
-                       body.get("symbol"), body.get("note"))
+                       body.get("symbol"), body.get("note"), who=self._who())
         except MA.Refused as exc:
             return exc.status, {"ok": False, "level": "warn",
                                 "refuse": exc.kind, "message": exc.message}
