@@ -33,6 +33,16 @@ def _mid(s: str, start: int, length: int) -> str:
     return s[start - 1:start - 1 + length]
 
 
+def _digits(s: str) -> bool:
+    """数字 0〜9 だけでできているか(空は False)。
+
+    VBA の ``IsNumeric`` は「1E11」(指数表記)・「+1」「1.1」「&H1」なども数とみなすので、
+    検査番号の確かめには使わない(統合 1.2.36。「W111E11」が VBA でも Python でも通り、
+    そのままラベルとバーコードに載っていた)。
+    """
+    return bool(s) and all("0" <= ch <= "9" for ch in s)
+
+
 def validate_kensa_no(ken: str) -> Optional[str]:
     """VBA ``ValidateKensaNo``。OK なら None、NG ならメッセージを返す。
 
@@ -46,18 +56,31 @@ def validate_kensa_no(ken: str) -> Optional[str]:
     2 文字目と 3 文字目の両方が不正な入力のメッセージが変わってしまう。
     最後なら、**これまで弾かれていた入力の文言は 1 つも変わらず**、
     これまで通り抜けていたものだけが新しく弾かれる。
+
+    統合 1.2.36 で塞いだ穴(どれも VBA にもあった):
+
+    - 数字の判定を ``IsNumeric`` から「0〜9 だけ」にした。「W111E11」(1E11 = 指数表記)・
+      「W1+1111」などが通っていた。これまで弾かれていた入力の文言は変わらない
+    - 8 文字以上を弾く。VBA の判定は 7 文字目までしか見ず、8 文字目からは何でも通った
+      (VBA は欄の MaxLength=7 で入らないようにしていた。API から来る値もあるので、ここでも見る)
+    - 1 文字目が英字か(記号が通っていた)
     """
-    if not is_numeric(_mid(ken, 2, 1)):
+    if not _digits(_mid(ken, 2, 1)):
         return _MSG_HEAD + "6桁目にアルファベットが入力されています"
-    if not is_numeric(_mid(ken, 7, 1)):
+    if not _digits(_mid(ken, 7, 1)):
         return _MSG_HEAD + "1桁目にアルファベットが入力されています"
-    if not is_numeric(_mid(ken, 4, 4)):
+    if not _digits(_mid(ken, 4, 4)):
         return _MSG_HEAD + "1～4桁目にアルファベットが入力されています"
     if is_numeric(_mid(ken, 1, 1)):
         return _MSG_HEAD + "7桁目に数字が入力されています"
     # 2026.09 追加：3 文字目（右から 5 桁目）
-    if not is_numeric(_mid(ken, 3, 1)):
+    if not _digits(_mid(ken, 3, 1)):
         return _MSG_HEAD + "5桁目にアルファベットが入力されています"
+    # 統合 1.2.36 追加: 1 文字目は英字・全部で 7 文字
+    if not ("A" <= _mid(ken, 1, 1) <= "Z"):
+        return _MSG_HEAD + "7桁目にアルファベット以外が入力されています"
+    if len(ken) != 7:
+        return f"検査NOは7桁です({len(ken)}桁入力されています)"
     return None
 
 

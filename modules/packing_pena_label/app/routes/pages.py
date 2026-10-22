@@ -1132,7 +1132,7 @@ class PageRoutes:
     </label>
     <label>検番
       <input type="text" id="asKen" value="{esc(st.get("kensaNo",""))}"
-             maxlength="7" data-filter="alnum" placeholder="例: W111111">
+             data-max="7" inputmode="latin" data-filter="alnum" autocomplete="off" placeholder="例: W111111">
     </label>
     <div>
       <span class="cap">コイル副番</span>

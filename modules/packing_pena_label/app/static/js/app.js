@@ -537,6 +537,16 @@
     if (kind === "alnum") {
       // 0-9 A-Z a-z のみ。小文字は大文字へ（VBA KeyAscii - 32）
       out = v.replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+      // 桁の上限(検査番号は 7 桁。data-max)。超える入力は**入れない**(前の値に戻して知らせる)。
+      // 以前は maxlength で、8 桁を貼り付けると黙って 7 桁に切られ、違う番号のまま進めた(統合 1.2.36)
+      var max = parseInt(input.getAttribute("data-max") || "0", 10);
+      if (max && out.length > max) {
+        var prev = input.getAttribute("data-prev") || "";
+        toast("検査番号は" + max + "桁までです。" + out.length + "桁の入力は入れていません（前の「"
+              + prev + "」のまま）", "warn");
+        out = prev;
+      }
+      if (max) { input.setAttribute("data-prev", out); }
     } else if (kind === "num") {
       // VBA: If Not IsNumeric(text) Then text = ""（"-" 単独は許容）
       if (v !== "-" && v !== "" && !/^[+-]?(\d+\.?\d*|\.\d+)$/.test(v)) {
@@ -552,6 +562,12 @@
     }
     if (out !== v) { input.value = out; }
   }
+  // 桁の上限のある欄は、書き換わる直前の値を控える(超えたらこの値に戻す。統合 1.2.36)
+  document.addEventListener("beforeinput", function (e) {
+    if (e.target && e.target.hasAttribute && e.target.hasAttribute("data-max")) {
+      e.target.setAttribute("data-prev", e.target.value);
+    }
+  });
   document.addEventListener("input", function (e) {
     if (e.target && e.target.hasAttribute && e.target.hasAttribute("data-filter")) {
       applyFilter(e.target);
