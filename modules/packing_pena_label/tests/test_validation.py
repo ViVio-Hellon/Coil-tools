@@ -36,12 +36,13 @@ class TestKensaNo(unittest.TestCase):
         msg = validate_kensa_no("W11111")
         self.assertIn("1桁目にアルファベット", msg)
 
-    def test_third_char_is_checked(self):
-        # VBA は Mid(ken,3,1) を検査していなかった（穴）。
-        # 2026.09 の判断で塞いだ（解析書 B-2）。
-        msg = validate_kensa_no("W1X1111")
-        self.assertIsNotNone(msg, "3 文字目の穴が開いている")
-        self.assertIn("5桁目にアルファベット", msg)
+    def test_third_char_may_be_a_letter(self):
+        # 実際の検査番号は 3 文字目が英字のものが多い(N6X0945)。数字のものもある(H670129)。
+        # 2026.09 に足した「3 文字目も数字」(解析書 B-2)は誤りで、統合 1.2.43 で戻した。
+        self.assertIsNone(validate_kensa_no("N6X0945"))
+        self.assertIsNone(validate_kensa_no("H670129"))
+        msg = validate_kensa_no("W1-1111")
+        self.assertIn("5桁目に英字・数字以外", msg)
 
 
 class TestInpCheck(unittest.TestCase):
@@ -97,9 +98,9 @@ class TestFilters(unittest.TestCase):
 class TestKensaNoGaps(unittest.TestCase):
     """検査番号のチェック（B-2）。
 
-    VBA は 1 / 2 / 4〜7 文字目しか見ておらず、**3 文字目に穴があった**
-    （``W1A1111`` が通り、そのままラベルとバーコードに載っていた）。
-    2026.09 の判断で塞いだ。
+    VBA は 1 / 2 / 4〜7 文字目しか見ていない。3 文字目は英字のことが多い(N6X0945)ので、
+    VBA が見ていなかったのは穴ではなかった。2026.09 に足した「3 文字目も数字」は
+    正しい番号を弾いたので、統合 1.2.43 で「英字・数字以外だけ弾く」に戻した(現場の指摘)。
 
     メッセージの「N桁目」は **右から数えた桁**。文言は変えていない。
     """
@@ -107,15 +108,16 @@ class TestKensaNoGaps(unittest.TestCase):
     def _v(self, k):
         return validate_kensa_no(normalize_kensa_no(k))
 
-    def test_the_third_character_is_checked(self):
-        """3 文字目が英字なら弾く（塞いだ穴）。"""
-        self.assertIsNotNone(self._v("W1A1111"), "3 文字目の穴が開いている")
-        self.assertIn("5桁目", self._v("W1A1111"), "右から 5 桁目のはず")
+    def test_the_third_character_may_be_a_letter_or_digit(self):
+        """3 文字目は英字でも数字でもよい。記号だけ弾く(右から 5 桁目)。"""
+        for k in ("N6X0945", "K6X0132", "H5Z1404", "T3Y1721", "K4Z0341", "H670129", "n6x0945"):
+            self.assertIsNone(self._v(k), k)
+        self.assertIn("5桁目", self._v("W1-1111") or "", "右から 5 桁目のはず")
 
     def test_closing_the_hole_did_not_change_existing_messages(self):
         """これまで弾かれていた入力の文言は 1 つも変わらない。
 
-        3 文字目の判定を**最後**に置いているため、
+        3 文字目(記号だけ弾く)の判定を**最後**に置いているため、
         先に該当する条件があればそちらのメッセージが出る。
         """
         cases = {

@@ -22,14 +22,15 @@ def check(raw):
 
 class KensaDigitsTest(unittest.TestCase):
     def test_指数表記や記号は数字とみなさない(self):
-        for raw in ("W111E11", "W1111E1", "W11E111", "W1E1111", "W111e11",
-                    "W1+1111", "W1.1111", "W1-1111", "W1 1111", "W11D111"):
+        for raw in ("W111E11", "W1111E1", "W11E111", "W111e11",
+                    "W1+1111", "W1.1111", "W1-1111", "W1 1111", "W11D111", "N6X786E"):
             with self.subTest(raw=raw):
                 self.assertIsNotNone(check(raw))
 
     def test_EのときもVBAと同じ文言(self):
         self.assertIn("1～4桁目にアルファベットが入力されています", check("W111E11"))
-        self.assertIn("5桁目にアルファベットが入力されています", check("W1E1111"))
+        # 3 文字目の英字は正しい(N6X0945 など。統合 1.2.43)
+        self.assertIsNone(check("W1E1111"))
 
     def test_8文字以上は弾く(self):
         self.assertEqual(check("W1111111"), "検査NOは7桁です(8桁入力されています)")
@@ -40,7 +41,7 @@ class KensaDigitsTest(unittest.TestCase):
         self.assertIsNotNone(check("+111111"))
 
     def test_正しいものは通る(self):
-        for raw in ("W111111", "w111111", "Z987654", "Ｗ１１１１１１"):
+        for raw in ("W111111", "w111111", "Z987654", "Ｗ１１１１１１", "N6X0945", "Ｎ６Ｘ０９４５"):
             with self.subTest(raw=raw):
                 self.assertIsNone(check(raw))
 
@@ -48,7 +49,7 @@ class KensaDigitsTest(unittest.TestCase):
         self.assertIn("6桁目にアルファベット", check("WA11111"))
         self.assertIn("1桁目にアルファベット", check("W12345"))
         self.assertIn("7桁目に数字", check("1111111"))
-        self.assertIn("5桁目にアルファベット", check("W1A1111"))
+        self.assertIn("1桁目にアルファベット", check("N6X786E"))
 
 
 class KensaOverHttpTest(HttpTestCase):
@@ -66,6 +67,18 @@ class KensaOverHttpTest(HttpTestCase):
                                                   "threeDigit": False, "w1": "10", "w2": "12"})
         self.assertFalse(j["ok"], j)
         self.assertIn("7桁", j["message"])
+
+    def test_3文字目が英字の検査番号で重量反映と全サイズの決定が通る(self):
+        """現場の指摘(統合 1.2.43): N6X0945 が「5桁目にアルファベット」で止まっていた。"""
+        cur = {"selectedOb": 0, "selectedCb": 1, "namedCb": False, "tip": "TIP1000",
+               "kensaNo": "N6X0945", "weight1": "20.0", "weight2": "22.0",
+               "coilH": {"1": "", "2": "", "3": "", "4": ""}}
+        _, j = self.post("/api/apply-weight", {"current": cur})
+        self.assertTrue(j["ok"], j)
+        combo = self.ctx.wf.all_size.master.rows[0]["name"]
+        _, j = self.post("/api/all-size/submit", {"comboText": combo, "kensaNo": "N6X0945",
+                                                  "threeDigit": False, "w1": "10", "w2": "12"})
+        self.assertNotIn("桁目", j.get("message", ""), j)
 
 
 class KensaScreenTest(HttpTestCase):
