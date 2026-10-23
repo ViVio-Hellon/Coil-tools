@@ -14,7 +14,11 @@
 - 本体と `-wal` / `-journal` を一緒に写す(本体だけだと、直前に書かれた分が抜ける)。
   `-shm` は写さない(WAL の索引。手元で作り直される)
 - 写す前と後で大きさ・更新時刻を比べ、**写している間に書き換わったら写し直す**
-- 中身が前と同じ(大きさ・更新時刻が同じ)なら写し直さない
+- 中身が前と同じ(大きさ・更新時刻が同じ)で、前に写してから `REUSE_MAX_SEC` 秒以内なら写し直さない。
+  それより古い写しは写し直す(統合 1.2.49・点検: SQLite は値を直してもファイルの大きさが変わらず、
+  更新時刻の刻みが粗い共有(NAS・FAT は 2 秒)や Windows の SMB の属性の溜め置き(既定で約 10 秒)に
+  当たると、大きさ・更新時刻が同じのまま中身だけ変わることがある。前の写しを使い続けると、
+  直したマスタが次に変わるまで前の中身で動いていた)
 - 写しは毎回別の名前にする。前の写しを誰かが開いていても(Windows は消せない)止まらない
 - 置き場所はこの PC の一時フォルダ。アプリが終わると消す
 
@@ -42,6 +46,8 @@ SIDECARS = ("-wal", "-journal")
 RETRIES = 3
 #: 写し直す前に待つ秒
 RETRY_WAIT_SEC = 0.5
+#: 目印が同じでも、前の写しを使い回すのはこの秒まで(それより古ければ写し直す。統合 1.2.49)
+REUSE_MAX_SEC = 10.0
 
 
 class CopyError(OSError):
@@ -52,6 +58,8 @@ class CopyError(OSError):
 class _Known:
     stamp: tuple
     path: Path
+    #: 写した時刻(進むだけの時計)
+    copied_at: float = 0.0
 
 
 _lock = threading.Lock()
@@ -105,7 +113,8 @@ def local_copy(path: Path) -> Path:
         for attempt in range(1, RETRIES + 1):
             before = _stamp(src)
             known = _known.get(key)
-            if known is not None and known.stamp == before and known.path.exists():
+            if known is not None and known.stamp == before and known.path.exists() \
+                    and time.monotonic() - known.copied_at < REUSE_MAX_SEC:
                 return known.path
             dest = copy_dir() / f"{abs(hash(key)):x}_{next(_counter)}{src.suffix}"
             try:
@@ -121,7 +130,7 @@ def local_copy(path: Path) -> Path:
             if after == before:
                 if known is not None:
                     _remove(known.path)
-                _known[key] = _Known(after, dest)
+                _known[key] = _Known(after, dest, time.monotonic())
                 log.info("取り込み元を手元へ写しました: %s → %s", src, dest)
                 return dest
             _remove(dest)

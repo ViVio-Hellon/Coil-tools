@@ -52,6 +52,27 @@ class LocalCopyTest(unittest.TestCase):
         os.utime(src, ns=(1, 10**18))                         # 確実に更新時刻を変える
         self.assertNotEqual(source_copy.local_copy(src), first)
 
+    def test_大きさも更新時刻も同じまま中身が変わっても_しばらくたてば写し直す(self):
+        """統合 1.2.49(点検): SQLite は値を直しても大きさが変わらない。更新時刻の刻みが粗い共有や
+        SMB の属性の溜め置きで更新時刻まで同じに見えると、前の写しを使い続けていた。"""
+        src = self.share / "梱包資材マスタ.sqlite3"
+        _make(src).close()
+        st = src.stat()
+        first = source_copy.local_copy(src)
+        conn = sqlite3.connect(str(src))
+        conn.execute("UPDATE t SET v = 'Z'")
+        conn.commit()
+        conn.close()
+        os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns))     # 更新時刻を前と同じに見せる
+        self.assertEqual(src.stat().st_size, st.st_size, "大きさは変わらない")
+        self.assertEqual(source_copy.local_copy(src), first, "直後は前の写しを使い回す(負荷を避ける)")
+        with mock.patch.object(source_copy.time, "monotonic",
+                               return_value=source_copy.time.monotonic() + source_copy.REUSE_MAX_SEC + 1):
+            again = source_copy.local_copy(src)
+        self.assertNotEqual(again, first)
+        with sqlite3.connect(str(again)) as c:
+            self.assertEqual(c.execute("SELECT v FROM t").fetchone()[0], "Z", "直した中身が読める")
+
     def test_写している間に書き換わったら写し直す(self):
         src = self.share / "SIKAHIKI.sqlite3"
         _make(src).close()
