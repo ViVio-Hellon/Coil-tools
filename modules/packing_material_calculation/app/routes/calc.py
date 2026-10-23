@@ -15,7 +15,7 @@ from typing import Any
 from flask import Blueprint, current_app, jsonify, render_template, request
 
 from modules.packing_material_calculation.coil_tool import (burr_split, calc_service, coil_weight, config,
-                       lot_service, ripla_service, user_settings, vba)
+                       data_sync, lot_service, ripla_service, user_settings, vba)
 from modules.packing_material_calculation.coil_tool.logging_utils import get_logger
 from modules.packing_material_calculation.coil_tool.models import CalcState, OrderInfo
 
@@ -254,16 +254,68 @@ def set_input():
 # ==================================================================
 # 計算
 # ==================================================================
+#: 取り込み中の断り(統合 1.2.49)
+IMPORTING_MESSAGE = ("取り込み中です。取り込みの途中は表の間で新旧が混ざるので、"
+                     "終わってから「計算Start」を押してください(上の帯の「取り込み中」が消えたら)")
+
+
+def _before_calc(conn, state: CalcState):
+    """計算の前に、取り込み元と受注を確かめる(計算Start・積数の手直し。統合 1.2.49・現場の指摘)。
+
+    1. 取り込み中なら断る(表の間で新旧が混ざる)
+    2. 取り込み元の目印を軽く確かめ、梱包資材マスタ・コイル実績が変わっていれば取り込み直す
+    3. 選んだ受注を手元の仕掛受注から引き直す(取り込み直しで変わっていれば新しい値にする)
+
+    `(断りの応答 または None, 知らせ, 世代)` を返す。知らせは計算のあとに足す
+    (計算は前の結果と断りを消してから始めるため)。
+    """
+    if data_sync.is_importing():
+        return (jsonify(ok=False, reason="importing", view=view_of(state),
+                        message=IMPORTING_MESSAGE), 409), [], ""
+    fresh = data_sync.freshness(conn)
+    if fresh.importing:
+        return (jsonify(ok=False, reason="importing", view=view_of(state),
+                        message=IMPORTING_MESSAGE), 409), [], ""
+    notes = []
+    if fresh.refreshed:
+        notes.append(fresh.refreshed_note + "。新しい値で計算しました")
+    if fresh.lot_changed:
+        notes.append("共有の仕掛台帳が更新されています。上の帯の「いま取り込む」で取り込めます")
+    exists, changed = lot_service.refresh_order(conn, state)
+    if not exists:
+        state.clear_results()
+        message = (f"受注番号 {state.order.受注番号} が仕掛受注にありません"
+                   "(取り込み直しで無くなったようです)。LotNo から選び直してください")
+        state.note(message)
+        return (jsonify(ok=False, reason="order_not_found", view=view_of(state),
+                        message=message), 422), [], ""
+    if changed:
+        notes.append(changed)
+    return None, notes, data_sync.generation(conn)
+
+
+def _after_calc(state: CalcState, notes: list[str]) -> None:
+    """計算の前に確かめたことを、断り・知らせの**前**に入れる(最後の断りが画面の見出しになるため)。"""
+    for note in reversed(notes):
+        if note not in state.messages:
+            state.messages.insert(0, note)
+
+
 @bp.post("/api/calc/run")
 def run():
     """計算Start (VBA `CommandButton5_Click`)。"""
     conn = get_db()
     state = session.get()
+    refused, notes, gen = _before_calc(conn, state)
+    if refused is not None:
+        return refused
     result = calc_service.calculate(conn, state)
+    _after_calc(state, notes)
     if not result.ok:
         return jsonify(ok=False, reason=result.reason,
                        view=view_of(state, shape=result.shape),
                        message=state.messages[-1] if state.messages else ""), 422
+    state.世代 = gen
     return _ok(state, shape=result.shape, total_ripla=result.total_ripla)
 
 
@@ -275,11 +327,16 @@ def restack():
     """
     conn = get_db()
     state = session.get()
+    refused, notes, gen = _before_calc(conn, state)
+    if refused is not None:
+        return refused
     result = calc_service.recalculate_from_stack(conn, state)
+    _after_calc(state, notes)
     if not result.ok:
         return jsonify(ok=False, reason=result.reason,
                        view=view_of(state, shape=result.shape),
                        message=state.messages[-1] if state.messages else ""), 422
+    state.世代 = gen
     return _ok(state, shape=result.shape, total_ripla=result.total_ripla)
 
 
@@ -361,8 +418,10 @@ def burr_transfer():
     burr_split.transfer(state, result)
     # 送った積数・台数で、積数の手直しと同じ道を通す(パレット・リプラを出し直す。
     # 前の別枠・印は transfer が消している)
+    gen = data_sync.generation(conn)
     done = calc_service.recalculate_from_stack(conn, state, units=result.台数)
     if not done.ok:
         return jsonify(ok=False, reason=done.reason, view=view_of(state),
                        message=state.messages[-1] if state.messages else ""), 422
+    state.世代 = gen                            # 計算した時点の取り込みの世代(統合 1.2.49)
     return _ok(state, shape=done.shape, total_ripla=done.total_ripla)

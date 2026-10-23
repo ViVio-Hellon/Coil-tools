@@ -56,18 +56,32 @@
       取り込み日時をいつも出す。マスタは取り込んだ時点の写しなので、
       古いまま計算していると気づけない。古ければ印を付けて促す。
 
-      「古い」は**取り込んだ日と今日が違えば**出る。仕掛台帳は日々の
-      台帳なので、日付が変われば上流の中身も変わる。経過時間で見ると、
-      23:50 に取り込んで翌 00:10 に使ったときに古くならない。
+      「古い」は**取り込み元が変わったか**(取り込み元の目印が一致するか)で出す
+      (統合 1.2.49・現場の指摘)。以前は「取り込んだ日と今日が違えば」で、出るべきときに出ず、
+      マスタが何日も変わらないと毎日出続けた。写した日時と確かめた日時は分けて出す。
+      取り込み元に届かず確かめられないときだけ、いままでどおり日付で見る。
     #}
     <div class="slot">
-      <span class="slot__k">マスタ</span>
-      <span class="slot__v" id="rb-imported">
+      <span class="slot__k">マスタ<span id="rb-checked" title="共有の取り込み元を最後に確かめた時刻"
+        {%- if not ribbon.checked_at %} hidden{% endif %}>・確かめた {{ (ribbon.checked_at or '')[11:16] }}</span></span>
+      <span class="slot__v" id="rb-imported" title="写した日時(いちばん古い取り込み)">
         {{ ribbon.imported_at or '未取り込み' }}
       </span>
       {# 取り込んだら読み直さずに消す(core.js の syncRibbon)ので、いつも置いて hidden で隠す #}
       <a class="chip chip--alert" id="rb-stale" href="{{ base }}/settings?t={{ token }}"
-         title="{{ ribbon.stale_why }}。取り込み直してください"{% if not ribbon.stale %} hidden{% endif %}>古い</a>
+         title="{{ ribbon.stale_why }}。取り込み直してください"{% if not ribbon.stale or ribbon.lot_changed %} hidden{% endif %}>古い</a>
+      {# 取り込み中(起動時の自動取り込みが長引いたとき)。計算Start は断る(統合 1.2.49) #}
+      <span class="chip chip--info" id="rb-importing"
+            title="取り込みの途中は表の新旧が混ざるので、終わるまで「計算Start」は押せません"
+            {%- if not ribbon.importing %} hidden{% endif %}>取り込み中</span>
+      {# その場で取り込み直したこと(画面を開いたときに一度だけ知らせる。app.js) #}
+      <span id="rb-refreshed" hidden data-note="{{ ribbon.refreshed }}"></span>
+    </div>
+
+    {# 共有の仕掛台帳が変わった。大きいので自動では取り込まず、押して取り込む(統合 1.2.49) #}
+    <div class="slot slot--row" id="rb-lot"{% if not ribbon.lot_changed %} hidden{% endif %}>
+      <span class="chip chip--alert" id="rb-lot-note">{{ ribbon.lot_note }}</span>
+      <button class="btn btn--run" type="button" id="rb-lot-import">いま取り込む</button>
     </div>
 
     <label class="slot">

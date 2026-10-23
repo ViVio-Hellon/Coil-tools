@@ -35,6 +35,9 @@ class MasterViewModel:
     columns: list[master_admin.Column] = field(default_factory=list)
     page: Optional[master_admin.Page] = None
     message: str = ""
+    # 共有のマスタと手元の写しの食い違い(統合 1.2.49)。この画面は共有を直に読むので、
+    # 手元(計算が読むほう)が追いついていないと「画面は新しいのに計算は古い」になる
+    sync_note: str = ""
 
 
 def frame(conn: Optional[sqlite3.Connection]) -> MasterViewModel:
@@ -59,6 +62,7 @@ def browse(conn: sqlite3.Connection, *, table: str = "", query: str = "",
     """
     view = frame(conn)
     view.message = message
+    view.sync_note = _sync_note(conn)
     found = path or data_sync.find_master_db()
     view.loaded = True
     view.source = str(found) if found else ""
@@ -92,6 +96,27 @@ def browse(conn: sqlite3.Connection, *, table: str = "", query: str = "",
     return view
 
 
+def _sync_note(conn: sqlite3.Connection) -> str:
+    """共有のマスタに、手元へまだ取り込んでいない変更があるか(統合 1.2.49・現場の指摘)。
+
+    変わっていれば、その場で手元へ取り込み直す(小さい表なので)。取り込み直せなければ一言出す。
+    """
+    try:
+        fresh = data_sync.freshness(conn)
+    except Exception:                          # noqa: BLE001 - 見られなくても画面は出す
+        return ""
+    if fresh.importing:
+        return "取り込み中です。終わるまで、計算は前の写しで動きます。"
+    if fresh.check.master:
+        return ("共有のマスタに、手元へまだ取り込んでいない変更があります(計算は手元の写しで動きます)。"
+                "上の「いま取り込む」を押してください。")
+    done = [t for t in fresh.refreshed if t in master_admin.import_specs.MASTER_IMPORT_SPECS]
+    if done:
+        return ("共有のマスタが変わっていたので、手元へ取り込み直しました(" + "・".join(done)
+                + ")。資材計算をやり直すと新しい値になります。")
+    return ""
+
+
 def _pick(tables: list[master_admin.TableInfo], wanted: str) -> str:
     """出す表を決める。
 
@@ -123,4 +148,5 @@ def to_dict(view: MasterViewModel) -> dict[str, Any]:
         "page": view.page.to_dict() if view.page else None,
         "row_key": master_admin.ROW_KEY,
         "message": view.message,
+        "sync_note": view.sync_note,
     }

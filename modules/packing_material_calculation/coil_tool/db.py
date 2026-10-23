@@ -87,6 +87,16 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     if have and "枚本数" not in have:
         conn.execute('ALTER TABLE "コイル実績" ADD COLUMN 枚本数 INTEGER')   # 統合 1.2.30
         conn.commit()
+    # 取り込み元の目印・確かめた日時(統合 1.2.49)。前の版の記録は目印が空なので、
+    # 次の取り込みで1回だけ読み直す(黙って「変わっていない」扱いにしない)
+    have = {r[1] for r in conn.execute('PRAGMA table_info("取り込み履歴")')}
+    added = False
+    for column in ("元の目印", "確かめた日時"):
+        if have and column not in have:
+            conn.execute(f'ALTER TABLE "取り込み履歴" ADD COLUMN {column} TEXT NOT NULL DEFAULT \'\'')
+            added = True
+    if added:
+        conn.commit()
 
 
 # ------------------------------------------------------------------

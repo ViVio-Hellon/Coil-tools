@@ -25,7 +25,7 @@ const IDS = ["mTables", "mTitle", "mCan", "mCount", "mQuery", "mFind",
              "mAdd", "mReload", "mWhy", "mError", "mHead", "mRows", "mNote",
              "mEdit", "mEditTitle", "mEditKind", "mEditWhy", "mEditError",
              "mFields", "mFoot", "mSave", "mDelete", "mConfirm",
-             "mDeleteYes", "mDeleteNo"];
+             "mDeleteYes", "mDeleteNo", "mSync", "mEditRule"];
 
 // ------------------------------------------------------------------
 export function start(frame) {
@@ -210,6 +210,7 @@ function render(next) {
   for (const name of columns) head.appendChild(headerCell(name, page));
   el.mHead.replaceChildren(head);
 
+  const rules = page.rules || {};
   el.mRows.replaceChildren(...(page.rows || []).map((row) => {
     const tr = document.createElement("tr");
     tr.dataset.key = String(row[view.row_key]);
@@ -218,8 +219,24 @@ function render(next) {
       td.textContent = text(row[name]);
       tr.appendChild(td);
     }
+    // プログラムの規則が優先される品番には札を出す(マスタを直しても効かない。統合 1.2.49)
+    const rule = rules[String(row[view.row_key])];
+    if (rule && tr.firstChild) {
+      const tag = document.createElement("span");
+      tag.className = "chip chip--info";
+      tag.textContent = "規則が優先";
+      tag.title = rule;
+      tr.firstChild.append(" ", tag);
+      tr.title = rule;
+    }
     return tr;
   }));
+
+  // 共有のマスタと手元の写しの食い違い(文言はサーバが持つ。統合 1.2.49)
+  if (el.mSync) {
+    el.mSync.hidden = !view.sync_note;
+    el.mSync.textContent = view.sync_note || "";
+  }
 
   // 出しきれなかった分は**黙って落とさない**(文言はサーバが持つ)
   el.mNote.hidden = !page.note;
@@ -281,6 +298,11 @@ function openRow(key) {
   const why = view.can_edit ? page.why : view.edit_why;
   el.mEditWhy.hidden = !why || (editable && !noFields);
   el.mEditWhy.textContent = why || "";
+  const rule = key === null ? "" : ((page.rules || {})[String(key)] || "");
+  if (el.mEditRule) {
+    el.mEditRule.hidden = !rule;
+    el.mEditRule.textContent = rule;
+  }
 
   // 直せないなら**打ち込める形にしない**。読めない欄を出すと、打てると
   // 思って打ち、押してから断られる。読むだけの表は文字のまま出す

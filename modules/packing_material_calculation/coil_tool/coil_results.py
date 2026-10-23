@@ -87,7 +87,7 @@ def read_rows(path: Path) -> tuple[list[dict], int]:
 
 def import_results(conn: Any):
     """コイル実績を取り込む。読む設定でなければ None(画面の結果に出さない)。"""
-    from .data_sync import TableResult          # 循環を避ける
+    from .data_sync import TableResult, source_stamp, _bump   # 循環を避ける
 
     if not wanted():
         return None
@@ -98,6 +98,8 @@ def import_results(conn: Any):
                                  f"{config.konpo_db_dir()} に {config.konpo_db_file()}"
                                  + (f" / 第2パスに {config.ls4_db2_file()}"
                                     if len(config.lot_db_dirs()) > 1 else ""))
+    # 目印は**読む前に**取る(統合 1.2.49。data_sync._import_table と同じ理由)
+    stamps = [source_stamp(path) for path in files]
     merged: dict[str, dict] = {}
     filled = 0
     notes: list[str] = []
@@ -136,16 +138,20 @@ def import_results(conn: Any):
                     f'INSERT INTO "{TABLE}" (ロット番号, 内径, 肉厚, 外径, 枚本数, 作業開始, 元ファイル)'
                     " VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (lot, e["inner"], e["thick"], e["outer"], e["count"], e["start"], e["source"]))
+            now = db.now_db_string()
             conn.execute(
-                "INSERT OR REPLACE INTO 取り込み履歴 (テーブル名, 取り込み日時, 元ファイル, 件数)"
-                " VALUES (?, ?, ?, ?)", (TABLE, db.now_db_string(), str(files[0]), len(merged)))
+                "INSERT OR REPLACE INTO 取り込み履歴"
+                " (テーブル名, 取り込み日時, 元ファイル, 件数, 元の目印, 確かめた日時)"
+                " VALUES (?, ?, ?, ?, ?, ?)", (TABLE, now, str(files[0]), len(merged), stamps[0], now))
             if len(files) > 1:
                 conn.execute(
-                    "INSERT OR REPLACE INTO 取り込み履歴 (テーブル名, 取り込み日時, 元ファイル, 件数)"
-                    " VALUES (?, ?, ?, ?)", (SECOND_NOTE, db.now_db_string(), str(files[1]), 0))
+                    "INSERT OR REPLACE INTO 取り込み履歴"
+                    " (テーブル名, 取り込み日時, 元ファイル, 件数, 元の目印, 確かめた日時)"
+                    " VALUES (?, ?, ?, ?, ?, ?)", (SECOND_NOTE, now, str(files[1]), 0, stamps[1], now))
     except sqlite3.Error as exc:
         log.exception("コイル実績の取り込みに失敗")
         return TableResult(table=TABLE, ok=False, source=str(files[0]), error=str(exc))
+    _bump()                                     # 取り込みの世代を進める(統合 1.2.49)
     log.info("コイル実績: %d ロット (%s)", len(merged), " / ".join(notes))
     return TableResult(table=TABLE, ok=True, rows=len(merged), source=str(files[0]),
                        note="・".join(notes))

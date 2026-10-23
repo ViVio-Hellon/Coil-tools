@@ -192,11 +192,28 @@ export function syncRibbon(rb, { announce = true } = {}) {
   if (!rb) return;
   const imp = document.getElementById('rb-imported');
   if (imp && 'imported_at' in rb) imp.textContent = rb.imported_at || '未取り込み';
+  // 写した日時と確かめた日時は分けて出す(統合 1.2.49)
+  const checked = document.getElementById('rb-checked');
+  if (checked && 'checked_at' in rb) {
+    checked.hidden = !rb.checked_at;
+    checked.textContent = `・確かめた ${(rb.checked_at || '').slice(11, 16)}`;
+  }
   const stale = document.getElementById('rb-stale');
   if (stale && 'stale' in rb) {
-    stale.hidden = !rb.stale;
+    // 仕掛台帳が変わったときは「いま取り込む」の札のほうを出す(同じことを2つ出さない)
+    stale.hidden = !rb.stale || !!rb.lot_changed;
     stale.title = `${rb.stale_why || ''}。取り込み直してください`;
   }
+  const importing = document.getElementById('rb-importing');
+  if (importing && 'importing' in rb) importing.hidden = !rb.importing;
+  const lot = document.getElementById('rb-lot');
+  if (lot && 'lot_changed' in rb) {
+    lot.hidden = !rb.lot_changed;
+    const note = document.getElementById('rb-lot-note');
+    if (note) note.textContent = rb.lot_note || '';
+  }
+  // その場で取り込み直した(梱包資材マスタ・コイル実績)。一度だけ知らせる
+  if (rb.refreshed) toast(rb.refreshed);
   const line = document.getElementById('rb-line');
   if (line && rb.line) line.value = rb.line;
   const worker = document.getElementById('rb-worker');

@@ -199,6 +199,9 @@ class CalcState:
     flags: set[str] = field(default_factory=set)
     # 計算を続けられなかった理由。画面はこれを見て断りを出す
     messages: list[str] = field(default_factory=list)
+    # 計算した時点の「取り込みの世代」(`data_sync.generation`。統合 1.2.49・現場の指摘)。
+    # チェックリストへ積むときに今の世代と比べ、違えば(計算のあとにマスタ・台帳が変わった)断る
+    世代: str = ""
 
     # --------------------------------------------------------------
     def mark(self, flag: str) -> None:
@@ -257,6 +260,7 @@ class CalcState:
         self.IMI中間本数 = ""
         self.flags.clear()
         self.messages.clear()
+        self.世代 = ""
         if keep_stack:
             self.積数 = stack
 

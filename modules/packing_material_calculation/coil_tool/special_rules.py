@@ -297,3 +297,40 @@ def ripla_size_override(spec_no: str, atu: float, haba: float, current: str) -> 
     if vba.num_equal(atu, 0.8) and vba.num_equal(haba, 260.0):
         return "40"
     return "30"
+
+
+# ==================================================================
+# マスタ管理に出す札(統合 1.2.49・現場の指摘)
+# ==================================================================
+# ここにある品番は、マスタ(包装仕様)を直しても**プログラムの規則が優先**される。
+# マスタ管理の該当行に札を出し、直す前に分かるようにする(`master_admin.rule_tags`)。動きは変えない。
+RULE_TAG = "この品番はプログラムの規則が優先されます({})"
+
+
+def program_rule_notes(spec_no: str, *, size: str = "") -> list[str]:
+    """その品番(と包装仕様の「サイズ」)でプログラムが決めていること。無ければ空。
+
+    規則を増やしたら、ここにも1行足す(`tests/test_master_freshness.py` が品番の漏れを見る)。
+    """
+    notes: list[str] = []
+    if spec_no == IZUMI_SPEC_NO:
+        notes.append("ｲｽﾞﾐﾒﾀﾙ: パレット種類を外径で決めます")
+    rule = _STACK_BY_NO.get(spec_no)
+    if rule is not None:
+        notes.append(f"{rule.customer}: 積数を板厚・板幅で決めます")
+    if spec_no == SHIMANO_SPEC_NO:
+        notes.append("リプラの角サイズを板厚・板幅で決めます")
+    if spec_no == MIYAMA_SPEC_NO:
+        notes.append("ﾐﾔﾏｾｲｺｳ: 総高さの確認をプログラムで出します")
+    if spec_no == IMI_COVER_SPEC_NO:
+        notes.append("ｱｲｴﾑｱｲｶﾊﾞｰ: リプラを3種類使い、チェックリストを2行に分けます")
+    if spec_no == KOTOBUKI_SPEC_NO:
+        notes.append("ｺﾄﾌﾞｷｾｲﾐﾂ: 最下部と間でリプラ種類を分け、チェックリストを2行に分けます")
+    if str(size).strip() == OUTER_DESIGNATION:
+        notes.append("「外径指定」のパレットのＷは、プログラムの段階表で決めます")
+    return notes
+
+
+#: 札を出す品番ぜんぶ(試験が規則の漏れを見る)
+RULE_SPEC_NOS = frozenset({IZUMI_SPEC_NO, SHIMANO_SPEC_NO, MIYAMA_SPEC_NO, IMI_COVER_SPEC_NO,
+                           KOTOBUKI_SPEC_NO, *_STACK_BY_NO})

@@ -399,6 +399,25 @@ def get_ribbon():
     return jsonify(ok=True, ribbon=shell.ribbon(get_db()))
 
 
+@bp.post("/api/ribbon/import-lot")
+def import_lot_now():
+    """帯の「いま取り込む」── 共有の仕掛台帳だけを取り込み直す(統合 1.2.49・現場の指摘)。
+
+    仕掛台帳は大きいので、変わっていても自動では取り込まない(帯で知らせる)。
+    覚えている写しを捨ててから読む(`data_sync.reimport_lot`)。
+    """
+    conn = get_db()
+    if data_sync.is_importing():
+        return jsonify(ok=False, reason="importing", message="取り込み中です。終わってからもう一度押してください",
+                       ribbon=shell.ribbon(conn)), 409
+    db.apply_schema(conn)
+    tables = data_sync.reimport_lot(conn)
+    failed = [t for t in tables if not t.ok]
+    return jsonify(ok=not failed, tables=_table_results(tables),
+                   message=" / ".join(f"{t.table}: {t.error}" for t in failed),
+                   ribbon=shell.ribbon(conn))
+
+
 # ==================================================================
 # 確かめる ── 保存する前に、そこに届くか見る
 # ==================================================================
@@ -652,6 +671,8 @@ def save_group():
 
     conn = get_db()
     db.apply_schema(conn)
+    # 押したときは、覚えている写しを捨ててから読む(統合 1.2.49)
+    data_sync.forget_copies(data_sync.source_paths())
     tables = []
     if group["id"] == "master":
         tables += data_sync.import_master(conn)

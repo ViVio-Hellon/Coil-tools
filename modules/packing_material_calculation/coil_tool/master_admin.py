@@ -50,7 +50,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from common import sql_sort
-from . import admin_session, config, data_sync, db, import_specs, source_db
+from . import admin_session, config, data_sync, db, import_specs, source_db, special_rules
 from .logging_utils import get_logger
 
 log = get_logger("master_admin")
@@ -431,9 +431,11 @@ class Page:
     # いま並び替えている列。空なら既定(rowid、取り込み順)
     sort: str = ""
     sort_dir: str = "asc"
+    # 行(`ROW_KEY` の値)→ プログラムの規則が優先されることの札(統合 1.2.49)
+    rules: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"table": self.table, "label": self.label,
+        return {"table": self.table, "label": self.label, "rules": self.rules,
                 "columns": self.columns, "rows": self.rows,
                 "total": self.total, "shown": len(self.rows),
                 "editable": self.editable, "why": self.why,
@@ -498,12 +500,32 @@ def page(path: Optional[Path], table: str, *, query: str = "",
         view.error = str(exc)
         return view
 
+    view.rules = rule_tags(table, view.rows)
+
     hidden = view.total - len(view.rows)
     if hidden > 0:
         # **黙って切らない。** 絞り込みの手があることまで言う
         view.note = (f"{view.total}件のうち {len(view.rows)}件を出しています"
                      f"(ほか {hidden}件)。絞り込むと目当ての行が出ます。")
     return view
+
+
+def rule_tags(table: str, rows: list[dict[str, Any]]) -> dict[str, str]:
+    """プログラムの規則が優先される行に付ける札(統合 1.2.49・現場の指摘)。
+
+    包装仕様の一部の品番は、積数・パレット種類・リプラの扱いをプログラムが決めている
+    (`special_rules.py`)。マスタを直しても効かないので、**直す前に分かるように**札を出す。
+    動きは変えない。
+    """
+    if table != config.TBL_SPEC:
+        return {}
+    out: dict[str, str] = {}
+    for row in rows:
+        spec_no = str(row.get("包装仕様NO") or "").strip()[:6]
+        notes = special_rules.program_rule_notes(spec_no, size=str(row.get("サイズ") or ""))
+        if notes:
+            out[str(row.get(ROW_KEY))] = special_rules.RULE_TAG.format("・".join(notes))
+    return out
 
 
 def _order(names: list[str], sort: str, sort_dir: str) -> tuple[str, str]:
@@ -721,6 +743,12 @@ def _follow(conn: sqlite3.Connection, path: Path, table: str) -> str:
     if not result.ok:
         return "。ただし手元に取り込めませんでした: " + result.error
 
+    # 同じファイルのほかの表も追いつかせる(ファイルの目印が変わるため。統合 1.2.49)
+    try:
+        data_sync.catch_up_master(conn, path, skip=table)
+    except sqlite3.Error as exc:                 # pragma: no cover - 直した表は入っている
+        log.warning("ほかの表を取り込み直せません: %s", exc)
+
     notes = [f"手元も{result.rows}件に更新しました"]
     if result.filled:
         # 取り込みが言いたいこと。**黙って捨てない**
@@ -732,6 +760,6 @@ def _follow(conn: sqlite3.Connection, path: Path, table: str) -> str:
     # **開いたままの計算結果は、もう古い。** 計算は押した時点のマスタで
     # 出ているので、直したあとに画面へ残っている台数やリプラ本数は
     # 新しい値ではない。黙っていると、古い結果のままチェックリストへ
-    # 積まれる
+    # 積まれる。取り込みの世代が進むので、古い結果はチェックリストへ積めない(統合 1.2.49)
     notes.append("資材計算をやり直すと新しい値になります")
     return "。" + "、".join(notes) + "。"

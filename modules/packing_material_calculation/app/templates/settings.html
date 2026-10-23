@@ -76,8 +76,9 @@
   <h2>取り込み <span class="where where-local">このPCに保存</span></h2>
   <p class="setrow__d">
     共有フォルダのマスタと仕掛台帳を、<b>このPCの作業用DB</b>へ写します。
-    <b>写した時点の内容で計算します</b>ので、マスタが更新されたら
-    押し直してください(日付が変わっても自動では写しません)。
+    <b>写した時点の内容で計算します</b>。梱包資材マスタ・コイル実績は、画面を開いたときと
+    「計算Start」のときに確かめて、共有が変わっていれば自動で写し直します。
+    仕掛台帳は大きいので、変わったら上の帯の「いま取り込む」か、ここで押してください。
   </p>
 
   <label class="check">
@@ -160,6 +161,8 @@
       {# 直せない理由は**先に**言う。押してから断られるのは手戻り #}
       <p class="status status--warn" id="mWhy" hidden></p>
       <p class="status status--ng" id="mError" hidden></p>
+      {# 共有のマスタと手元の写しの食い違い(統合 1.2.49)。この画面は共有を直に読むが、計算は手元の写しを読む #}
+      <p class="status status--warn" id="mSync" hidden></p>
 
       <div class="tablewrap tablewrap--rows">
         <table class="grid-table">
@@ -349,6 +352,8 @@
     <button class="btn btn--danger" value="cancel">閉じる</button>
   </form>
   <p class="status status--warn" id="mEditWhy" hidden></p>
+  {# この品番はプログラムの規則が優先される(マスタを直しても効かない。統合 1.2.49) #}
+  <p class="status status--warn" id="mEditRule" hidden></p>
   <p class="status status--ng" id="mEditError" hidden></p>
   <div class="mfields" id="mFields"></div>
   <div class="btnrow mfoot" id="mFoot">

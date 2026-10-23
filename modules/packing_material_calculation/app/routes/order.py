@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from flask import Blueprint, current_app, jsonify, render_template, request
 
-from modules.packing_material_calculation.coil_tool import order_history, order_sheet_service, reports, user_settings
+from modules.packing_material_calculation.coil_tool import (checklist_service, order_history, order_sheet_service,
+                                                            reports, user_settings)
 from modules.packing_material_calculation.coil_tool.logging_utils import get_logger
 
 from .. import base, conf, get_db, shell
@@ -21,7 +22,31 @@ bp = Blueprint("order", __name__)
 # **プロセスに1つ**(このアプリは1台を1人が使う)
 # `committed` … いまの発注票を「発注済みとして記録」したか。**同じ票を2度記録しない**
 # (統合 1.2.11。以前は押した後も画面が変わらず、もう一度押すと同じ発注が2重に残った)
-_pending: dict = {"sheets": [], "worker": "", "committed": 0}
+# `checklist` … 票を作ったときのチェックリストの指紋(`checklist_service.fingerprint`)。
+# 印刷・記録のときに今のチェックリストと照らす(統合 1.2.49・現場の指摘。以前は票を作ったあとに
+# チェックリストを変えても、古い票をそのまま印刷・記録できた)
+_pending: dict = {"sheets": [], "worker": "", "committed": 0, "checklist": ""}
+
+#: 票を作ったあとにチェックリストが変わった(統合 1.2.49)
+REASON_CHECKLIST_CHANGED = "checklist_changed"
+CHECKLIST_CHANGED_MESSAGE = ("発注票を作ったあとにチェックリストが変わりました。"
+                             "「発注票を作る」で作り直してください")
+
+
+def discard_pending() -> None:
+    """作ってある発注票を捨てる。チェックリストを積む・消す・直すときに呼ぶ(統合 1.2.49)。"""
+    _pending.update(sheets=[], worker="", committed=0, checklist="")
+
+
+def _outdated(conn) -> bool:
+    """作ってある票が、今のチェックリストから作ったものでないか。そうなら票を捨てて True。"""
+    if not _pending["sheets"]:
+        return False
+    if _pending["checklist"] == checklist_service.fingerprint(conn):
+        return False
+    log.info("発注票を作ったあとにチェックリストが変わったので、票を捨てました")
+    discard_pending()
+    return True
 
 
 def _sheet_view(sheet) -> dict:
@@ -47,8 +72,9 @@ def page():
 
 @bp.get("/api/order")
 def current():
+    notice = CHECKLIST_CHANGED_MESSAGE if _outdated(get_db()) else ""
     return jsonify(ok=True, sheets=[_sheet_view(s) for s in _pending["sheets"]],
-                   worker=_pending["worker"], committed=_pending["committed"])
+                   worker=_pending["worker"], committed=_pending["committed"], notice=notice)
 
 
 _MESSAGES = {
@@ -72,6 +98,7 @@ def build():
     payload = request.get_json(silent=True) or {}
     check = not bool(payload.get("確認済み"))
 
+    stamp = checklist_service.fingerprint(conn)
     result = order_sheet_service.build(conn, worker=worker, check_history=check)
     if not result.ok:
         return jsonify(ok=False, reason=result.reason,
@@ -81,6 +108,7 @@ def build():
     _pending["sheets"] = result.sheets
     _pending["worker"] = worker
     _pending["committed"] = 0
+    _pending["checklist"] = stamp
     return jsonify(
         ok=True,
         sheets=[_sheet_view(s) for s in result.sheets],
@@ -97,6 +125,9 @@ def build():
 def commit():
     """出した内容を履歴へ残す。これを押すまでは履歴に入らない。"""
     conn = get_db()
+    if _outdated(conn):
+        return jsonify(ok=False, reason=REASON_CHECKLIST_CHANGED,
+                       message=CHECKLIST_CHANGED_MESSAGE), 409
     if not _pending["sheets"]:
         return jsonify(ok=False, reason="nothing_pending",
                        message="先に発注票を作ってください"), 422
@@ -120,6 +151,8 @@ def report():
     """印刷用の紙面。**1枚 = 1ページ。**"""
     from modules.packing_material_calculation.coil_tool import printing
 
+    if _outdated(get_db()):
+        return f"<p>{CHECKLIST_CHANGED_MESSAGE}</p>", 409
     if not _pending["sheets"]:
         return "<p>発注票がまだ作られていません。</p>", 404
     rep = reports.build_order_sheet_report(_pending["sheets"])

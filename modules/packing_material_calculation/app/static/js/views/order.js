@@ -100,6 +100,11 @@ $('#commit').addEventListener('click', async () => {
     showCommitted(r.committed || r.saved || -1);
     loadHistory();                    // 記録したものを下の履歴にすぐ出す
   }
+  if (r.reason === 'checklist_changed') {
+    // 票を作ったあとにチェックリストが変わった。古い票は出さない(統合 1.2.49)
+    render([], []);
+    $('#note').innerHTML = `<div class="note note--warn">${esc(r.message || '')}</div>`;
+  }
   toast(r.ok ? `${r.saved} 件を履歴に残しました`
              : (r.message || '記録できません'), r.ok ? '' : 'warn');
 });
@@ -152,6 +157,8 @@ async function start() {
     render(r.sheets, [], r.committed || 0);
   } else if (r.ok) {
     markPending('order', '');       // 発注票が無い(入口を起こし直した など)。覚えを消す
+    // 作ったあとにチェックリストが変わって捨てた票(統合 1.2.49)。なぜ消えたかを言う
+    if (r.notice) $('#note').innerHTML = `<div class="note note--warn">${esc(r.notice)}</div>`;
   }
 }
 start();

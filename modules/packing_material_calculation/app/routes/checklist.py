@@ -3,14 +3,19 @@ from __future__ import annotations
 
 from flask import Blueprint, current_app, jsonify, render_template, request
 
-from modules.packing_material_calculation.coil_tool import checklist_service, config, reports, user_settings
+from modules.packing_material_calculation.coil_tool import checklist_service, config, data_sync, reports, user_settings
 from modules.packing_material_calculation.coil_tool.logging_utils import get_logger
 
 from .. import base, conf, get_db, session, shell
+from . import order as order_routes
 
 log = get_logger("app.routes.checklist")
 
 bp = Blueprint("checklist", __name__)
+
+#: 計算のあとにマスタ・台帳が変わった(統合 1.2.49)
+REASON_MASTER_CHANGED = "master_changed"
+MASTER_CHANGED_MESSAGE = "マスタ・台帳が計算のあとに変わりました。「計算Start」で計算し直してください"
 
 
 def _view(conn) -> dict:
@@ -58,6 +63,13 @@ def add():
         return jsonify(ok=False, reason="not_calculated",
                        message="先に計算してください"), 422
 
+    # 計算のあとにマスタ・台帳が変わっていたら積まない(統合 1.2.49・現場の指摘)。
+    # 以前は台数があるかしか見ず、取り込み直し・マスタ管理の書き込みのあとも、画面に残った
+    # 古い計算結果をそのまま積めた
+    if state.世代 != data_sync.generation(conn):
+        return jsonify(ok=False, reason=REASON_MASTER_CHANGED,
+                       message=MASTER_CHANGED_MESSAGE), 409
+
     worker = user_settings.get_worker()
     if not worker:
         return jsonify(ok=False, reason="no_worker",
@@ -82,6 +94,7 @@ def add():
         checklist_service.save_rows(conn, row_no, rows)
     except ValueError as exc:
         return jsonify(ok=False, reason="row_out_of_range", message=str(exc)), 422
+    order_routes.discard_pending()
 
     return jsonify(ok=True, view=_view(conn), 行番号=row_no)
 
@@ -96,6 +109,7 @@ def clear_row():
                        message="行番号が数字ではありません"), 400
     conn = get_db()
     checklist_service.clear_row(conn, row_no)
+    order_routes.discard_pending()
     return jsonify(ok=True, view=_view(conn))
 
 
@@ -104,6 +118,7 @@ def clear_all():
     """全部消す (VBA の「ﾁｪｯｸﾘｽﾄ発行」= 原紙の貼り直し)。"""
     conn = get_db()
     checklist_service.clear_all(conn)
+    order_routes.discard_pending()
     return jsonify(ok=True, view=_view(conn))
 
 

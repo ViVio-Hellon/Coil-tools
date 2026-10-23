@@ -181,12 +181,17 @@ CREATE TABLE IF NOT EXISTS 発注履歴 (
 CREATE INDEX IF NOT EXISTS ix_発注履歴_lot ON 発注履歴(LotNo);
 
 -- 取り込みの記録。画面に「いつの写しか」を出すために使う。
--- マスタが変わっても自動では取り込み直さないので、古ければ促せるようにする
+--   元の目印    … 取り込み元の本体と -wal・-journal の大きさ・更新時刻(読む前に取ったもの)。
+--                 次に確かめるとき、これと**一致するか**で「変わったか」を見る(統合 1.2.49)
+--   確かめた日時 … 取り込み元を最後に確かめた日時(目印が同じなら写し直さず、ここだけ進む)
+-- 前の版の手元DBには `db.apply_schema` が列を足す
 CREATE TABLE IF NOT EXISTS 取り込み履歴 (
     テーブル名  TEXT PRIMARY KEY,
     取り込み日時 TEXT NOT NULL DEFAULT '',
     元ファイル  TEXT NOT NULL DEFAULT '',
-    件数        INTEGER NOT NULL DEFAULT 0
+    件数        INTEGER NOT NULL DEFAULT 0,
+    元の目印    TEXT NOT NULL DEFAULT '',
+    確かめた日時 TEXT NOT NULL DEFAULT ''
 );
 
 

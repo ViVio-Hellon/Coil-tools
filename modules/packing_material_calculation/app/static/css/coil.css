@@ -40,6 +40,9 @@
    選択の文字が小さい)。計算画面の入力欄(18px)にそろえる */
 .ribbon select.input{ font-size:var(--fs-key); font-weight:600; min-height:48px; }
 .slot__v{ font-size:12px; font-variant-numeric:tabular-nums; }
+/* 帯の「共有の仕掛台帳が更新されています [いま取り込む]」(統合 1.2.49)。横に並べて帯を高くしない */
+.slot.slot--row{ flex-direction:row; align-items:center; gap:8px; }
+.slot--row .btn{ min-height:32px; padding:4px 12px; font-size:var(--fs-sm); }
 
 /* ---- 版のバッジ ----
    11px の薄い灰色だと帯の地に沈んで、見ようとしないと見えない。

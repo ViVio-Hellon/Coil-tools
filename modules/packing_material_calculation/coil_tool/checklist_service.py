@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from datetime import datetime
 from typing import Optional
@@ -203,6 +205,16 @@ def load_all(conn: sqlite3.Connection) -> list[dict]:
         conn, "SELECT * FROM 発注チェックリスト ORDER BY 行番号, 枝番",
         caller_name="checklist_load") or []
     return [dict(r) for r in rows]
+
+
+def fingerprint(conn: sqlite3.Connection) -> str:
+    """いまのチェックリストの中身の指紋(統合 1.2.49・現場の指摘)。
+
+    発注票を作ったときの指紋を票に持たせ、印刷・記録のときに今のチェックリストと照らす。
+    違えば、票を作ったあとにチェックリストが変わっている(古い票を出さない)。
+    """
+    text = json.dumps(load_all(conn), ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
 
 def clear_row(conn: sqlite3.Connection, row_no: int) -> None:

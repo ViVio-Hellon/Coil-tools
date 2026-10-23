@@ -29,6 +29,27 @@ if (worker) {
   });
 }
 
+// ---- 取り込み元の変化(統合 1.2.49) --------------------------------
+// 共有の仕掛台帳が変わったときの「いま取り込む」。大きいので自動では取り込まない
+const lotImport = $('#rb-lot-import');
+if (lotImport) {
+  lotImport.addEventListener('click', async () => {
+    lotImport.disabled = true;
+    const r = await call('/api/ribbon/import-lot', {});
+    lotImport.disabled = false;
+    toast(r.ok ? '仕掛台帳を取り込み直しました' : (r.message || '取り込めませんでした'),
+          r.ok ? '' : 'warn');
+    if (r.ribbon) syncRibbon(r.ribbon);
+  });
+}
+// 画面を開いたときに取り込み直していれば知らせる(帯はサーバが描くので、ここで一度だけ)
+const refreshedNote = $('#rb-refreshed');
+if (refreshedNote && refreshedNote.dataset.note) toast(refreshedNote.dataset.note);
+// 裏から戻ったときも、帯の問い合わせで取り込み元を確かめる(共有のマスタが変わっていないか)
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && owned) refreshRibbon();
+});
+
 // ---- 終了 --------------------------------------------------------
 const quit = $('#quit');
 if (quit) {

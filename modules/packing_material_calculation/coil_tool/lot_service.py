@@ -157,6 +157,14 @@ def load_into(conn: sqlite3.Connection, state: CalcState, order_no: str) -> bool
                    "違うときは打ち直してください")
     elif info.コイル外径_MAX != OrderInfo.NO_DATA:
         state.外径 = info.コイル外径_MAX
+        if coil_results.wanted():
+            # 実績を読む設定なのに、このロットが実績に無い。**黙って外径MAXにしない**(統合 1.2.49・現場の指摘)。
+            # 実績は取り込んだ時点の写しなので、いつの写しかも添える
+            state.note(f"実績に無いので受注の外径MAXを入れました(実績の取り込み: {_results_imported_at(conn)})。"
+                       "違うときは打ち直してください")
+    elif coil_results.wanted():
+        state.note(f"実績に無く、受注の外径MAXも無いので、コイル外径を入れてください"
+                   f"(実績の取り込み: {_results_imported_at(conn)})")
     # 検入数(本)も実績から(BOX実績_枚本数、無ければ 横割数 × 縦割数。統合 1.2.30)。
     # **先に手で入れてあれば上書きしない**
     count = coil_results.count_for(conn, state.LOT)
@@ -164,3 +172,49 @@ def load_into(conn: sqlite3.Connection, state: CalcState, order_no: str) -> bool
         state.検入数 = str(count)
         state.note(f"検入数は実績から入れました({count}本)。違うときは打ち直してください")
     return True
+
+
+def _results_imported_at(conn: sqlite3.Connection) -> str:
+    """コイル実績を取り込んだ日時(無ければ「まだ」)。"""
+    try:
+        row = conn.execute("SELECT 取り込み日時 FROM 取り込み履歴 WHERE テーブル名 = ?",
+                           (coil_results.TABLE,)).fetchone()
+    except sqlite3.Error:
+        row = None
+    return str(row[0]) if row is not None and row[0] else "まだ取り込んでいません"
+
+
+# 受注の参照値の呼び名(取り込み直しで変わったことを知らせるとき)
+_ORDER_LABELS = {
+    "コイル外径_MAX": "外径MAX", "コイル外径_目標": "外径目標", "コイル外径_MIN": "外径MIN",
+    "コイル内径_目標": "内径目標", "梱包単位_重量": "梱包単位_重量", "梱包単位_枚数": "梱包単位_枚数",
+}
+
+
+def refresh_order(conn: sqlite3.Connection, state: CalcState) -> tuple[bool, str]:
+    """選んだ受注を、手元の仕掛受注から引き直す(計算Start・積数の手直しの前。統合 1.2.49・現場の指摘)。
+
+    受注を選んだあとに仕掛受注が取り込み直されても、以前は作業状態に写した**前の値のまま**
+    計算していた。引き直して違えば新しい値にし、何が変わったかを返す。
+
+    **受注の参照値だけ**を新しくする。外径・検入数のように利用者が打ち直す欄は勝手に変えない。
+
+    戻り値: `(受注がまだあるか, 変わった項目の説明)`。受注を選んでいなければ `(True, "")`。
+    """
+    order_no = str(state.order.受注番号 or "").strip()
+    if not order_no:
+        return True, ""
+    info = expand_order(conn, order_no)
+    if info is None:
+        return False, ""
+    before = state.order
+    changes = []
+    for name in OrderInfo.__dataclass_fields__:
+        old, new = str(getattr(before, name, "")), str(getattr(info, name, ""))
+        if old != new and name != "出荷日":             # 出荷日は営業納期の写し(同じことを2度言わない)
+            changes.append(f"{_ORDER_LABELS.get(name, name)}: {old or '(空)'} → {new or '(空)'}")
+    if not changes:
+        return True, ""
+    state.order = info
+    log.info("受注 %s が取り込み直しで変わりました: %s", order_no, " / ".join(changes))
+    return True, "受注の内容が取り込み直しで変わりました(" + "、".join(changes) + ")"
