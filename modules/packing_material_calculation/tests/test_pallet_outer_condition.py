@@ -7,7 +7,8 @@
     2  表を作ると、プログラムの規則と同じ結果になる
     3  表の行を直すと結果が変わる(マスタ優先。プログラムの規則は使わない)
     4  表に行の無い包装仕様No は、マスタ(包装仕様)の値のまま
-    5  取り込み(目印・鮮度の確かめ・取り込み直し・世代)に乗る。共有に無くても誤りにしない
+    5  取り込み(目印・鮮度の確かめ・取り込み直し・世代)に乗る。共有に無ければ自動で作る(0.2.33)。
+       共有に書けなくて作れなくても誤りにしない
     6  表を作るにはパスワードが要る
     7  マスタ管理の「規則が優先」の札は、表が無いあいだだけ 1C1103 に出す
 """
@@ -115,9 +116,20 @@ def source_rows(path) -> list[dict]:
         src.close()
 
 
+def cannot_write_share(monkeypatch) -> None:
+    """共有に書けない(読み取り専用・使用中)に見立てる。取り込みで表を自動で作れない(資材計算 0.2.33)。"""
+    from modules.packing_material_calculation.coil_tool import source_db
+
+    def refuse(path):
+        raise source_db.SourceError("attempt to write a readonly database")
+    monkeypatch.setattr(data_sync, "_create_optional", refuse)
+
+
 @pytest.fixture
-def shared(sandbox):
-    """共有の梱包資材マスタ(外径条件の表はまだ無い)と、そこから取り込んだ手元DB。"""
+def shared(sandbox, monkeypatch):
+    """共有の梱包資材マスタ(外径条件の表はまだ無い。**共有に書けないので自動では作れない**)と、
+    そこから取り込んだ手元DB。表が無いあいだの動きを確かめる。"""
+    cannot_write_share(monkeypatch)
     path = make_source(sandbox)
     with db.connect() as c:
         db.apply_schema(c)
@@ -233,7 +245,7 @@ def test_5_共有に表が無くても取り込みの誤りにしない(shared):
         results = {t.table: t for t in data_sync.import_master(c)}
         got = results[TABLE]
         assert got.ok and got.rows == 0
-        assert "まだ作っていません" in got.note
+        assert "自動で作れませんでした" in got.note and "readonly" in got.note
         assert not outer_condition.present(c)
         # 見たことは目印で残す(共有で作られたら「変わった」と気づくため)
         record = data_sync.last_import(c)[TABLE]
@@ -243,13 +255,67 @@ def test_5_共有に表が無くても取り込みの誤りにしない(shared):
         assert data_sync.stale_reason(c) != data_sync.STALE_SOURCE_CHANGED
 
 
-def test_5_いま取り込むも誤りにしない(client, sandbox):
+def test_5_いま取り込むも共有に書けなければ誤りにしない(client, sandbox, monkeypatch):
+    cannot_write_share(monkeypatch)
     make_source(sandbox)
     client.post("/api/settings", json={config.KEY_MASTER_DB_DIR: str(sandbox / "master")})
     body = client.post("/api/settings/import", json={}).get_json()
     row = next(t for t in body["tables"] if t["table"] == TABLE)
     assert row["ok"] is True
-    assert "まだ作っていません" in row["note"]
+    assert "自動で作れませんでした" in row["note"]
+
+
+def test_5_取り込みで共有に表が無ければ自動で作る(client, sandbox):
+    """資材計算 0.2.33・現場の指示: 別表が無ければ自動で作る。いまの規則と同じ行を入れ、マスタ優先になる。"""
+    path = make_source(sandbox)
+    client.post("/api/settings", json={config.KEY_MASTER_DB_DIR: str(sandbox / "master")})
+    body = client.post("/api/settings/import", json={}).get_json()
+    row = next(t for t in body["tables"] if t["table"] == TABLE)
+    assert row["ok"] is True and row["rows"] == len(outer_condition.SEED_ROWS)
+    assert "取り込み元に無かったので作りました" in row["note"]
+    got = source_rows(path)
+    assert [(r["包装仕様No"], r["順番"], r["外径_以上"], r["外径_以下"], r["パレット種類"]) for r in got] == [
+        (r["包装仕様No"], r["順番"], r["外径_以上"], r["外径_以下"], r["パレット種類"])
+        for r in outer_condition.SEED_ROWS]
+    with db.connect() as c:
+        assert outer_condition.present(c)
+        # 作ったあとの目印で、ほかの表も記録し直してある(次の確かめで取り込み直しが出ない)
+        fresh = data_sync.freshness(c)
+        assert fresh.refreshed == [] and not fresh.check.master and not fresh.check.optional
+    # 2回目は作らない(もうある)
+    again = client.post("/api/settings/import", json={}).get_json()
+    row2 = next(t for t in again["tables"] if t["table"] == TABLE)
+    assert row2["ok"] is True and "作りました" not in (row2.get("note") or "")
+    assert len(source_rows(path)) == len(outer_condition.SEED_ROWS)
+
+
+def test_5_自動で作った表で計算は今の規則と同じ結果(sandbox):
+    path = make_source(sandbox)
+    with db.connect() as c:
+        db.apply_schema(c)
+        data_sync.import_master(c)
+        assert outer_condition.present(c)
+        _fixture.add_spec(c, IZUMI, パレット="スカシ")
+        for outer, expected in BOUNDARIES:
+            assert kind(c, IZUMI, outer) == expected, outer
+    assert source_rows(path)
+
+
+def test_5_ほかのPCが先に作っていたら作らずにそのまま取り込む(sandbox, monkeypatch):
+    """同じ時刻に2台が作ろうとしても、行が2重に入らない(片方は「もうある」で止まる)。"""
+    path = make_source(sandbox)
+    real = outer_condition.create_in_source
+
+    def other_pc_first(p):
+        put_source_table(path, outer_condition.SEED_ROWS)      # 先に別の PC が作った
+        return real(p)
+    monkeypatch.setattr(data_sync, "_create_optional", other_pc_first)
+    with db.connect() as c:
+        db.apply_schema(c)
+        got = {t.table: t for t in data_sync.import_master(c)}[TABLE]
+    assert got.ok and got.rows == len(outer_condition.SEED_ROWS)
+    assert "作りました" not in got.note
+    assert len(source_rows(path)) == len(outer_condition.SEED_ROWS)
 
 
 def test_5_共有で表が作られたら確かめのときに取り込み直す(shared):
@@ -333,7 +399,8 @@ def test_5_取り込み直しは写しを捨ててから読む(shared, monkeypat
 # ==================================================================
 # 6. 表を作る(パスワードが要る)
 # ==================================================================
-def test_6_表を作るにはパスワードが要る(client, sandbox):
+def test_6_表を作るにはパスワードが要る(client, sandbox, monkeypatch):
+    cannot_write_share(monkeypatch)
     path = make_source(sandbox)
     client.post("/api/settings", json={config.KEY_MASTER_DB_DIR: str(sandbox / "master")})
     r = client.post("/api/master/table/create", json={"table": TABLE})
@@ -343,7 +410,8 @@ def test_6_表を作るにはパスワードが要る(client, sandbox):
         assert not src.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (TABLE,)).fetchone()
 
 
-def test_6_パスワードを通すと作れて手元も追いつく(client, sandbox):
+def test_6_パスワードを通すと作れて手元も追いつく(client, sandbox, monkeypatch):
+    cannot_write_share(monkeypatch)
     path = make_source(sandbox)
     client.post("/api/settings", json={config.KEY_MASTER_DB_DIR: str(sandbox / "master")})
     unlock(client)
@@ -375,14 +443,15 @@ def test_6_作れる表はこの表だけ(client, sandbox):
     assert r.get_json()["error"]["code"] == master_admin.REFUSE_NOT_EDITABLE
 
 
-def test_6_無いあいだは一覧に出て表を作るが出る(client, sandbox):
+def test_6_無いあいだは一覧に出て表を作るが出る(client, sandbox, monkeypatch):
+    cannot_write_share(monkeypatch)
     make_source(sandbox)
     client.post("/api/settings", json={config.KEY_MASTER_DB_DIR: str(sandbox / "master")})
     body = client.get(f"/api/master/browse?table={TABLE}").get_json()
     info = next(t for t in body["tables"] if t["table"] == TABLE)
     assert info["missing"] is True and info["creatable"] is True
     assert body["page"]["missing"] is True and body["page"]["creatable"] is True
-    assert "まだ作っていません" in body["page"]["why"]
+    assert "まだありません" in body["page"]["why"] and "自動で作ります" in body["page"]["why"]
     # 上流の表(包装仕様など)は、今までどおり作れない(作るボタンは出ない)
     spec = client.get("/api/master/browse?table=包装仕様").get_json()
     assert spec["page"]["creatable"] is False
@@ -464,12 +533,13 @@ def _spec_source(sandbox):
     return path
 
 
-def test_7_表が無いあいだは1C1103に札が出る(client, sandbox):
+def test_7_表が無いあいだは1C1103に札が出る(client, sandbox, monkeypatch):
+    cannot_write_share(monkeypatch)
     _spec_source(sandbox)
     client.post("/api/settings", json={config.KEY_MASTER_DB_DIR: str(sandbox / "master")})
     tags = _tags(client)
     assert "プログラムの規則が優先されます" in tags[IZUMI]
-    assert "マスタ管理で「パレット種類_外径条件」の表を作るとマスタが優先になります" in tags[IZUMI]
+    assert "取り込みのときに自動で作ります" in tags[IZUMI]
     assert "積数" in tags["1C1188"]
 
 

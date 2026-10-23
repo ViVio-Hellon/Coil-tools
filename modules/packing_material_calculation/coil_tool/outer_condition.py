@@ -25,16 +25,18 @@
 作る(共有に表があれば作り、無ければ消す。`data_sync._import_optional`)。
 
 【表の作り方】
-Access から直に変換はしない(現場の運用の決め)。マスタ管理の「表を作る」で、共有の
-梱包資材マスタにこの表を作り、いまのプログラムの規則と同じ結果になる行を入れる
-(`master_admin.create_table`)。
+Access から直に変換はしない(現場の運用の決め)。**取り込みのとき、共有の梱包資材マスタに
+この表が無ければ自動で作る**(資材計算 0.2.33・現場の指示。`data_sync._import_optional`)。
+作るときは、いまのプログラムの規則と同じ結果になる行を入れる(`create_in_source`)。
+共有に書けない(読み取り専用・ほかの人が使用中)ときは作らずにプログラムの規則で決め、次の取り込みでまた試す。
+マスタ管理の「表を作る」(`master_admin.create_table`)も残す(自動で作れなかったとき用)。
 """
 from __future__ import annotations
 
 import sqlite3
 from typing import Any, Optional
 
-from . import config, special_rules
+from . import config, source_db, special_rules
 from .logging_utils import get_logger
 
 log = get_logger("outer_condition")
@@ -74,6 +76,31 @@ SEED_ROWS: tuple[dict[str, Any], ...] = (
     {"包装仕様No": special_rules.IZUMI_SPEC_NO, "順番": 2, "外径_以上": 800.0, "外径_以下": 990.0,
      "パレット種類": "強度UP", "備考": "VBA の 780〜990(780〜799 は先の条件が勝つ)"},
 )
+
+
+#: 共有に作る表の列の並び(`SOURCE_DDL` と同じ)
+SOURCE_COLUMNS: tuple[str, ...] = ("包装仕様No", "順番", "外径_以上", "外径_以下", "パレット種類", "備考")
+
+
+def create_in_source(path) -> bool:
+    """共有の梱包資材マスタにこの表を作り、`SEED_ROWS` を入れる。**表を作るのと行を入れるのは1つのまとまり**。
+
+    戻り値: 作ったら True。ほかの PC が先に作っていた(「もうある」)なら False。
+    書けないときは `source_db.SourceError` をそのまま上げる(呼ぶ側が理由を出す)。
+    同じ時刻に2台が作ろうとしても、片方は「もうある」で止まり、行が2重に入らない(まとまりごと戻る)。
+    """
+    insert = (f"INSERT INTO {source_db.quote_identifier(TABLE)} ("
+              + ", ".join(source_db.quote_identifier(c) for c in SOURCE_COLUMNS) + ") VALUES ("
+              + ", ".join("?" for _ in SOURCE_COLUMNS) + ")")
+    try:
+        with source_db.connect(path) as src:
+            src.execute_all([(SOURCE_DDL, ())]
+                            + [(insert, [row[c] for c in SOURCE_COLUMNS]) for row in SEED_ROWS])
+    except source_db.SourceError as exc:
+        if source_db.is_already_exists_error(str(exc)):
+            return False
+        raise
+    return True
 
 
 def present(conn: Optional[sqlite3.Connection]) -> bool:

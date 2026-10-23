@@ -219,10 +219,11 @@ def can_create(table: str) -> bool:
 
 def _not_created_why(table: str) -> str:
     """作れる表がまだ取り込み元に無いことの意味と、次にできること(統合 1.2.50)。"""
-    return (f"{table} はまだ作っていません。いまは 1C1103(ｲｽﾞﾐﾒﾀﾙ)のパレット種類を"
-            "プログラムの規則(外径 800 未満は全面、800〜990 は強度UP)で決めています。"
-            "「表を作る」を押すと、共有の梱包資材マスタにこの表を作り、いまの規則と同じ行を入れます"
-            "(パスワードが要ります)。作ったあとはマスタ(この表)が優先です。")
+    return (f"{table} はまだありません。取り込みのときに自動で作りますが、共有の梱包資材マスタに"
+            "書けなくて(読み取り専用・ほかの人が使用中など)まだ作れていません。いまは 1C1103(ｲｽﾞﾐﾒﾀﾙ)の"
+            "パレット種類をプログラムの規則(外径 800 未満は全面、800〜990 は強度UP)で決めています。"
+            "次の取り込みでまた作ります。「表を作る」を押してもここで作れます(パスワードが要ります)。"
+            "作ったあとはマスタ(この表)が優先です。")
 
 
 def _missing_why(table: str) -> str:
@@ -710,15 +711,10 @@ def create_table(conn: sqlite3.Connection, table: str, *,
         return Result(False, f"{table} は取り込み元にもうあります。一覧を出し直してください。",
                       REFUSE_ALREADY_EXISTS)
 
-    columns = [source for _local, source, _conv in import_specs.master_specs(table)]
-    insert = (f"INSERT INTO {source_db.quote_identifier(table)} ("
-              + ", ".join(source_db.quote_identifier(c) for c in columns) + ") VALUES ("
-              + ", ".join("?" for _ in columns) + ")")
     try:
-        with source_db.connect(found) as src:
-            src.execute_all([(outer_condition.SOURCE_DDL, ())]
-                            + [(insert, [row[c] for c in columns])
-                               for row in outer_condition.SEED_ROWS])
+        if not outer_condition.create_in_source(found):
+            return Result(False, f"{table} は取り込み元にもうあります。一覧を出し直してください。",
+                          REFUSE_ALREADY_EXISTS)
     except source_db.SourceError as exc:
         return _write_failed(table, exc)
 

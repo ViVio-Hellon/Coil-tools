@@ -192,8 +192,15 @@ def test_1_古いバックアップに戻しても取り込む(sandbox):
     assert 900 in pallet_w() and 1250 not in pallet_w()
 
 
+def _refuse_write(path):
+    """共有に書けない(外径条件の表を自動で作れない)に見立てる。"""
+    raise data_sync.source_db.SourceError("attempt to write a readonly database")
+
+
 def test_1_写したあと記録する前に共有が変わっても次で取り込む(sandbox, monkeypatch):
     """F: 目印は読む**前**に取ったものを残す。読んだあとに取ると、新しい目印に古い中身を結びつける。"""
+    # 外径条件の表を自動で作ると、作ったあとにほかの表を取り込み直す(この試験の見たい所がぼやける)
+    monkeypatch.setattr(data_sync, "_create_optional", _refuse_write)
     source_copy.forget()
     seed(sandbox)
     master, _h, _o = share_from_local(sandbox)
@@ -504,7 +511,8 @@ def test_7_帯は写した日時と確かめた日時を分けて出す(client, 
 # ==================================================================
 # 8. プログラムの規則が優先される品番の札
 # ==================================================================
-def test_8_規則のある品番はマスタ管理で札が出る(client, sandbox):
+def test_8_規則のある品番はマスタ管理で札が出る(client, sandbox, monkeypatch):
+    monkeypatch.setattr(data_sync, "_create_optional", _refuse_write)   # 外径条件の表が無いあいだの札
     folder = sandbox / "master"
     specs = import_specs.MASTER_IMPORT_SPECS["包装仕様"]
     cols = [s for _d, s, _c in specs]

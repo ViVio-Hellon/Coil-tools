@@ -196,7 +196,7 @@ function render(next) {
   el.mCan.hidden = !view.table;
   el.mCan.className = `st st--${(editable && !missing) ? "ok" : "warn"}`;
   el.mCan.textContent = missing
-    ? (page.creatable ? "まだ作っていません" : "取り込み元にありません")
+    ? (page.creatable ? "まだありません(取り込みで自動で作ります)" : "取り込み元にありません")
     : (editable ? "直せます" : "見るだけ");
   // 表が無いあいだは行を足せない。押せる形にしておくと、押した先で
   // 「入れる値がありません」としか言えず、何が足りないのか分からない

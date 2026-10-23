@@ -33,7 +33,8 @@ rollback journal だとその間ずっと読み手が止まるので、WAL が�
 
 【任意の表「パレット種類_外径条件」(統合 1.2.50・現場の指示)】
 梱包資材マスタの1表として、上の目印・確かめ・取り込み直し・世代にそのまま乗せる。ただし
-**共有にまだ無いことがある**ので、無くても取り込みの誤りにせず(結果に「まだ作っていません」)、
+**共有にまだ無いことがある**。無ければ取り込みのときに共有へ自動で作る(資材計算 0.2.33・現場の指示。
+いまの規則と同じ行を入れる)。共有に書けなくて作れないときも取り込みの誤りにせず(結果に理由)、
 帯の「古い」の対象にもしない。手元の表は共有に表があれば作り、無ければ消す(`_import_optional`)。
 手元に表があるか無いかで、1C1103 のパレット種類をマスタで決めるかプログラムで決めるかが変わる
 (`outer_condition.py`)。
@@ -468,16 +469,22 @@ def _record_import(conn: Any, table: str, source_path: Path, rows: int,
 # ==================================================================
 # 任意の表を写す(統合 1.2.50・現場の指示)
 # ==================================================================
-#: 共有にまだ任意の表が無いときの知らせ(取り込みの誤りにはしない)
-OPTIONAL_ABSENT_NOTE = ("まだ作っていません(マスタ管理で作れます。作るまでは 1C1103 のパレット種類を"
-                        "プログラムの規則で決めます)")
+#: 共有に任意の表が無く、自動で作れなかったときの知らせ(取り込みの誤りにはしない)
+OPTIONAL_ABSENT_NOTE = ("まだありません。自動で作れませんでした({why})。次の取り込みでまた作ります"
+                        "(マスタ管理の「表を作る」でも作れます)。作るまでは 1C1103 のパレット種類を"
+                        "プログラムの規則で決めます")
+#: 共有に無かったので自動で作ったときの知らせ(資材計算 0.2.33・現場の指示)
+OPTIONAL_CREATED_NOTE = ("取り込み元に無かったので作りました(いまの規則と同じ {rows}行)。"
+                         "これからはマスタ(この表)が優先です")
 
 
 def _import_optional(conn: Any, table: str, path: Path) -> TableResult:
-    """梱包資材マスタの**任意の表**を写す。共有に無ければ手元の表を消し、誤りにしない。
+    """梱包資材マスタの**任意の表**を写す。共有に無ければ**自動で作って**から写す。
 
     - 共有に表がある … 手元の表を作って写す(写せなければ誤り。前から手元にあった表はそのまま残す)
-    - 共有に表が無い … 手元の表を消す(= プログラムの規則に戻る)。結果は ok で「まだ作っていません」
+    - 共有に表が無い … 共有に作る(いまの規則と同じ行を入れる。資材計算 0.2.33・現場の指示)。
+      作れなければ(読み取り専用・使用中)手元の表を消す(= プログラムの規則に戻る)。結果は ok で理由を出し、
+      次の取り込みでまた作る
 
     どちらでも取り込み履歴に目印を残す ── 残さないと、表が無いあいだ毎回読みに行き、
     共有で表が作られたときに「変わった」と気づけない(`check_sources`)。
@@ -490,6 +497,23 @@ def _import_optional(conn: Any, table: str, path: Path) -> TableResult:
         return TableResult(table=table, ok=False, source=str(path),
                            error=f"取り込み元を読めません: {exc}")
     available = set(source_db.columns(path, table))
+    created_note = ""
+    why = ""
+    if not available and table == outer_condition.TABLE:
+        try:
+            made = _create_optional(path)
+        except source_db.SourceError as exc:
+            why = str(exc)
+            log.warning("取り込み元に %s を作れませんでした(プログラムの規則で決めます): %s", table, exc)
+        else:
+            forget_copies([path])                       # 作った表が見えるよう、写しを捨てて読み直す
+            stamp = source_stamp(path)
+            available = set(source_db.columns(path, table))
+            if made:
+                created_note = OPTIONAL_CREATED_NOTE.format(rows=len(outer_condition.SEED_ROWS))
+                log.info("取り込み元に無かったので %s を作りました: %s", table, path)
+            if not available:                           # 作ったのに見えない(写しが古い等)
+                why = "作ったあとの表が見えません"
     if not available:
         try:
             if table == outer_condition.TABLE:
@@ -499,7 +523,7 @@ def _import_optional(conn: Any, table: str, path: Path) -> TableResult:
                                error=f"手元のDBへ書けませんでした: {exc}")
         _record_import(conn, table, path, 0, stamp)
         return TableResult(table=table, ok=True, rows=0, source=str(path),
-                           note=OPTIONAL_ABSENT_NOTE)
+                           note=OPTIONAL_ABSENT_NOTE.format(why=why or "理由不明"))
     missing = import_specs.missing_columns(table, available)
     if missing:
         # 作る前に断る。空の表を作ってしまうと「表はあるが行が無い」= マスタの値のまま、に化ける
@@ -510,7 +534,18 @@ def _import_optional(conn: Any, table: str, path: Path) -> TableResult:
     result = _import_table(conn, dest_table=table, source_path=path, source_table=table)
     if not result.ok and not existed:
         outer_condition.drop_local(conn)
+    if created_note and result.ok:
+        result.note = created_note + (f"。{result.note}" if result.note else "")
+    if created_note:
+        # 表を作ったのでファイルの目印が変わった。ほかの表も新しい目印で取り込み直しておく
+        # (しないと次の確かめで「共有が変わっていた」と取り込み直しが出る。写しは同じなので軽い)
+        catch_up_master(conn, path, skip=table)
     return result
+
+
+def _create_optional(path: Path) -> bool:
+    """共有に任意の表を自動で作る(資材計算 0.2.33)。試験で「共有に書けない」を作るために分けてある。"""
+    return outer_condition.create_in_source(path)
 
 
 def _import_master_table(conn: Any, table: str, path: Path) -> TableResult:
