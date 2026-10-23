@@ -1679,10 +1679,10 @@ def scenario_trail(app: App, ctx, sh: Shell, note: dict) -> None:
           eid in shown_text and TRAIL_MARK in shown_text and "なぜ1" in shown_text
           and "資材計算" in shown_text, shown_text[:200])
     check("後追い: 記録がファイルに残る",
-          (app.local / "logs" / "incidents" / f"{eid}.md").exists())
+          bool(list((app.local / "logs" / "incidents").glob(f"コイル梱包ツール_*_{eid}.md"))))
     if lf is None:
         return
-    # --- 出力先を変える(共有フォルダのつもり)→ PC の名前のフォルダに書かれる
+    # --- 出力先を変える(共有フォルダのつもり)→ ツール名\PC の名前のフォルダに書かれる(統合 1.2.51)
     lf.click('.tab[data-tab="settings"]')
     wait_until(lambda: (lf.locator("#nowDir").text_content() or "") != "", 10)
     share = app.home / "shared-logs"
@@ -1692,14 +1692,14 @@ def scenario_trail(app: App, ctx, sh: Shell, note: dict) -> None:
     lf.click("#btnSave")
     ok = wait_until(lambda: "保存しました" in (lf.locator("#result").text_content() or ""), 10)
     now = lf.locator("#nowDir").text_content() or ""
-    check("後追い: 出力先を保存するとすぐ切り替わる(PC の名前のフォルダ)",
-          ok and now.startswith(str(share)) and now != str(share), now)
+    check("後追い: 出力先を保存するとすぐ切り替わる(ツール名\\PC の名前のフォルダ)",
+          ok and now.startswith(str(share / "コイル梱包ツール")) and now != str(share / "コイル梱包ツール"), now)
     # 「ログ」の画面が開いているあいだは、ほかの画面は押せない(ダイアログ)。
     # 切り替えたこと自体と、「ログ」の画面の問い合わせが新しい出力先に書かれる
     lf.click('.tab[data-tab="today"]')
-    wait_until(lambda: list(share.glob("*/coil_packing_tools_*.log")), 10)
-    files = list(share.glob("*/coil_packing_tools_*.log"))
-    check("後追い: 新しい出力先にログが書かれる", bool(files) and any(
+    wait_until(lambda: list(share.glob("コイル梱包ツール/*/コイル梱包ツール_*_*.log")), 10)
+    files = list(share.glob("コイル梱包ツール/*/コイル梱包ツール_*_*.log"))
+    check("後追い: 新しい出力先にログが書かれる(名前にツール名と PC 名)", bool(files) and any(
         "ログの出力先" in f.read_text(encoding="utf-8") for f in files), [str(f) for f in files])
     # --- 配布設定(共通)に書き出す → 消す(統合 1.0.14。管理者パスワードは梱包明細と同じ)
     lf.click('.tab[data-tab="settings"]')

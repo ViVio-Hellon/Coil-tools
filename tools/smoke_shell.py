@@ -244,7 +244,7 @@ def main(argv=None) -> int:
     check("止まる", p3.returncode == 0 and gone, p3.stdout.strip().splitlines()[-1][:60] if p3.stdout.strip() else "")
     check("ロックが消える", not (local / "runtime" / "main.lock").exists())
     out = proc.communicate(timeout=10)[0]
-    logs = list((local / "logs").glob("coil_packing_tools_*.log"))
+    logs = list((local / "logs").glob("コイル梱包ツール_*.log"))
     check("ログが1つのファイルに集まる", len(logs) == 1 and all(k in logs[0].read_text(encoding="utf-8") for k in ("meisai", "coil_tool", "packing_pena_label")), str([l.name for l in logs]))
 
     if not no_browser:
@@ -331,8 +331,9 @@ def main(argv=None) -> int:
 
     print("■ 版: 機能の版だけを上げて配っても、古いプロセスに合流せず入れ替わる")
     copy = home / "app_copy"
+    # src-tauri\target(デスクトップ版の作りかけ。数 GB)は要らない。写すと試験の場所があふれる
     shutil.copytree(str(ROOT), str(copy), ignore=shutil.ignore_patterns(
-        ".git", "__pycache__", ".pytest_cache", "配布設定", "export"))
+        ".git", "__pycache__", ".pytest_cache", "配布設定", "export", "target", "node_modules"))
     with socket.socket() as s3:
         s3.bind(("127.0.0.1", 0)); port = s3.getsockname()[1]
     data = json.loads(conf.read_text(encoding="utf-8"))

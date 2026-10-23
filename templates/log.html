@@ -68,8 +68,10 @@
     <div class="card">
       <h2>ログの出力先 <span class="where">このPCに保存</span></h2>
       <p class="lead">3機能のログとエラーの記録を出す場所です。<b>共有フォルダ</b>を指すと、
-        その下に <b>PC の名前のフォルダ</b>(<span class="mono" id="pcName"></span>)を作って書きます
-        (全ラインのPCが同じファイルに書くと、行が欠けるため)。
+        その下に <b>ツールの名前のフォルダ</b>(<span class="mono" id="toolName"></span>)と
+        <b>PC の名前のフォルダ</b>(<span class="mono" id="pcName"></span>)を作って書きます
+        (ほかのツールのファイルと混ざらないように・全ラインのPCが同じファイルに書くと行が欠けるため)。
+        ファイルの名前にもツールの名前と PC の名前が入ります(取り出しても、どのツールの物か分かります)。
         出力先に書けないとき(共有が切れた等)は、<b>このPCの既定の場所へ切り替えて</b>書き続けます。</p>
       <dl class="facts">
         <dt>いま書いている場所</dt><dd class="mono" id="nowDir"></dd>

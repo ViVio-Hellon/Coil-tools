@@ -211,5 +211,31 @@ class OnWakeAllModulesTest(unittest.TestCase):
         self.assertEqual(called, [42.0])
 
 
+
+@unittest.skipUnless(os.path.exists("/proc/self/stat"), "Linux の /proc が要る")
+class ZombieIsGoneTest(unittest.TestCase):
+    """終わったが親にまだ引き取られていないプロセス(ゾンビ)は「居ない」(統合 1.2.51)。
+
+    試験の台本が起動したアプリを stop で止めると、台本が引き取るまでゾンビで残り、
+    シグナル0が届くので「止まらない」と判定していた。
+    """
+
+    def test_zombie_child_is_not_alive_and_a_running_one_is(self):
+        import subprocess
+        import sys
+        import time
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and not launch_guard._is_zombie(proc.pid):
+                time.sleep(0.05)
+            self.assertTrue(launch_guard._is_zombie(proc.pid))
+            self.assertIs(launch_guard.process_alive_state(proc.pid), False)
+        finally:
+            proc.wait()
+        self.assertIs(launch_guard.process_alive_state(os.getpid()), True)
+        self.assertFalse(launch_guard._is_zombie(os.getpid()))
+
+
 if __name__ == "__main__":
     unittest.main()

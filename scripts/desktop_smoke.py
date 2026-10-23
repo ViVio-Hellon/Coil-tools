@@ -197,7 +197,7 @@ def main() -> int:
             print(f"[NG] exe が先に終わりました(終了コード {app.returncode})")
             ok = False
             break
-        logs = sorted((work / "logs").glob("coil_packing_tools_*.log"))
+        logs = sorted((work / "logs").glob("コイル梱包ツール_*.log"))
         text = logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
         match = footprint.search(text)
         if match:

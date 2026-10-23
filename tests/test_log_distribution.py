@@ -138,16 +138,16 @@ class ApplyOnStartTest(_Isolated):
         self.assertIn("形が違います", log_distribution.apply_on_start().message)
 
     def test_start_reads_it_before_the_first_log_line(self):
-        """起動の記録から、配られた出力先へ出る(その下の PC の名前のフォルダ)。"""
+        """起動の記録から、配られた出力先へ出る(その下のツール名・PC の名前のフォルダ)。"""
         import start_app
         share = self.tmp / "share"
         self.write_bundle({"log_dir": str(share)})
         with mock.patch.object(start_app, "log_module_environment"), \
                 mock.patch.object(start_app, "tidy_logs"):
             start_app.log_environment("main")
-        folder = share / logging_utils.pc_name()
+        folder = share / logging_utils.tool_name() / logging_utils.pc_name()
         self.assertEqual(logging_utils.log_dir(), folder)
-        text = (folder / f"coil_packing_tools_{date.today():%Y%m%d}.log").read_text(encoding="utf-8")
+        text = (logging_utils.log_path_for(date.today())).read_text(encoding="utf-8")
         self.assertIn("起動: mode=main", text)
         self.assertIn("配布設定(共通)を読み込みました: ログの出力先", text)
 
@@ -194,16 +194,16 @@ class RouteTest(_Isolated):
         self.assertEqual(logging_utils.log_dir(), logging_utils.default_log_dir())
         res = self.post(action="reapply", password=PASSWORD)
         self.assertEqual(res.status_code, 200, res.get_json())
-        self.assertEqual(res.get_json()["log"]["dir"], str(share / logging_utils.pc_name()))
+        self.assertEqual(res.get_json()["log"]["dir"], str(share / logging_utils.tool_name() / logging_utils.pc_name()))
         self.assertEqual(res.get_json()["log"]["keep_days"], 90)
         logging.getLogger("coil_packing_tools.x").info("読み込み直したあとの行")
-        today = share / logging_utils.pc_name() / f"coil_packing_tools_{date.today():%Y%m%d}.log"
+        today = share / logging_utils.tool_name() / logging_utils.pc_name() / f"{logging_utils.file_prefix()}_{date.today():%Y%m%d}.log"
         self.assertIn("読み込み直したあとの行", today.read_text(encoding="utf-8"))
 
         res = self.post(action="remove", password=PASSWORD)
         self.assertTrue(res.get_json()["ok"])
         self.assertFalse(log_distribution.DIR.exists())
-        self.assertEqual(logging_utils.log_dir(), share / logging_utils.pc_name(),
+        self.assertEqual(logging_utils.log_dir(), share / logging_utils.tool_name() / logging_utils.pc_name(),
                          "消してもこのPCの設定はそのまま")
 
     def test_export_with_nothing_set_is_refused_with_the_reason(self):

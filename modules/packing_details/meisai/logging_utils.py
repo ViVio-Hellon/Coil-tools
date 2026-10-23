@@ -2,7 +2,7 @@
 
 移植元はこの機能だけのファイル(`meisai_YYYYMMDD.log`)に書いていた。
 統合版は3機能が1つのプロセスなので、**1つのファイル**
-(`%LOCALAPPDATA%\\CoilPackingTools\\logs\\coil_packing_tools_YYYYMMDD.log`)に
+(`%LOCALAPPDATA%\\CoilPackingTools\\logs\\コイル梱包ツール_<PC名>_YYYYMMDD.log`)に
 書き、ロガーの名前(`meisai.*`)で機能を見分ける。理由は共通側に書いてある。
 
 呼び手(この機能の中)は移植元と同じ `get_logger(name)` で使える。

@@ -61,7 +61,7 @@ MODULE_LEVELS: dict[str, int] = {
 }
 MODULE_ROOTS: tuple[str, ...] = tuple(MODULE_LEVELS)
 
-# ファイル名の前置き。**出どころはここ1つ**
+# 1.2.50 までのファイル名の前置き(古いファイルを残す日数で消すときだけ使う)
 FILE_PREFIX = "coil_packing_tools"
 
 _configured = False
@@ -89,6 +89,24 @@ def pc_name() -> str:
     return re.sub(r'[\\/:*?"<>|]', "_", name).strip() or "PC"
 
 
+def tool_name() -> str:
+    """ツールの名前(`config/app.json` の display_name。例「コイル梱包ツール」)。フォルダ・ファイル名に使う。
+
+    統合 1.2.51・現場の指摘: ログの出力先にはいろいろなツールが書くので、どのツールのファイルか分からない。
+    ツールの名前のフォルダを作ってその下に書き、ファイル名にもツールの名前を入れる(取り出したときにも分かるように)。
+    """
+    try:
+        name = app_config.display_name()
+    except Exception:                                   # noqa: BLE001 - 設定が読めなくてもログは書く
+        name = ""
+    return re.sub(r'[\\/:*?"<>|]', "_", str(name or "")).strip() or "CoilPackingTools"
+
+
+def file_prefix() -> str:
+    """ログ・エラーの記録のファイル名の頭: `<ツール名>_<PC名>`(例 コイル梱包ツール_NLM-NGY-240638)。"""
+    return f"{tool_name()}_{pc_name()}"
+
+
 def default_log_dir() -> Path:
     """このPCの既定の置き場所(`%LOCALAPPDATA%\\CoilPackingTools\\logs`)。"""
     return app_config.local_dir("logs")
@@ -102,14 +120,25 @@ def configured_log_dir() -> str:
 
 
 def target_for(text: str) -> Path:
-    """設定に書く値から、実際に書くフォルダ(その下の PC の名前のフォルダ)。
+    """設定に書く値から、実際に書くフォルダ(`<出力先>\\<ツール名>\\<PC名>`。統合 1.2.51 でツール名のフォルダを足した)。
 
     相対で書くとアプリのフォルダからたどる(3機能の置き場所の設定と同じ決まり)。
     """
     base = Path(os.path.expandvars(text.strip()))
     if not base.is_absolute():
         base = Path(app_config.APP_ROOT) / base
-    return base / pc_name()
+    return base / tool_name() / pc_name()
+
+
+def legacy_dirs() -> list[Path]:
+    """1.2.50 までの置き場所(`<出力先>\\<PC名>`)。残す日数を過ぎた古いファイルを消すのに使う(新しくは書かない)。"""
+    configured = configured_log_dir() if not (os.environ.get(ENV_LOG_DIR) or "").strip() else ""
+    if not configured:
+        return []
+    base = Path(os.path.expandvars(configured.strip()))
+    if not base.is_absolute():
+        base = Path(app_config.APP_ROOT) / base
+    return [base / pc_name()]
 
 
 def writable_problem(folder: Path) -> str:
@@ -159,7 +188,7 @@ def log_problem() -> str:
 
 def log_path_for(day: date) -> Path:
     """その日のログファイル。**名前の作り方はここ1か所**。"""
-    return log_dir() / f"{FILE_PREFIX}_{day:%Y%m%d}.log"
+    return log_dir() / f"{file_prefix()}_{day:%Y%m%d}.log"
 
 
 class DailyFileHandler(logging.FileHandler):  # noqa: D101 - 下に説明
@@ -304,6 +333,7 @@ def status() -> dict:
         "problem": log_problem(),
         "env_override": override,
         "pc_name": pc_name(),
+        "tool_name": tool_name(),
         "today_file": str(log_path_for(date.today())),
         "keep_days": local_settings.log_keep_days(),
         "keep_days_default": local_settings.LOG_KEEP_DAYS_DEFAULT,
@@ -312,26 +342,34 @@ def status() -> dict:
     }
 
 
-_LOG_NAME = re.compile(rf"^{FILE_PREFIX}_(\d{{8}})\.log$")
+_LOG_NAME_OLD = re.compile(rf"^{FILE_PREFIX}_(\d{{8}})\.log$")
+
+
+def _log_name_match(name: str):
+    """このツールのログの名前なら日付の部分。いまの名前(`<ツール名>_<PC名>_YYYYMMDD.log`)と 1.2.50 までの名前。"""
+    m = re.match(rf"^{re.escape(tool_name())}_.+_(\d{{8}})\.log$", name)
+    return m or _LOG_NAME_OLD.match(name)
 
 
 def cleanup_old(keep_days: Optional[int] = None, *, today: Optional[date] = None) -> list[str]:
     """残す日数を過ぎたログを消す(いまの場所と、このPCの既定の場所)。消した名前を返す。
 
-    **名前の決まった物だけ**消す(`coil_packing_tools_YYYYMMDD.log`)。同じフォルダに
+    **名前の決まった物だけ**消す(`<ツール名>_<PC名>_YYYYMMDD.log` と前の `coil_packing_tools_YYYYMMDD.log`)。同じフォルダに
     人が置いたファイルには触らない。エラーの記録は `incidents.cleanup_old` が消す。
     """
     from . import local_settings
     days = keep_days if keep_days is not None else local_settings.log_keep_days()
     limit = (today or date.today()) - timedelta(days=days)
     removed: list[str] = []
-    for folder in {log_dir(), default_log_dir()}:
+    legacy = set(legacy_dirs())
+    for folder in {log_dir(), default_log_dir()} | legacy:
         try:
             names = os.listdir(folder)
         except OSError:
             continue
         for name in names:
-            m = _LOG_NAME.match(name)
+            # 前の置き場所では前の名前だけ(ほかのツールのファイルに触らない)
+            m = _LOG_NAME_OLD.match(name) if folder in legacy else _log_name_match(name)
             if not m:
                 continue
             try:

@@ -352,7 +352,22 @@ def process_alive_state(pid: int) -> Optional[bool]:
         return False
     except PermissionError:
         return True              # 別ユーザーのプロセス = 生きている
-    return True
+    return not _is_zombie(pid)
+
+
+def _is_zombie(pid: int) -> bool:
+    """Linux で、終わったが親にまだ引き取られていないプロセス(ゾンビ)か。
+
+    ゾンビにもシグナル0は届くので「居る」と見えてしまい、終わったのに「止まらない」と判定していた
+    (統合 1.2.51。試験の台本が起動したプロセスを、止めたあとで引き取るときに出た。Windows には無い)。
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            stat = f.read()
+    except OSError:
+        return False             # /proc が無い(mac など)・読めない → これまでどおり
+    end = stat.rfind(b")")       # 名前に空白や括弧が入ってもよいよう、最後の ")" の後ろを見る
+    return end >= 0 and stat[end + 2:end + 3] == b"Z"
 
 
 def console_text(raw: Optional[bytes]) -> str:

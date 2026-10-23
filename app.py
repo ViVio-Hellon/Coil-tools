@@ -915,7 +915,7 @@ def _log_routes(bp: Blueprint) -> None:
         text = incidents.read(eid)
         if text is None:
             return security.error_json("not_found", "その番号の記録はありません", 404)
-        return jsonify({"ok": True, "id": eid, "path": str(incidents.folder() / f"{eid}.md"),
+        return jsonify({"ok": True, "id": eid, "path": str(incidents.path_for(eid)),
                         "text": text})
 
     @bp.get("/api/log/recent")

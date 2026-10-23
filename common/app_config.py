@@ -31,7 +31,7 @@ JSON はコメントを書けないので、各キーの説明はこのモジュ
 
     %LOCALAPPDATA%\\CoilPackingTools\\
       runtime\\  … PID・ポート・ロック(停止後は消してよい)
-      logs\\     … coil_packing_tools_YYYYMMDD.log(3機能ぶんを1つに)
+      logs\\     … コイル梱包ツール_<PC名>_YYYYMMDD.log(3機能ぶんを1つに)
       pycache\\  … PYTHONPYCACHEPREFIX の向き先
       cache\\ work\\ backup\\ data\\ … 統合アプリ自身のぶん(いまは使っていない)
 

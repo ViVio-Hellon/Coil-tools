@@ -6,7 +6,8 @@ r"""エラーの記録 ── なぜなぜ分析のために「そのときの�
 ログ(1日1ファイル)には何でも流れてくるので、あとから「13日の 10時ごろのあのエラー」を
 探すのは骨が折れる。そこで、**エラーが起きたらその場で1件のファイル**を作る:
 
-    <ログの置き場所>\incidents\E20261001-104512-3F9A.md
+    <ログの置き場所>\incidents\コイル梱包ツール_<PC名>_E20261001-104512-3F9A.md
+    (統合 1.2.51 からファイル名にツール名と PC 名を入れた。前は E20261001-104512-3F9A.md)
 
 中身はなぜなぜ分析の順に並べる:
 
@@ -69,6 +70,34 @@ _recent: dict[str, tuple[str, float]] = {}       # まとめる鍵 → (番号, 
 
 def folder() -> Path:
     return logging_utils.log_dir() / FOLDER
+
+
+#: ファイル名から番号を取り出す(いまの名前・前の名前のどちらでも)
+_NAME_RE = re.compile(r"(?:^|_)(E\d{8}-\d{6}-[0-9A-F]{4})\.md$")
+
+
+def file_name(eid: str) -> str:
+    """1件のファイル名: `<ツール名>_<PC名>_<番号>.md`(取り出しても、どのツール・どの PC の記録か分かる)。"""
+    return f"{logging_utils.file_prefix()}_{eid}.md"
+
+
+def path_for(eid: str) -> Path:
+    """番号の記録のファイル。いまの名前 → 前の名前(番号だけ) → ほかの PC 名の名前、の順に探す。無ければいまの名前。"""
+    here = folder()
+    new = here / file_name(eid)
+    if new.exists():
+        return new
+    old = here / f"{eid}.md"
+    if old.exists():
+        return old
+    for hit in sorted(here.glob(f"*_{eid}.md")):
+        return hit
+    return new
+
+
+def _id_of(name: str) -> str:
+    m = _NAME_RE.search(name)
+    return m.group(1) if m else ""
 
 
 def new_id(now: Optional[datetime] = None) -> str:
@@ -196,7 +225,7 @@ def record(kind: str, title: str, *, shown: str = "", exc: Optional[BaseExceptio
             for k in [k for k, (_i, t) in _recent.items() if now - t > DEDUP_SEC]:
                 _recent.pop(k, None)
     facts = facts if facts is not None else request_facts()
-    path = folder() / f"{eid}.md"
+    path = folder() / file_name(eid)
     try:
         text = _render(eid, kind, title, shown, exc, facts)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -208,7 +237,7 @@ def record(kind: str, title: str, *, shown: str = "", exc: Optional[BaseExceptio
 
 
 def _append_repeat(eid: str) -> None:
-    path = folder() / f"{eid}.md"
+    path = path_for(eid)
     try:
         with path.open("a", encoding="utf-8") as f:
             f.write(f"- {time.strftime('%Y/%m/%d %H:%M:%S')} 同じエラーがもう一度起きました\n")
@@ -325,14 +354,13 @@ def _rel(filename: str) -> str:
 def list_recent(limit: int = 100) -> list[dict]:
     """新しい順。1件 = 番号・日時・種類・要約・機能。"""
     try:
-        names = sorted((n for n in os.listdir(folder()) if n.endswith(".md")), reverse=True)
+        names = [n for n in os.listdir(folder()) if _id_of(n)]
     except OSError:
         return []
+    names.sort(key=_id_of, reverse=True)                 # 番号(日時)の新しい順。名前の頭(ツール名)で並べない
     out = []
     for name in names[:limit]:
-        eid = name[:-3]
-        if not ID_RE.match(eid):
-            continue
+        eid = _id_of(name)
         info = {"id": eid, "when": _when(eid), "kind": "", "title": "", "module": "",
                 "repeats": 0}
         try:
@@ -362,7 +390,7 @@ def read(eid: str) -> Optional[str]:
     if not ID_RE.match(str(eid or "")):
         return None
     try:
-        return (folder() / f"{eid}.md").read_text(encoding="utf-8")
+        return path_for(eid).read_text(encoding="utf-8")
     except OSError:
         return None
 
@@ -373,17 +401,18 @@ def cleanup_old(keep_days: Optional[int] = None, *, today: Optional[date] = None
     days = keep_days if keep_days is not None else local_settings.log_keep_days()
     limit = (today or date.today()) - timedelta(days=days)
     removed = []
-    for base in {logging_utils.log_dir(), logging_utils.default_log_dir()}:
+    for base in {logging_utils.log_dir(), logging_utils.default_log_dir(), *logging_utils.legacy_dirs()}:
         target = Path(base) / FOLDER
         try:
             names = os.listdir(target)
         except OSError:
             continue
         for name in names:
-            if not (name.endswith(".md") and ID_RE.match(name[:-3])):
+            eid = _id_of(name)
+            if not eid:
                 continue
             try:
-                day = date(int(name[1:5]), int(name[5:7]), int(name[7:9]))
+                day = date(int(eid[1:5]), int(eid[5:7]), int(eid[7:9]))
             except ValueError:
                 continue
             if day < limit:
