@@ -30,6 +30,13 @@ rollback journal だとその間ずっと読み手が止まるので、WAL が�
   変わっていればその場で取り込み直す
 - 仕掛台帳 … 大きいので、帯に「共有の仕掛台帳が更新されています [いま取り込む]」を出す
 以前は起動時に1回だけで、マスタ管理の画面(共有を直に読む)は新しいのに、計算は古い写しのまま、が起きた。
+
+【任意の表「パレット種類_外径条件」(統合 1.2.50・現場の指示)】
+梱包資材マスタの1表として、上の目印・確かめ・取り込み直し・世代にそのまま乗せる。ただし
+**共有にまだ無いことがある**ので、無くても取り込みの誤りにせず(結果に「まだ作っていません」)、
+帯の「古い」の対象にもしない。手元の表は共有に表があれば作り、無ければ消す(`_import_optional`)。
+手元に表があるか無いかで、1C1103 のパレット種類をマスタで決めるかプログラムで決めるかが変わる
+(`outer_condition.py`)。
 """
 from __future__ import annotations
 
@@ -45,7 +52,7 @@ from typing import Any, Iterable, Optional
 
 from common import source_copy
 
-from . import coil_results, config, db, import_specs, source_db
+from . import coil_results, config, db, import_specs, outer_condition, source_db
 from .logging_utils import get_logger
 
 log = get_logger("data_sync")
@@ -395,7 +402,7 @@ def _import_table(
         result.error = "取り込み元に列がありません: " + ", ".join(missing)
         return result
 
-    specs = (import_specs.MASTER_IMPORT_SPECS.get(dest_table)
+    specs = (import_specs.master_specs(dest_table)
              or import_specs.LOT_IMPORT_SPECS[dest_table])
     result.filled = [src for _, src, _ in specs if src not in available]
 
@@ -459,10 +466,73 @@ def _record_import(conn: Any, table: str, source_path: Path, rows: int,
 
 
 # ==================================================================
+# 任意の表を写す(統合 1.2.50・現場の指示)
+# ==================================================================
+#: 共有にまだ任意の表が無いときの知らせ(取り込みの誤りにはしない)
+OPTIONAL_ABSENT_NOTE = ("まだ作っていません(マスタ管理で作れます。作るまでは 1C1103 のパレット種類を"
+                        "プログラムの規則で決めます)")
+
+
+def _import_optional(conn: Any, table: str, path: Path) -> TableResult:
+    """梱包資材マスタの**任意の表**を写す。共有に無ければ手元の表を消し、誤りにしない。
+
+    - 共有に表がある … 手元の表を作って写す(写せなければ誤り。前から手元にあった表はそのまま残す)
+    - 共有に表が無い … 手元の表を消す(= プログラムの規則に戻る)。結果は ok で「まだ作っていません」
+
+    どちらでも取り込み履歴に目印を残す ── 残さないと、表が無いあいだ毎回読みに行き、
+    共有で表が作られたときに「変わった」と気づけない(`check_sources`)。
+    """
+    stamp = source_stamp(path)                  # 読む前に取る(統合 1.2.49)
+    try:
+        # 共有が読めるかを先に確かめる。読めないのに「表が無い」と取り違えて手元の表を消さない
+        source_db.read_query(path, "SELECT 1 FROM sqlite_master LIMIT 1")
+    except source_db.SourceError as exc:
+        return TableResult(table=table, ok=False, source=str(path),
+                           error=f"取り込み元を読めません: {exc}")
+    available = set(source_db.columns(path, table))
+    if not available:
+        try:
+            if table == outer_condition.TABLE:
+                outer_condition.drop_local(conn)
+        except Exception as exc:  # noqa: BLE001 - 理由を残して次へ
+            return TableResult(table=table, ok=False, source=str(path),
+                               error=f"手元のDBへ書けませんでした: {exc}")
+        _record_import(conn, table, path, 0, stamp)
+        return TableResult(table=table, ok=True, rows=0, source=str(path),
+                           note=OPTIONAL_ABSENT_NOTE)
+    missing = import_specs.missing_columns(table, available)
+    if missing:
+        # 作る前に断る。空の表を作ってしまうと「表はあるが行が無い」= マスタの値のまま、に化ける
+        return TableResult(table=table, ok=False, source=str(path),
+                           error="取り込み元に列がありません: " + ", ".join(missing))
+    existed = outer_condition.present(conn)
+    outer_condition.ensure_local(conn)
+    result = _import_table(conn, dest_table=table, source_path=path, source_table=table)
+    if not result.ok and not existed:
+        outer_condition.drop_local(conn)
+    return result
+
+
+def _import_master_table(conn: Any, table: str, path: Path) -> TableResult:
+    """梱包資材マスタの1表を写す(任意の表も含む)。"""
+    if table in import_specs.OPTIONAL_MASTER_SPECS:
+        return _import_optional(conn, table, path)
+    return _import_table(conn, dest_table=table, source_path=path, source_table=table)
+
+
+def master_tables() -> list[str]:
+    """梱包資材マスタから写す表ぜんぶ(任意の表も含む。統合 1.2.50)。"""
+    return list(import_specs.MASTER_IMPORT_SPECS) + list(import_specs.OPTIONAL_MASTER_SPECS)
+
+
+# ==================================================================
 # まとめて取り込む
 # ==================================================================
 def import_master(conn: Any) -> list[TableResult]:
-    """梱包資材マスタの表(包装仕様・パレット・リプラサイズ・班員名簿)を写す。"""
+    """梱包資材マスタの表(包装仕様・パレット・リプラサイズ・班員名簿と、任意の表)を写す。
+
+    マスタが見つからないときの誤りは、そろっていないと困る4表ぶんだけ出す(任意の表は出さない)。
+    """
     path = find_master_db()
     if path is None:
         directory = config.master_db_dir()
@@ -470,8 +540,7 @@ def import_master(conn: Any) -> list[TableResult]:
                             error=f"梱包資材マスタが見つかりません: {directory}")
                 for t in import_specs.MASTER_IMPORT_SPECS]
     with _importing():
-        return [_import_table(conn, dest_table=t, source_path=path, source_table=t)
-                for t in import_specs.MASTER_IMPORT_SPECS]
+        return [_import_master_table(conn, t, path) for t in master_tables()]
 
 
 def import_lot(conn: Any) -> list[TableResult]:
@@ -583,6 +652,8 @@ class SourceCheck:
     master: list[str] = field(default_factory=list)
     lot: list[str] = field(default_factory=list)
     coil: bool = False
+    # 取り込み元が変わっている任意の表(統合 1.2.50)。取り込み直すが、「古い」には数えない
+    optional: list[str] = field(default_factory=list)
     # 確かめられなかった表(取り込み元が見つからない・届かない)
     unverified: list[str] = field(default_factory=list)
     master_path: Optional[Path] = None
@@ -615,6 +686,11 @@ def check_sources(conn: Any) -> SourceCheck:
             check.unverified.append(table)
         else:
             judge(table, _same_source(known.get(table), master), check.master)
+    # 任意の表(統合 1.2.50)。**まだ見たことが無くても**取り込みに回す(前の版の手元DB・
+    # 自動取り込みを切っている端末でも、1回で表の有る無しが分かる)。届かなければ何もしない
+    if master is not None:
+        for table in import_specs.OPTIONAL_MASTER_SPECS:
+            judge(table, _same_source(known.get(table), master), check.optional)
 
     for table in import_specs.LOT_IMPORT_SPECS:
         if table not in known:
@@ -704,7 +780,7 @@ def freshness(conn: Any, *, refresh: bool = True) -> Freshness:
         return out
     try:
         out.check = check_sources(conn)
-        if refresh and (out.check.master or out.check.coil):
+        if refresh and (out.check.master or out.check.coil or out.check.optional):
             _refresh_small(conn, out)
             out.check = check_sources(conn)
         out.reason = stale_reason(conn, check=out.check)
@@ -719,11 +795,11 @@ def _refresh_small(conn: Any, out: Freshness) -> None:
     `_refresh_lock` を持って呼ぶ。計算Start は同じ鍵を待ってから確かめるので、ここは
     「取り込み中」にしない(1表ずつでも、計算は取り込み直しが終わってから始まる)。
     """
-    if out.check.master and out.check.master_path is not None:
+    tables = out.check.master + out.check.optional
+    if tables and out.check.master_path is not None:
         forget_copies([out.check.master_path])
-        for table in out.check.master:              # 変わった表だけ(取り込めない表を毎回読み直さない)
-            done = _import_table(conn, dest_table=table, source_path=out.check.master_path,
-                                 source_table=table)
+        for table in tables:                        # 変わった表だけ(取り込めない表を毎回読み直さない)
+            done = _import_master_table(conn, table, out.check.master_path)
             if done.ok:
                 out.refreshed.append(table)
             else:
@@ -857,7 +933,7 @@ def _auto_import(conn: Any, *, progress=None) -> SyncResult:
     plan: list[tuple[str, Path, str]] = []
     master = find_master_db()
     if master is not None:
-        for table in import_specs.MASTER_IMPORT_SPECS:
+        for table in master_tables():               # 任意の表も(統合 1.2.50)
             plan.append((table, master, table))
     for table in import_specs.LOT_IMPORT_SPECS:
         path = find_lot_db(table)
@@ -869,7 +945,7 @@ def _auto_import(conn: Any, *, progress=None) -> SyncResult:
     total = len(plan)
     same: list[str] = []
 
-    for i, (dest, path, source_table) in enumerate(plan, start=1):
+    for i, (dest, path, _source_table) in enumerate(plan, start=1):
         if progress is not None:
             progress(i - 1, total, f"{dest} を取り込み中")
 
@@ -888,8 +964,7 @@ def _auto_import(conn: Any, *, progress=None) -> SyncResult:
         if is_lot:
             result.tables.append(import_lot_table(conn, dest, path))
         else:
-            result.tables.append(_import_table(
-                conn, dest_table=dest, source_path=path, source_table=source_table))
+            result.tables.append(_import_master_table(conn, dest, path))
 
     # コイル実績(実績の形式を読む設定のときだけ。統合 1.2.29)。元が変わっていなければ飛ばす
     if coil_results.wanted():
@@ -934,12 +1009,10 @@ def reimport_table(conn: Any, table: str, *,
     読み直すと、1行直すたびに共有フォルダを5回叩くことになる。
     読む前に、覚えている写しを捨てる(統合 1.2.49。目印が同じでも中身だけ変わることがある)。
     """
-    if table in import_specs.MASTER_IMPORT_SPECS:
+    if import_specs.master_specs(table):           # 任意の表も(統合 1.2.50)
         found = path or find_master_db()
-        source_table = table
     elif table in import_specs.LOT_IMPORT_SPECS:
         found = path or find_lot_db(table)
-        source_table = import_specs.LOT_SOURCE_TABLE
     else:
         return TableResult(table=table, ok=False,
                            error=f"取り込みの定義がありません: {table}")
@@ -954,8 +1027,7 @@ def reimport_table(conn: Any, table: str, *,
             forget_copies([found, find_second_lot(table)])
             return import_lot_table(conn, table, found)
         forget_copies([found])
-        return _import_table(conn, dest_table=table, source_path=found,
-                             source_table=source_table)
+        return _import_master_table(conn, table, found)
 
 
 def catch_up_master(conn: Any, path: Path, *, skip: str = "") -> None:
@@ -967,6 +1039,6 @@ def catch_up_master(conn: Any, path: Path, *, skip: str = "") -> None:
     """
     known = last_import(conn)
     with _importing():
-        for table in import_specs.MASTER_IMPORT_SPECS:
+        for table in master_tables():               # 任意の表も(統合 1.2.50)
             if table != skip and not _same_source(known.get(table), path):
-                _import_table(conn, dest_table=table, source_path=path, source_table=table)
+                _import_master_table(conn, table, path)

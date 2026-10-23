@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Optional
 
-from . import db, special_rules, vba
+from . import db, outer_condition, special_rules, vba
 from .logging_utils import get_logger
 from .models import CalcState, PackagingSpec, PalletRow
 
@@ -87,8 +87,12 @@ def pallet_type(conn: sqlite3.Connection, state: CalcState) -> str:
     # 【最後に効かせる】VBA のコメント:「izumi の条件を最後に実行する
     # _2024.3.4(スカシにもどってしまう)」── マスタの値を入れたあとで
     # 上書きしないと、外径で決めた種類が元に戻る
-    state.パレット種類 = special_rules.pallet_type_override(
-        spec_no, state.外径値, state.パレット種類)
+    #
+    # 【マスタ優先(統合 1.2.50・現場の指示)】手元に「パレット種類_外径条件」の表があれば
+    # 表で決め、プログラムの 1C1103 の規則は使わない。表がまだ無いときだけ規則で決める
+    # (`outer_condition.decide`)
+    state.パレット種類 = outer_condition.decide(
+        conn, spec_no, state.外径値, state.パレット種類)
     return state.パレット種類
 
 

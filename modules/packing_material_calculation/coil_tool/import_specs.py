@@ -59,6 +59,26 @@ def to_int(value: Any) -> int:
     return int(to_real(value))
 
 
+def to_real_or_none(value: Any) -> Optional[float]:
+    """実数へ。**空は None(「決めていない」)のまま**にする(統合 1.2.50)。
+
+    `to_real` は空を 0.0 にするが、「パレット種類_外径条件」の 外径_以上・外径_以下 は
+    空が「下限なし・上限なし」で、0 とは意味が違う。数値として読めない字も None にする
+    (マスタ管理は数値しか入れさせないので、Access などで直に書いたときだけ起きる)。
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 # ------------------------------------------------------------------
 # 梱包資材マスタ (VBA `PATH_AIM_参照` \ 梱包資材マスタ)
 # ------------------------------------------------------------------
@@ -129,6 +149,30 @@ MASTER_IMPORT_SPECS: dict[str, list[ColumnSpec]] = {
     "班員名簿": STAFF_COLUMNS,
 }
 
+# 【パレット種類_外径条件】包装仕様Noごとに、外径でパレット種類を決める条件(統合 1.2.50・現場の指示)。
+# 包装仕様No の行を 順番 の小さい順に見て、外径が 以上〜以下 に入る最初の行の種類にする(先勝ち)。
+# 外径_以上・外径_以下 は空が「決めていない」なので None のまま運ぶ(`to_real_or_none`)
+OUTER_CONDITION_COLUMNS: list[ColumnSpec] = [
+    ("包装仕様No", "包装仕様No", to_text),
+    ("順番", "順番", to_int),
+    ("外径_以上", "外径_以上", to_real_or_none),
+    ("外径_以下", "外径_以下", to_real_or_none),
+    ("パレット種類", "パレット種類", to_text),
+    ("備考", "備考", to_text),
+]
+
+# 梱包資材マスタの**任意の表**(統合 1.2.50)。共有にまだ無いことがあり、無くても取り込みの誤りにしない。
+# 手元の表は `schema.sql` に置かず、取り込んだときに作る(表が有るか無いかで「マスタ優先」かを決めるため。
+# `outer_condition.py`)。`MASTER_IMPORT_SPECS` とは分けて持つ ── あちらは「そろっていないと古い」の対象
+OPTIONAL_MASTER_SPECS: dict[str, list[ColumnSpec]] = {
+    "パレット種類_外径条件": OUTER_CONDITION_COLUMNS,
+}
+
+
+def master_specs(table: str) -> list[ColumnSpec]:
+    """梱包資材マスタの表の取り込み定義(任意の表も含む)。知らない表は空。"""
+    return MASTER_IMPORT_SPECS.get(table) or OPTIONAL_MASTER_SPECS.get(table) or []
+
 # ------------------------------------------------------------------
 # 仕掛台帳 (VBA `PATH_仕掛_参照` \ SIKAHIKI / SIKAODR)
 # ------------------------------------------------------------------
@@ -186,6 +230,8 @@ OPTIONAL_SOURCE_COLUMNS: dict[str, frozenset[str]] = {
     "包装仕様": frozenset({"最下部スペーサー", "ｺｲﾙ間は間紙入", "種類", "サイズ"}),
     "パレット": frozenset(),
     "リプラサイズ": frozenset({"長さ"}),
+    # 順番が無ければ並びは取り込み元の行の順。備考は読むだけ(統合 1.2.50)
+    "パレット種類_外径条件": frozenset({"順番", "備考"}),
     # 並べ替えと区切りに使うだけの列。無くても名前は出せる
     "班員名簿": frozenset({"管理番号", "苗字", "読み", "担当ライン"}),
 }
@@ -197,6 +243,8 @@ REQUIRED_KEY_COLUMNS: dict[str, tuple[str, ...]] = {
     "リプラサイズ": (),
     # 名前の無い行は依頼者欄に出せない(日報ツールも同じ扱い)
     "班員名簿": ("名前",),
+    # 包装仕様No・パレット種類の無い行は条件として使えない(統合 1.2.50)
+    "パレット種類_外径条件": ("包装仕様No", "パレット種類"),
     "仕掛引当": ("ロット番号",),
     "仕掛受注": ("受注番号",),
 }
@@ -251,13 +299,15 @@ def default_for(convert: Callable[[Any], Any]) -> Any:
         return ""
     if convert is to_int:
         return 0
+    if convert is to_real_or_none:
+        return None
     return 0.0
 
 
 def missing_columns(table: str, available: set[str]) -> list[str]:
     """取り込み元に無く、**無いと困る**列を返す。空なら取り込める。"""
-    specs = MASTER_IMPORT_SPECS.get(table) or LOT_IMPORT_SPECS.get(table)
-    if specs is None:
+    specs = master_specs(table) or LOT_IMPORT_SPECS.get(table)
+    if not specs:
         raise ValueError(f"未知のテーブル: {table!r}")
     optional = OPTIONAL_SOURCE_COLUMNS.get(table, frozenset())
     return [src for _, src, _ in specs
@@ -269,8 +319,8 @@ def convert_row(table: str, row: dict[str, Any]) -> Optional[dict[str, Any]]:
 
     鍵の列が空なら `None` を返す(その行は写さない)。
     """
-    specs = MASTER_IMPORT_SPECS.get(table) or LOT_IMPORT_SPECS.get(table)
-    if specs is None:
+    specs = master_specs(table) or LOT_IMPORT_SPECS.get(table)
+    if not specs:
         raise ValueError(f"未知のテーブル: {table!r}")
 
     out: dict[str, Any] = {}

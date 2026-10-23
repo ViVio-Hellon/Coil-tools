@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from .. import admin_session, config, data_sync, master_admin
+from .. import admin_session, config, data_sync, master_admin, outer_condition
 
 
 @dataclass
@@ -79,8 +79,11 @@ def browse(conn: sqlite3.Connection, *, table: str = "", query: str = "",
     view.can_edit, view.edit_why = master_admin.can_edit(
         conn, view.table, touch=False)
 
+    # 札の出し分けは手元(計算が読むほう)に外径条件の表があるかで見る(統合 1.2.50)。
+    # `_sync_note` が先に手元を追いつかせているので、共有で作られた表もここで分かる
     view.page = master_admin.page(found, view.table, query=view.query,
-                                  sort=sort, sort_dir=sort_dir)
+                                  sort=sort, sort_dir=sort_dir,
+                                  outer_table=outer_condition.present(conn))
     # 打ち込める欄は、**取り込み元に本当にある列**だけにする。
     # 上流がまだ足していない列を出すと、保存の瞬間に断られる
     view.columns = master_admin.columns(conn, view.table, view.page.columns)
@@ -110,7 +113,7 @@ def _sync_note(conn: sqlite3.Connection) -> str:
     if fresh.check.master:
         return ("共有のマスタに、手元へまだ取り込んでいない変更があります(計算は手元の写しで動きます)。"
                 "上の「いま取り込む」を押してください。")
-    done = [t for t in fresh.refreshed if t in master_admin.import_specs.MASTER_IMPORT_SPECS]
+    done = [t for t in fresh.refreshed if t in data_sync.master_tables()]
     if done:
         return ("共有のマスタが変わっていたので、手元へ取り込み直しました(" + "・".join(done)
                 + ")。資材計算をやり直すと新しい値になります。")

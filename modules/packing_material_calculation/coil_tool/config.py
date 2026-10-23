@@ -373,6 +373,9 @@ TBL_SPEC = "包装仕様"
 TBL_PALLET = "パレット"
 TBL_RIPLA_SIZE = "リプラサイズ"
 TBL_STAFF = "班員名簿"
+# パレット種類を外径で決める条件(統合 1.2.50・現場の指示)。**任意の表**で、共有にまだ無いこともある。
+# 無いあいだは 1C1103 の規則をプログラムで決める(`outer_condition.py`)
+TBL_OUTER_CONDITION = "パレット種類_外径条件"
 
 # このツールが書くテーブル
 TBL_CHECKLIST = "発注チェックリスト"

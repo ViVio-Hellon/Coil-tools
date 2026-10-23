@@ -147,8 +147,10 @@ class PrefixTest(unittest.TestCase):
         head, body = html.split("</header>", 1)
         self.assertNotIn("appbar-nav", head, "上の帯に画面の切り替えを置かない")
         rail = body[body.index('<nav class="appbar-nav siderail'):body.index("</nav>")]
-        for name in ("指定サイズ", "風袋計算", "計算内容", "ラベル台紙", "全サイズ", "設定"):
+        for name in ("指定サイズ", "風袋計算", "計算内容", "ラベル台紙", "設定"):
             self.assertIn(">%s</a>" % name, rail)
+        # 全サイズはいったん出さない(統合 1.2.50・現場の指示。機能は残し、show_all_size で出せる)
+        self.assertNotIn(">全サイズ</a>", rail)
         self.assertLess(body.index("siderail"), body.index('<main class="page">'))
 
         html = self.client.get(f"/details/meisai?t={TOKEN}").data.decode()

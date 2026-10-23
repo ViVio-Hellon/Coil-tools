@@ -46,6 +46,7 @@ STATUS = {
     master_admin.REFUSE_NO_SOURCE: 422,
     master_admin.REFUSE_WRITE_FAILED: 422,
     master_admin.REFUSE_NOT_CREATABLE: 422,
+    master_admin.REFUSE_ALREADY_EXISTS: 409,
 }
 
 
@@ -83,6 +84,16 @@ def delete_row():
     body = request.get_json(silent=True) or {}
     return _write(master_admin.delete_row(
         get_db(), _table(body), body.get("key")), body)
+
+
+@bp.post("/api/master/table/create")
+def create_table():
+    """このツールが足した表を共有のマスタに作る。`{"table":…}`(統合 1.2.50・現場の指示)
+
+    いまは「パレット種類_外径条件」だけ。行を直すのと同じく**パスワードが要る**。
+    """
+    body = request.get_json(silent=True) or {}
+    return _write(master_admin.create_table(get_db(), _table(body)), body)
 
 
 # ==================================================================

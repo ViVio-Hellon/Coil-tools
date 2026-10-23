@@ -33,11 +33,19 @@ from .models import CalcState, FLAG_HEIGHT, FLAG_SPEC
 # **実際には「全面」**になります。990 超は上書きされず、マスタの値のまま。
 #
 # ここでも先勝ちのまま再現します(`docs/不明点.md` Q1)。
+#
+# 【マスタ優先(統合 1.2.50・現場の指示)】梱包資材マスタに「パレット種類_外径条件」の表が
+# あれば、表で決めてこの規則は使いません(`outer_condition.decide`)。この規則が効くのは
+# 表がまだ無い(共有に作っていない)ときだけです。表を作るときは、この規則と同じ結果になる
+# 行を入れます(`outer_condition.SEED_ROWS`)。
 IZUMI_SPEC_NO = "1C1103"
 
 
 def pallet_type_override(spec_no: str, outer: float, current: str) -> str:
-    """包装仕様No別のパレット種類の上書き。当たらなければ `current` のまま。"""
+    """包装仕様No別のパレット種類の上書き。当たらなければ `current` のまま。
+
+    「パレット種類_外径条件」の表がまだ無いときだけ使う(`outer_condition.decide`)。
+    """
     if spec_no != IZUMI_SPEC_NO:
         return current
     if outer < 800.0:
@@ -307,14 +315,22 @@ def ripla_size_override(spec_no: str, atu: float, haba: float, current: str) -> 
 RULE_TAG = "この品番はプログラムの規則が優先されます({})"
 
 
-def program_rule_notes(spec_no: str, *, size: str = "") -> list[str]:
+# 1C1103 の札(統合 1.2.50)。表を作るとマスタが優先になることまで言う
+IZUMI_NOTE = ("ｲｽﾞﾐﾒﾀﾙ: パレット種類を外径の条件で決めます。"
+              "マスタ管理で「パレット種類_外径条件」の表を作るとマスタが優先になります")
+
+
+def program_rule_notes(spec_no: str, *, size: str = "", outer_table: bool = False) -> list[str]:
     """その品番(と包装仕様の「サイズ」)でプログラムが決めていること。無ければ空。
+
+    `outer_table` は手元に「パレット種類_外径条件」の表があるか(統合 1.2.50)。あれば
+    1C1103 のパレット種類はマスタ(その表)が優先なので、1C1103 の札は出さない。
 
     規則を増やしたら、ここにも1行足す(`tests/test_master_freshness.py` が品番の漏れを見る)。
     """
     notes: list[str] = []
-    if spec_no == IZUMI_SPEC_NO:
-        notes.append("ｲｽﾞﾐﾒﾀﾙ: パレット種類を外径で決めます")
+    if spec_no == IZUMI_SPEC_NO and not outer_table:
+        notes.append(IZUMI_NOTE)
     rule = _STACK_BY_NO.get(spec_no)
     if rule is not None:
         notes.append(f"{rule.customer}: 積数を板厚・板幅で決めます")

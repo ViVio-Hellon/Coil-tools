@@ -155,6 +155,8 @@
                aria-label="行を絞り込む">
         <button class="btn btn--find" type="button" id="mFind">絞り込む</button>
         <button class="btn btn--run" type="button" id="mAdd" disabled>+ 行を足す</button>
+        {# このツールが足した表がまだ無いときだけ出す(統合 1.2.50・現場の指示)。パスワードが要る #}
+        <button class="btn btn--run" type="button" id="mCreate" hidden>表を作る(1C1103 の今の規則を入れて)</button>
         <button class="btn btn--find" type="button" id="mReload">読み直す</button>
       </div>
 

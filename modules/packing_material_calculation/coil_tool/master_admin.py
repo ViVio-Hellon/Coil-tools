@@ -50,7 +50,8 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from common import sql_sort
-from . import admin_session, config, data_sync, db, import_specs, source_db, special_rules
+from . import (admin_session, config, data_sync, db, import_specs, outer_condition, source_db,
+               special_rules)
 from .logging_utils import get_logger
 
 log = get_logger("master_admin")
@@ -83,7 +84,7 @@ class Managed:
     note: str
 
 
-# **直せるのは、このツールが計算に使う3表だけ。**
+# **直せるのは、このツールが計算に使う表だけ。**
 # 並びは触る頻度の順(ヒックの法則)。包装仕様がほとんどを占める
 MANAGED: tuple[Managed, ...] = (
     Managed(config.TBL_SPEC, "包装仕様", "包",
@@ -92,6 +93,10 @@ MANAGED: tuple[Managed, ...] = (
             "種類ごとの適合範囲(巾・丈の上下限)と記号・Ｗ"),
     Managed(config.TBL_RIPLA_SIZE, "リプラサイズ", "リ",
             "在庫にあるリプラの定尺"),
+    # 統合 1.2.50・現場の指示。共有にまだ無いことがある(「表を作る」で作れる)
+    Managed(config.TBL_OUTER_CONDITION, "パレット種類_外径条件", "外",
+            "包装仕様Noごとに、外径でパレット種類を決める条件(順番の小さい順に、最初に当たった行。"
+            "外径_以上・外径_以下 の空は「決めていない」)。表があればマスタが優先です"),
 )
 BY_TABLE: dict[str, Managed] = {m.table: m for m in MANAGED}
 
@@ -135,6 +140,7 @@ REFUSE_NO_SOURCE = "no_source"          # 取り込み元に届かない
 REFUSE_NO_ROW = "no_row"                # その行がもう無い
 REFUSE_WRITE_FAILED = "write_failed"    # 書けなかった
 REFUSE_NOT_CREATABLE = "not_creatable"  # 取り込み元にその表が無い
+REFUSE_ALREADY_EXISTS = "already_exists"  # 作ろうとした表が、取り込み元にもうある(統合 1.2.50)
 
 
 def can_edit(conn: Optional[sqlite3.Connection], table: str = "",
@@ -165,7 +171,8 @@ def can_edit(conn: Optional[sqlite3.Connection], table: str = "",
 def source_for(table: str) -> Optional[Path]:
     """その表がどのファイルにあるか。
 
-    このツールが直す3表はすべて梱包資材マスタの中にあります。
+    このツールが直す表はすべて梱包資材マスタの中にあります(統合 1.2.50 で足した
+    「パレット種類_外径条件」も)。
     移植元は閾値マスタが別ファイルで分岐していましたが、ここでは
     分岐の必要がありません。
 
@@ -188,21 +195,40 @@ def source_dir(table: str) -> Path:
 # ==================================================================
 # 取り込み元に無い表
 # ==================================================================
-# **このツールは取り込み元に表を作りません。**
+# **このツールは、上流の表を取り込み元に作りません。**
 #
 # 移植元は「自分が後から足した表」だけを作れるようにしていました
-# (`import_specs.OPTIONAL_TABLES`)。このツールが直す3表は、どれも
+# (`import_specs.OPTIONAL_TABLES`)。包装仕様・パレット・リプラサイズは、どれも
 # 上流(資材課)が持っている表です。
 #
 # 無いのは資材課側の事情(ファイルが違う・移された・まだ配られていない)
 # で、空の表を作ってしまうと**その事情が「0件」という形に化けて**、
 # 原因を探せなくなります。作らずに、無いことと置き場所を言います。
+#
+# 【例外: このツールが足した表(統合 1.2.50・現場の指示)】
+# 「パレット種類_外径条件」は、1C1103 のプログラムの規則をマスタへ移すために足した表です。
+# 現場の運用の決めで、Access から SQLite へ直に変換はせず、**表の追加はツールの機能で行う**。
+# 空の表ではなく、いまの規則と同じ結果になる行を入れて作ります(`create_table`)。
+CREATABLE: frozenset[str] = frozenset({config.TBL_OUTER_CONDITION})
+
+
 def can_create(table: str) -> bool:
-    return False
+    """このツールがその表を取り込み元に作れるか。"""
+    return table in CREATABLE
+
+
+def _not_created_why(table: str) -> str:
+    """作れる表がまだ取り込み元に無いことの意味と、次にできること(統合 1.2.50)。"""
+    return (f"{table} はまだ作っていません。いまは 1C1103(ｲｽﾞﾐﾒﾀﾙ)のパレット種類を"
+            "プログラムの規則(外径 800 未満は全面、800〜990 は強度UP)で決めています。"
+            "「表を作る」を押すと、共有の梱包資材マスタにこの表を作り、いまの規則と同じ行を入れます"
+            "(パスワードが要ります)。作ったあとはマスタ(この表)が優先です。")
 
 
 def _missing_why(table: str) -> str:
     """その表が取り込み元に無いことの意味と、次にできること。"""
+    if can_create(table):
+        return _not_created_why(table)
     return (f"{table} が取り込み元にありません。"
             f"{source_label(table)}の置き場所({source_dir(table)})と、"
             "ファイルの中身を確かめてください。"
@@ -270,7 +296,7 @@ def columns(conn: sqlite3.Connection, table: str,
     はずの行が消えた」としか見えません。取り込みが鍵と見なす列は、
     画面でも空にできないことにします。
     """
-    spec = import_specs.MASTER_IMPORT_SPECS.get(table, [])
+    spec = import_specs.master_specs(table)
     if not spec:
         return []
     keys = set(import_specs.REQUIRED_KEY_COLUMNS.get(table, ()))
@@ -283,6 +309,9 @@ def columns(conn: sqlite3.Connection, table: str,
     except sqlite3.Error as exc:                 # pragma: no cover - 通常は無い
         log.warning("%s の列を引けません: %s", table, exc)
         return []
+    if not info and table == outer_condition.TABLE:
+        # 手元にまだ表が無い(作った直後に取り込めなかった等)。型は表の決まりから引く(統合 1.2.50)
+        info = {row["name"]: row for row in outer_condition.local_columns_info()}
 
     out: list[Column] = []
     for local, source, _conv in spec:
@@ -316,7 +345,7 @@ def expected_column_names(table: str) -> list[str]:
     なぜ1つも打ち込めないのか」を具体的に言うために使う。
     """
     return [source for _local, source, _conv
-            in import_specs.MASTER_IMPORT_SPECS.get(table, [])]
+            in import_specs.master_specs(table)]
 
 
 def column_mismatch_why(table: str, present: Iterable[str]) -> str:
@@ -370,12 +399,14 @@ class TableInfo:
     why: str = ""
     # 取り込み元に無い表。**隠さずに出す**
     missing: bool = False
+    # 無いが、このツールが作れる表(「表を作る」を出す。統合 1.2.50)
+    creatable: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {"table": self.table, "label": self.label, "mark": self.mark,
                 "note": self.note, "rows": self.rows,
                 "editable": self.editable, "why": self.why,
-                "missing": self.missing}
+                "missing": self.missing, "creatable": self.creatable}
 
 
 def tables(path: Optional[Path]) -> list[TableInfo]:
@@ -385,7 +416,8 @@ def tables(path: Optional[Path]) -> list[TableInfo]:
     確かめるのは全部の表でできるので、並べたうえで直せるかどうかを
     札にします。並びは `MANAGED` が先(触る頻度の順)、残りは名前順。
 
-    **このツールが使う3表は、取り込み元に無くても並びに出します。**
+    **このツールが使う表は、取り込み元に無くても並びに出します。**
+    (「パレット種類_外径条件」は無いときに「表を作る」が出る。統合 1.2.50)
     出さないと「無い表は画面にも無い」になり、包装仕様が読めていない
     ことに気づく場所がどこにもなくなります。
     """
@@ -401,6 +433,7 @@ def tables(path: Optional[Path]) -> list[TableInfo]:
             out.append(TableInfo(
                 table=managed.table, label=managed.table, mark=managed.mark,
                 note=managed.note, rows=0, editable=False, missing=True,
+                creatable=can_create(managed.table),
                 why=_missing_why(managed.table)))
             continue
         out.append(TableInfo(
@@ -433,9 +466,12 @@ class Page:
     sort_dir: str = "asc"
     # 行(`ROW_KEY` の値)→ プログラムの規則が優先されることの札(統合 1.2.49)
     rules: dict[str, str] = field(default_factory=dict)
+    # 無いが、このツールが作れる表(統合 1.2.50)
+    creatable: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {"table": self.table, "label": self.label, "rules": self.rules,
+                "creatable": self.creatable,
                 "columns": self.columns, "rows": self.rows,
                 "total": self.total, "shown": len(self.rows),
                 "editable": self.editable, "why": self.why,
@@ -447,7 +483,7 @@ class Page:
 
 def page(path: Optional[Path], table: str, *, query: str = "",
          sort: str = "", sort_dir: str = "asc",
-         limit: int = ROW_LIMIT) -> Page:
+         limit: int = ROW_LIMIT, outer_table: bool = False) -> Page:
     """表の中身を読む。**取り込み元から直に読む。**
 
     手元の写しではなく元を読むのは、直したあと「本当に入ったか」を
@@ -458,6 +494,8 @@ def page(path: Optional[Path], table: str, *, query: str = "",
     許す ── 列名をそのまま `ORDER BY` に組み込むので、絞り込み
     (`_filter`)と同じく許可リストで確かめてから使う。無効な指定は
     黙って既定(`rowid`)に戻す(拒否すると押しただけで断られる画面になる)。
+
+    `outer_table` は手元に「パレット種類_外径条件」の表があるか(札の出し分け。統合 1.2.50)。
     """
     managed = BY_TABLE.get(table)
     view = Page(table=table,
@@ -476,6 +514,7 @@ def page(path: Optional[Path], table: str, *, query: str = "",
             # だけ言うと、直しようが無い故障に見える
             view.missing = True
             view.editable = False
+            view.creatable = can_create(table)
             view.why = _missing_why(table)
             return view
         view.error = f"{table} は取り込み元にありません。"
@@ -500,7 +539,7 @@ def page(path: Optional[Path], table: str, *, query: str = "",
         view.error = str(exc)
         return view
 
-    view.rules = rule_tags(table, view.rows)
+    view.rules = rule_tags(table, view.rows, outer_table=outer_table)
 
     hidden = view.total - len(view.rows)
     if hidden > 0:
@@ -510,19 +549,24 @@ def page(path: Optional[Path], table: str, *, query: str = "",
     return view
 
 
-def rule_tags(table: str, rows: list[dict[str, Any]]) -> dict[str, str]:
+def rule_tags(table: str, rows: list[dict[str, Any]], *,
+              outer_table: bool = False) -> dict[str, str]:
     """プログラムの規則が優先される行に付ける札(統合 1.2.49・現場の指摘)。
 
     包装仕様の一部の品番は、積数・パレット種類・リプラの扱いをプログラムが決めている
     (`special_rules.py`)。マスタを直しても効かないので、**直す前に分かるように**札を出す。
     動きは変えない。
+
+    `outer_table`(手元に「パレット種類_外径条件」の表がある)なら、1C1103 のパレット種類は
+    マスタ優先なので、その札は出さない(統合 1.2.50)。
     """
     if table != config.TBL_SPEC:
         return {}
     out: dict[str, str] = {}
     for row in rows:
         spec_no = str(row.get("包装仕様NO") or "").strip()[:6]
-        notes = special_rules.program_rule_notes(spec_no, size=str(row.get("サイズ") or ""))
+        notes = special_rules.program_rule_notes(spec_no, size=str(row.get("サイズ") or ""),
+                                                 outer_table=outer_table)
         if notes:
             out[str(row.get(ROW_KEY))] = special_rules.RULE_TAG.format("・".join(notes))
     return out
@@ -640,6 +684,47 @@ def delete_row(conn: sqlite3.Connection, table: str, row_key: Any, *,
 
     log.info("マスタから消しました: %s rowid=%s", table, row_key)
     return Result(True, f"{_label(table)}の1行を消しました{_follow(conn, path, table)}")
+
+
+def create_table(conn: sqlite3.Connection, table: str, *,
+                 path: Optional[Path] = None) -> Result:
+    """このツールが足した表を、共有の梱包資材マスタに作る(統合 1.2.50・現場の指示)。
+
+    いまは「パレット種類_外径条件」だけ。**空では作らない** ── いまのプログラムの規則
+    (1C1103)と同じ結果になる行を入れる(`outer_condition.SEED_ROWS`)。作った瞬間から
+    マスタ優先に切り替わるので、空だと 1C1103 がマスタの値のままになってしまう。
+
+    関門は行を直すのと同じ(許されるか → 表 → 届くか)。作ったらその表を取り込み直す(`_follow`)。
+    表を作るのと行を入れるのは**1つのまとまり**で行う(途中で落ちたら表も残さない)。
+    """
+    allowed, why = can_edit(conn, table)
+    if not allowed:
+        return Result(False, why, REFUSE_NOT_ALLOWED)
+    if not can_create(table):
+        return Result(False, f"{table} はこのツールが作る表ではありません。", REFUSE_NOT_EDITABLE)
+    found = path or source_for(table)
+    if found is None:
+        return Result(False, f"{source_label(table)}が見つかりません。"
+                             f"{source_dir(table)} を確かめてください。", REFUSE_NO_SOURCE)
+    if source_db.columns(found, table):
+        return Result(False, f"{table} は取り込み元にもうあります。一覧を出し直してください。",
+                      REFUSE_ALREADY_EXISTS)
+
+    columns = [source for _local, source, _conv in import_specs.master_specs(table)]
+    insert = (f"INSERT INTO {source_db.quote_identifier(table)} ("
+              + ", ".join(source_db.quote_identifier(c) for c in columns) + ") VALUES ("
+              + ", ".join("?" for _ in columns) + ")")
+    try:
+        with source_db.connect(found) as src:
+            src.execute_all([(outer_condition.SOURCE_DDL, ())]
+                            + [(insert, [row[c] for c in columns])
+                               for row in outer_condition.SEED_ROWS])
+    except source_db.SourceError as exc:
+        return _write_failed(table, exc)
+
+    log.info("取り込み元に表を作りました: %s (%d 行)", table, len(outer_condition.SEED_ROWS))
+    return Result(True, f"{_label(table)}を作り、いまの規則と同じ {len(outer_condition.SEED_ROWS)}行を"
+                        f"入れました。これからはマスタ(この表)が優先です{_follow(conn, found, table)}")
 
 
 def _ready(conn: sqlite3.Connection, table: str, path: Optional[Path],

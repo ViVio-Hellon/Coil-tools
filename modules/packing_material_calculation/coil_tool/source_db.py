@@ -668,6 +668,24 @@ class SourceConnection:
         except sqlite3.Error as exc:
             raise SourceError(str(exc)) from exc
 
+    def execute_all(self, statements: list[tuple[str, Iterable[Any]]]) -> None:
+        """いくつかの文を**1つのまとまり**で実行する。途中で落ちたら全部戻す(統合 1.2.50)。
+
+        表を作って行を入れる(`master_admin.create_table`)のに使う。`CREATE TABLE` は
+        Python の sqlite3 が自分でまとまりを始めない文なので、`BEGIN` を明示する。
+        """
+        try:
+            self._conn.execute("BEGIN")
+            for sql, params in statements:
+                self._conn.execute(sql, tuple(params))
+            self._conn.commit()
+        except sqlite3.Error as exc:
+            try:
+                self._conn.rollback()
+            except sqlite3.Error:                # pragma: no cover - 戻し損ね
+                pass
+            raise SourceError(str(exc)) from exc
+
     def insert(self, table: str, values: dict[str, Any]) -> int:
         """1行足す。**値はプレースホルダで渡す**(文字列に埋め込まない)。"""
         if not values:

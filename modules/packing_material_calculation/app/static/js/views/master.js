@@ -25,7 +25,7 @@ const IDS = ["mTables", "mTitle", "mCan", "mCount", "mQuery", "mFind",
              "mAdd", "mReload", "mWhy", "mError", "mHead", "mRows", "mNote",
              "mEdit", "mEditTitle", "mEditKind", "mEditWhy", "mEditError",
              "mFields", "mFoot", "mSave", "mDelete", "mConfirm",
-             "mDeleteYes", "mDeleteNo", "mSync", "mEditRule"];
+             "mDeleteYes", "mDeleteNo", "mSync", "mEditRule", "mCreate"];
 
 // ------------------------------------------------------------------
 export function start(frame) {
@@ -45,6 +45,7 @@ export function start(frame) {
   });
   el.mReload.addEventListener("click", () => loadKeepSort(view && view.table));
   el.mAdd.addEventListener("click", () => openRow(null));
+  if (el.mCreate) el.mCreate.addEventListener("click", createTable);
 
   el.mRows.addEventListener("click", (event) => {
     const tr = event.target.closest("tr[data-key]");
@@ -194,11 +195,19 @@ function render(next) {
   const missing = Boolean(page.missing);
   el.mCan.hidden = !view.table;
   el.mCan.className = `st st--${(editable && !missing) ? "ok" : "warn"}`;
-  el.mCan.textContent = missing ? "取り込み元にありません"
+  el.mCan.textContent = missing
+    ? (page.creatable ? "まだ作っていません" : "取り込み元にありません")
     : (editable ? "直せます" : "見るだけ");
   // 表が無いあいだは行を足せない。押せる形にしておくと、押した先で
   // 「入れる値がありません」としか言えず、何が足りないのか分からない
   el.mAdd.disabled = !editable || missing;
+  // このツールが作れる表がまだ無いときだけ「表を作る」を出す(統合 1.2.50)。
+  // パスワードを通していなければ押せない形にし、理由は上の欄(mWhy)が言う
+  if (el.mCreate) {
+    el.mCreate.hidden = !(missing && page.creatable);
+    el.mCreate.disabled = !view.can_edit;
+    el.mCreate.title = view.can_edit ? "" : (view.edit_why || "");
+  }
 
   showWhy();
   el.mError.hidden = !page.error;
@@ -248,7 +257,9 @@ function render(next) {
 /** 直せない理由。**押してから断られる**より先に言う。 */
 function showWhy() {
   const page = (view && view.page) || {};
-  const why = !view || view.can_edit ? (page.why || "") : view.edit_why;
+  // 作れる表がまだ無いときは、作るとどうなるか(page.why)とパスワードの要ることを並べて言う(統合 1.2.50)
+  const why = !view || view.can_edit ? (page.why || "")
+    : ((page.missing && page.creatable && page.why) ? `${page.why} ${view.edit_why}` : view.edit_why);
   el.mWhy.hidden = !why;
   el.mWhy.textContent = why || "";
 }
@@ -422,4 +433,9 @@ function saveRow() {
 
 function deleteRow() {
   return void send("/api/master/row/delete", { key: Number(editing) });
+}
+
+/** このツールが足した表を、共有のマスタに作る(統合 1.2.50)。判断はサーバがする */
+function createTable() {
+  return void send("/api/master/table/create", {});
 }
