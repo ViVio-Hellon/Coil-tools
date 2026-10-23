@@ -553,33 +553,7 @@ def pena_scene(app, ctx, sh, cam):
     tare.close()
     fr.click('a[data-pane="home"]')
     fr.wait_for_timeout(500)
-    # 全サイズ
-    fr.click('.appbar-nav a[href$="/all-size"]')
-    fr.wait_for_load_state()
-    fr = sh.frame("pena")
-    E.pena_ready(fr)
-    combos = fr.evaluate("[...document.querySelectorAll('#asCombo option')].map(o => o.value).filter(Boolean)")
-    fr.select_option("#asCombo", combos[0])
-    E.wait_until(lambda: sh.frame("pena").evaluate("document.readyState") == "complete"
-                 and E.visible(sh.frame("pena"), "#asKen"), 10)
-    fr = sh.frame("pena")
-    E.pena_ready(fr)
-    fr.fill("#asKen", "W123456")
-    fr.check('input[name=asDigit][value="2"]')
-    fr.fill("#asW1", "10")
-    fr.fill("#asW2", "12")
-    cam.take("pena-allsize", pg, clip=clip, marks=[
-        (1, box_of(fr, "#asCombo")), (2, box_of(fr, "#asKen")),
-        (3, box_of(fr, 'input[name=asDigit][value="2"]')), (4, box_of(fr, "#asW1")),
-        (5, box_of(fr, "#asSubmit")), (6, box_of(fr, "#asPrint"))])
-    fr.click("#asSubmit")
-    fr.wait_for_load_state()
-    E.wait_until(lambda: "反映値" in sh.frame("pena").evaluate("document.body.innerText"), 10)
-    fr = sh.frame("pena")
-    E.pena_ready(fr)
-    sheet = new_page(ctx, lambda: confirm_open(fr, "#asPrint"))
-    cam.take("pena-allsize-print", sheet, marks=[(1, box_of(sheet, ".printbar [data-print-now]"), "r")])
-    sheet.close()
+    # 全サイズはいまは左のタブに出さないので撮らない(統合 1.2.50。説明書からも外した)
     # 設定
     fr.click('.appbar-nav a[href$="/settings"]')
     fr.wait_for_load_state()

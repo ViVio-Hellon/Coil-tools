@@ -1,10 +1,10 @@
 {
  "taken": "2026-10-23",
  "versions": {
-  "app": "1.2.46",
-  "details": "0.13.31",
-  "material": "0.2.30",
-  "pena": "1.5.46"
+  "app": "1.2.49",
+  "details": "0.13.32",
+  "material": "0.2.31",
+  "pena": "1.5.49"
  },
  "images": {
   "details-about": {
@@ -135,14 +135,6 @@
    "w": 1280,
    "h": 818
   },
-  "pena-allsize": {
-   "w": 1280,
-   "h": 818
-  },
-  "pena-allsize-print": {
-   "w": 1280,
-   "h": 900
-  },
   "pena-calibration": {
    "w": 1280,
    "h": 900
@@ -189,7 +181,7 @@
   },
   "pena-tare-figure": {
    "w": 1122,
-   "h": 504
+   "h": 505
   },
   "pena-tare-print": {
    "w": 1280,

@@ -5,6 +5,7 @@
     "debug_print_path  : VBA 定数 PATH_梱包_日報DebugPrint に相当（共有ログ出力先）",
     "prefer_access     : true=Access を優先（本番） / false=常に CSV（開発・検証）",
     "quick_height_width_override: 積み高さクイック計算だけ巾を変えたい場合に指定",
+    "show_all_size     : 左のタブに「全サイズ」を出すか(統合 1.2.50 からいったん出さない。機能は残してある)",
     "material_refresh_sec : 資材マスタの鮮度チェック間隔(秒)。0 で毎回チェック",
     "db_idle_close_sec    : 無操作でこの秒数が過ぎたら状態DBの接続を閉じる。0 で閉じない",
     "db_busy_timeout_ms   : 状態DBのロック待ち時間(ms)",
@@ -33,6 +34,8 @@
   "db_busy_timeout_ms": 15000,
 
   "quick_height_width_override": {},
+
+  "show_all_size": false,
 
   "monitor_level": 1
 }

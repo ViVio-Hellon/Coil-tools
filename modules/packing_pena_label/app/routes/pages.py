@@ -281,6 +281,10 @@ class PageRoutes:
                           ("navBreak", "breakdown"), ("navLabels", "labels"),
                           ("navSettings", "settings")):
             ctx[key] = "on" if nav == name else ""
+        # 全サイズは、いまは左のタブに出さない(統合 1.2.50・現場の指示。機能は残す。
+        # config/app.json の show_all_size を true にすれば出る)。開いているときは出す
+        ctx["navAllLink"] = (f'<a href="{self.base}/all-size" class="{ctx["navAll"]}">全サイズ</a>'
+                             if getattr(self.cfg, "show_all_size", False) or nav == "all" else "")
         return self.r.render("_layout.html", ctx)
 
     @staticmethod

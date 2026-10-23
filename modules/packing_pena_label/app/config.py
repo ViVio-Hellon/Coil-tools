@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 #: アプリケーションID（ローカル領域のフォルダ名、多重起動判定、/api/health の識別子）
 APP_ID = "PackingPenaLabel"
 APP_NAME = "梱包ペナ ラベル・風袋計算"
-APP_VERSION = "1.5.49"
+APP_VERSION = "1.5.50"
 #: 版を切った日。画面のバージョン表示に添える。
 #: **中身を直したら必ずここを上げる**。上げ忘れると、
 #: 現場が「新しいファイルに差し替わったか」を画面から判断できない。
@@ -152,6 +152,10 @@ class Config:
 
     #: 積み高さクイック計算の 53.5mm 巾（VBA は 43.5 だった。解析書 13章 #2）
     quick_height_width_override: Dict[str, float] = field(default_factory=dict)
+
+    #: 左のタブに「全サイズ」を出すか(統合 1.2.50・現場の指示: いまは使わないのでいったん出さない)。
+    #: 機能(/all-size と印刷)は残してある。出すときは config/app.json の show_all_size を true に
+    show_all_size: bool = False
 
     #: 画面に出すコイルサイズ。空なら全件。
     #:
