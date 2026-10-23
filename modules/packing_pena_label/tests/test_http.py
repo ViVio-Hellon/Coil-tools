@@ -208,16 +208,26 @@ class TestSettingsScreen(HttpTestCase):
                         code.count('"') % 2, 0,
                         "%d 行目で文字列が閉じていない: %s" % (n, line.strip()[:70]))
 
-    def test_password_is_outside_the_subpanes(self):
-        """合言葉はどちらの面でも使えること。
+    def test_password_and_test_mode_are_in_the_password_tab(self):
+        """合言葉の欄とテストモードは「合言葉」のタブ(統合 1.2.46・現場の指定)。
 
-        パス設定の面の中に置くと、マスタ管理の面を開いている間は
-        隠れてしまい、**マスタを直すときに入力できない**。
+        - タブの上には合言葉の欄を置かない
+        - パス設定にテストモードを出さない(「保存する」でも送らない: data-key を付けない)
+        - 欄は面を隠すだけで消えないので、ほかのタブの「保存する」「書き込む」でも一緒に送られる
         """
         _, html = self.get("/settings")
-        head = html.split('<div class="subnav"', 1)[0]
-        self.assertIn("setPassword", head,
-                      "合言葉がサブタブより下（面の中）にある")
+        head, rest = html.split('<div class="subnav"', 1)
+        self.assertNotIn("setPassword", head, "タブの上に合言葉の欄が残っている")
+        self.assertIn('<button type="button" class="subtab" data-sub="pw">合言葉</button>', rest)
+        pane = rest.split('<div class="subpane" data-sub="pw" hidden>', 1)[1]
+        self.assertIn('id="setPassword"', pane)
+        self.assertIn('id="tmToggle"', pane)
+        self.assertIn('id="tmSave"', pane)
+        self.assertIn("テストモード（実機の試験中）", pane)
+        paths = rest.split('<div class="subpane" data-sub="paths">', 1)[1].split('<div class="subpane"', 1)[0]
+        self.assertNotIn("test_mode", paths, "パス設定にテストモードが残っている")
+        self.assertNotIn('data-key="test_mode"', html)
+        self.assertIn('location.hash === "#pw"', html)
 
     def test_save_button_is_near_the_top_of_the_paths_pane(self):
         """設定カード 9 枚の下に埋もれないこと。"""

@@ -412,6 +412,9 @@ legend{font-size:11px; color:var(--muted); padding:0 4px}
 .pwrow label{font-size:13px; font-weight:700; cursor:pointer}
 .pwrow input{flex:1 1 220px; width:auto; max-width:360px}
 .pwrow .btn{flex:0 0 auto; width:auto; min-width:120px; margin-bottom:0}
+/* テストモード(設定の「合言葉」のタブ。統合 1.2.46): チェックは欄のように広げない */
+.tmrow .switch{white-space:nowrap}
+.tmrow input[type=checkbox]{flex:0 0 auto; width:16px; max-width:none}
 /* 参照先の欄と「この欄を保存」を横に並べる */
 .setone{display:flex; gap:8px; align-items:center}
 .setone input[type=text]{flex:1 1 auto; min-width:0}

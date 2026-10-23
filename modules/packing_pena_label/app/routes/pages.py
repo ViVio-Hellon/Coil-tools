@@ -1315,7 +1315,12 @@ class PageRoutes:
 
         items = S.describe(self.cfg)
         by_group = {}
+        test_mode_item = None
         for it in items:
+            # テストモードは「合言葉」のタブに置く(統合 1.2.46・現場の指定。パス設定には出さない)
+            if it["key"] == "test_mode":
+                test_mode_item = it
+                continue
             by_group.setdefault(it["group"], []).append(it)
 
         blocks = []
@@ -1356,13 +1361,14 @@ class PageRoutes:
             '<div id="setResult" class="hint" style="margin-top:10px"></div>')
 
         # 設定の中もページを分ける。
-        # 「パス設定」＝参照先の書き換え（合言葉が要る）
+        # 「パス設定」＝参照先の書き換え(合言葉が要る)
         # 「マスタ管理」＝資材マスタの中身を直す
-        # 合言葉は **サブタブより上**、どちらの面でも見える場所に置く。
-        #
-        # パス設定の面の中に入れると、マスタ管理の面を開いている間は
-        # 隠れてしまい、**マスタを直すときに合言葉を入れられない**。
-        # 一番上に固定して、どちらの操作でもそのまま使えるようにする。
+        # 「合言葉」＝合言葉を入れる欄とテストモード(統合 1.2.46・現場の指定。以前は合言葉の欄を
+        #   タブの上に置き、テストモードはパス設定にあった)。
+        # 合言葉の欄は**入れておけばタブを移っても残る**(面を隠すだけで欄は消えない)ので、
+        # 先に「合言葉」のタブで入れておけば、ほかのタブの「保存する」「書き込む」で一緒に送られる。
+        # 入れずに実行したときは、その場で聞く(どのタブからでも)。
+        tm_on = bool(test_mode_item and test_mode_item["value"])
         pw = (
             '<div class="card"><h2>合言葉</h2>'
             '<div class="pwrow">'
@@ -1375,11 +1381,23 @@ class PageRoutes:
             '<p class="hint">参照先を変えたりマスタを直したりすると'
             '<b>全員の計算・印刷に影響します</b>。'
             'うっかり防止のため、そのときだけ確認します。<br>'
-            '合言葉は<b>入れておくだけ</b>で、'
-            'このあと押す「保存する」「書き込む」のときに一緒に送られます。'
+            '合言葉は<b>ここに入れておくだけ</b>で、ほかのタブ(パス設定・サイズ・マスタ管理・配布設定)で押す'
+            '「保存する」「書き込む」のときに一緒に送られます(タブを移っても消えません)。'
             '（合っているかだけ先に見たいときは「確認する」）<br>'
             '未入力のまま実行すると、その場で聞きます。</p>'
-            '</div>')
+            '</div>'
+            f'<div class="card" id="tmCard"><h2>テストモード（実機の試験中） {_where("local")}</h2>'
+            '<p class="hint">実機の試験のときに入れる。計算・印刷の記録と資材マスタの編集履歴に「テストモード」と残し、'
+            '画面の右上に「テストモード」の札を出す(本番の記録と見分けられるように)。'
+            '<b>切り替えには合言葉が要る</b>(上の欄に入れておくか、押したときに聞きます)。'
+            '<b>試験が終わったら必ず切る。</b>このPCだけの設定で、配布設定には既定で入れません。</p>'
+            '<div class="pwrow tmrow">'
+            f'<label class="switch"><input type="checkbox" id="tmToggle"{" checked" if tm_on else ""}>'
+            '<span>テストモードにする</span></label>'
+            '<button type="button" class="btn btn-primary" id="tmSave">テストモードを保存</button>'
+            f'<span id="tmState" class="pwstate {"ng" if tm_on else ""}">'
+            f'{"いま: テストモード" if tm_on else "いま: 本番(切)"}</span>'
+            '</div></div>')
 
         # 操作ボタンはパス設定の面の**先頭**に置く。
         # 設定カードが 9 枚あるので、下に置くと画面外になってしまう。
@@ -1393,13 +1411,15 @@ class PageRoutes:
             '<button type="button" class="subtab" data-sub="sizes">サイズ</button>'
             '<button type="button" class="subtab" data-sub="master">マスタ管理</button>'
             '<button type="button" class="subtab" data-sub="dist">配布設定</button>'
+            '<button type="button" class="subtab" data-sub="pw">合言葉</button>'
             '</div>')
-        body = (pw + tabs
+        body = (tabs
                 + f'<div class="subpane" data-sub="paths">{paths}</div>'
                 + f'<div class="subpane" data-sub="sizes" hidden>{self._sizes_body()}</div>'
                 + f'<div class="subpane" data-sub="master" hidden>{master}</div>'
                 + f'<div class="subpane" data-sub="dist" hidden>'
-                  f'{self._distribution_body()}</div>')
+                  f'{self._distribution_body()}</div>'
+                + f'<div class="subpane" data-sub="pw" hidden>{pw}</div>')
         return self._shell("設定", body, "settings", self._settings_script())
 
     def _size_howto(self) -> str:
@@ -1421,7 +1441,7 @@ class PageRoutes:
             '<details class="card howto" id="sizeHowto"><summary>新しいサイズを足すには</summary>'
             '<ol class="howto-steps">'
             '<li>下の <b>「設定の「サイズ」を開く」</b> を押す(左のタブの「設定」→「サイズ」と同じ)。</li>'
-            '<li>画面の上の <b>合言葉</b> を入れる(サイズを足す・出すサイズを変えるときに要ります)。</li>'
+            '<li>設定の <b>「合言葉」</b> のタブで合言葉を入れる(サイズを足す・出すサイズを変えるときに要ります。入れずに押すとその場で聞きます)。</li>'
             '<li>「新しいサイズを足す」に <b>厚み(mm)・巾(mm)・型番</b> を入れて <b>「サイズを足す」</b>。'
             '記号・備考は任意(備考は指定サイズの画面に赤字で出ます)。</li>'
             '<li>足したサイズは、この一覧に <b>丈1・丈2 の 2 行</b>(台紙番号 15 から)で出て、'
@@ -1897,10 +1917,61 @@ class PageRoutes:
   });
 
   // ラベル台紙の「新しいサイズを足すには」から #sizes で来たら「サイズ」のタブを開く(統合 1.2.18)
-  if (location.hash === "#sizes") {
-    var st = document.querySelector('.subtab[data-sub="sizes"]');
+  // #pw で来たら「合言葉」のタブ(統合 1.2.46)
+  if (location.hash === "#sizes" || location.hash === "#pw") {
+    var st = document.querySelector('.subtab[data-sub="' + location.hash.slice(1) + '"]');
     if (st) { st.click(); }
   }
+
+  // --- テストモード(「合言葉」のタブ。統合 1.2.46)---
+  // 「パス設定」の「保存する」では送らない(data-key を付けない)。このボタンだけで切り替える
+  (function(){
+    var btn = document.getElementById("tmSave");
+    var box = document.getElementById("tmToggle");
+    if (!btn || !box) { return; }
+    function show(on){
+      var st = document.getElementById("tmState");
+      if (st) { st.textContent = on ? "いま: テストモード" : "いま: 本番(切)";
+                st.className = "pwstate " + (on ? "ng" : ""); }
+      // 右上の札も読み直さずに出し入れする
+      var right = document.querySelector(".appbar-right");
+      var badge = document.querySelector(".appbar-right .testmode");
+      if (on && !badge && right) {
+        badge = document.createElement("span");
+        badge.className = "testmode";
+        badge.title = "記録に「テストモード」と残します。試験が終わったら設定で切ってください";
+        badge.textContent = "テストモード";
+        right.insertBefore(badge, right.firstChild);
+      } else if (!on && badge) { badge.remove(); }
+    }
+    function send(password){
+      var body = {values: {test_mode: box.checked}};
+      if (password) { body.password = password; }
+      return pplPost("/api/settings/save", body).then(function(j){
+        if (j && j.needPassword) {
+          return pplAskPassword(j.message + "\\n\\n合言葉を入力してください").then(function(pw){
+            if (pw === null) { pplToast("テストモードの切り替えは取り消しました。", "warn"); return null; }
+            var b = document.getElementById("setPassword");
+            if (b) { b.value = pw; }
+            return send(pw);
+          });
+        }
+        return j;
+      });
+    }
+    btn.addEventListener("click", function(){
+      var pwBox = document.getElementById("setPassword");
+      btn.disabled = true;
+      send(pwBox ? pwBox.value : "").then(function(j){
+        if (!j) { return; }
+        if (!j.ok) { pplToast(j.message || "保存できませんでした", "warn"); return; }
+        show(box.checked);
+        pplToast(box.checked ? "テストモードにしました。試験が終わったら必ず切ってください。"
+                             : "テストモードを切りました(本番)。", box.checked ? "warn" : "info");
+      }).catch(function(e){ pplToast(String(e), "error"); })
+        .then(function(){ btn.disabled = false; });
+    });
+  })();
 
   // --- 合言葉の確認 ---
   // 入れただけでは合っているか分からないので、その場で ○× を出す。

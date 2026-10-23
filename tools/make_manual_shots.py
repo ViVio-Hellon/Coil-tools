@@ -584,10 +584,11 @@ def pena_scene(app, ctx, sh, cam):
     fr.click('.appbar-nav a[href$="/settings"]')
     fr.wait_for_load_state()
     fr = sh.frame("pena")
-    E.wait_until(lambda: E.visible(fr, "#setPassword"), 10)
+    E.wait_until(lambda: E.visible(fr, ".subtab[data-sub=pw]"), 10)
     fr.wait_for_timeout(600)
+    # 合言葉の欄とテストモードは「合言葉」のタブ(統合 1.2.46)
     cam.take("pena-settings", pg, clip=clip, marks=[
-        (1, box_of(fr, "#setPassword")), (2, box_of(fr, ".subtab[data-sub=paths]"), "b"),
+        (1, box_of(fr, ".subtab[data-sub=pw]"), "b"), (2, box_of(fr, ".subtab[data-sub=paths]"), "b"),
         (3, box_of(fr, ".subtab[data-sub=master]"), "b"), (4, box_of(fr, ".subtab[data-sub=dist]"), "b"),
         (5, box_of(fr, ".subtab[data-sub=sizes]"), "b")])
     # 設定の「サイズ」(統合 1.2.16): 出すサイズのチェックと、サイズを足す
@@ -599,6 +600,11 @@ def pena_scene(app, ctx, sh, cam):
     fr.wait_for_timeout(300)
     cam.take("pena-settings-size-add", pg, clip=clip, marks=[
         (3, box_of(fr, ".sizeform"), "t"), (4, box_of(fr, "#szAdd"), "r")])
+    # 設定の「合言葉」(統合 1.2.46): 合言葉の欄とテストモード
+    fr.click('.subtab[data-sub="pw"]')
+    fr.wait_for_timeout(300)
+    cam.take("pena-settings-pw", pg, clip=clip, marks=[
+        (1, box_of(fr, "#setPassword"), "r"), (2, box_of(fr, "#tmCard"), "l")])
     fr.click('.subtab[data-sub="paths"]')
     fr.wait_for_timeout(300)
     fr.locator("#storage").scroll_into_view_if_needed()
