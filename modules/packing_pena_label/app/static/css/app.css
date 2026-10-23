@@ -105,6 +105,9 @@ a{color:var(--accent)}
 .cur-tbl{width:100%; border-collapse:collapse; font-size:12px}
 .cur-tbl th,.cur-tbl td{border:1px solid var(--line); padding:3px 6px; text-align:left}
 .cur-tbl thead th{background:var(--head)}
+/* 積み高さ(参考)の式(統合 1.2.47) */
+.cur-tbl .qf{display:block; color:var(--muted); font-size:11px; overflow-wrap:anywhere}
+#quickCard .cur-tbl th{white-space:nowrap; width:1%}
 .cur-tbl tbody th{width:44px; background:#f4f6f9}
 
 /* ---------- 入力 ---------- */

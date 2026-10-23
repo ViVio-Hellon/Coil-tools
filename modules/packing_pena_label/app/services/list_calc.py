@@ -27,7 +27,7 @@ from typing import Dict, List
 
 from ..repositories import material_repo as M
 from . import tare_calc as TC
-from .vba_compat import cstr, fmt, val, ws_roundup
+from .vba_compat import cstr, fmt, single, val, ws_roundup
 
 log = logging.getLogger(__name__)
 
@@ -110,27 +110,40 @@ def build_list(table: M.MaterialTable, width_mm: float, tip: str,
 
 
 def quick_height(coil_count: float, width_mm: float) -> Dict[str, str]:
-    """VBA ``CommandButton13``（積み高さクイック計算）。
+    """積み高さ計算(参考。VBA ``CommandButton13``)。**風袋計算の本体と同じ式**で出す(統合 1.2.47)。
 
-    注意: VBA は ``TA = 1 * col / 10^3 + TIPT`` と **本数を掛けない**（1条分）。
-          また ``KTA`` に ハードボード 2.35×2 を加算しない。
-          この 2 点は「1 条分の参考表示」という用途に沿っているため現行どおり。
-          巾の対応表だけは他処理と食い違っていた（53.5 を 43.5 としていた）ため、
-          53.5 に統一した（解析書 13章 #2）。
+        チップボール = (本数 + 1) × 0.7mm
+        コイル       = 巾 × 本数
+        コイル高さ   = コイル + チップボール                       (`tare_calc.get_coil_ta`)
+        梱包高さ     = コイル高さ + 樹脂パレット 150mm × 2 + ハードボード 2.35mm × 2
+                       → 10mm 単位で切り上げ                     (`tare_calc.set_coil_dimensions` の KTA)
+
+    VBA の誤り(現場の指摘で直した): VBA は ``TA = 1 * col / 10^3 + TIPT`` と **本数を掛けず**
+    (「1条分」= 巾 + チップボール。11 本でも 1 本分の高さ)、``KTA`` にハードボード 2.35 × 2 も
+    足していなかった。1.2.46 までは「1 条分の参考表示」として VBA のまま出していたが、聞いた本数の
+    積み高さになっていなかった。巾は他処理と同じ 53.5(VBA はここだけ 43.5。解析書 13章 #2)。
+    表示は小数 1 桁(風袋計算の画面の高さと同じ)。
     """
-    tipt = val((coil_count + TC.CHIP_EXTRA_SHEETS)
-               * TC.CHIP_THICKNESS_MM / 10 ** 3)
-    ta = val(1 * width_mm / 10 ** 3) + tipt
-    kta = val(ta * 1000 + TC.PALLET_HEIGHT_MM * 2)
-    return {
-        "tip": fmt(tipt * 1000, "0.000"),
-        "one": fmt(ta * 1000, "0.000"),
-        "palletRoundUp": fmt(ws_roundup(kta, -1), "0.0"),
-        "palletRaw": fmt(kta, "0.000"),
-        # VBA は MsgBox で & 連結（＝ CStr）しているので同じ桁で出す。
-        # 素の float を埋めると "8.399999999999999" のようになってしまう。
-        "message": (f"ﾁｯﾌﾟ:{cstr(tipt * 1000)}\n"
-                    f"1条分:{cstr(ta * 1000)}\n"
-                    f"ﾊﾟﾚｯﾄ+分(繰上値):{cstr(ws_roundup(kta, -1))}"
-                    f" : そのまま{cstr(kta)}"),
+    tipt = single(val((coil_count + TC.CHIP_EXTRA_SHEETS) * TC.CHIP_THICKNESS_MM / 10 ** 3))
+    coils = val(coil_count * width_mm / 10 ** 3)
+    ta = single(TC.get_coil_ta(coil_count, width_mm))          # 風袋計算の mat.TA と同じ
+    kta = single(val(ta * 1000 + TC.PALLET_HEIGHT_MM * 2) + (TC.HB_THICKNESS_MM * 2))
+    pack = ws_roundup(kta, -1)
+    n = fmt(coil_count, "0")
+    w = fmt(width_mm, "0.0")
+    out = {
+        "count": n, "width": w,
+        "tip": fmt(tipt * 1000, "0.0"),
+        "coils": fmt(coils * 1000, "0.0"),
+        "coilHeight": fmt(ta * 1000, "0.0"),
+        "packHeight": fmt(pack, "0.0"),
+        "packRaw": fmt(kta, "0.0"),
+        "tipFormula": f"({n}+{TC.CHIP_EXTRA_SHEETS})枚 × {TC.CHIP_THICKNESS_MM}",
+        "coilsFormula": f"{w} × {n}本",
+        "coilHeightFormula": "コイル + チップボール",
+        "packFormula": (f"コイル高さ + パレット {TC.PALLET_HEIGHT_MM}×2 + ハードボード {TC.HB_THICKNESS_MM}×2"
+                        f" = {fmt(kta, '0.0')} → 10mm 切り上げ"),
     }
+    out["message"] = (f"積み高さ({w}mm × {n}本): チップボール {out['tip']} / コイル {out['coils']} / "
+                      f"コイル高さ {out['coilHeight']} / 梱包高さ {out['packHeight']}mm")
+    return out

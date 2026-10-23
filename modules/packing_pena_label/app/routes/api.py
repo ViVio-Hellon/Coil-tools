@@ -403,10 +403,12 @@ class ApiRoutes:
 
     def _quick_height(self, body):
         state = self._state_from(body)
-        count = val(body.get("coilCount"))
-        if count <= 0:
+        raw = str(body.get("coilCount", "") or "").strip()
+        # 本数は 1 以上の整数だけ(VBA の InputBox は Long へ入れていた。「11.5」「1E2」は断る。統合 1.2.47)
+        if not raw.isdigit() or int(raw) <= 0:
             return {"ok": False, "level": "warn",
-                    "message": "コイル積み数を入力してください"}
+                    "message": "コイル積み数は 1 以上の整数で入力してください"}
+        count = int(raw)
         return self.wf.quick_height(state, count).to_dict()
 
     def _state(self, body):

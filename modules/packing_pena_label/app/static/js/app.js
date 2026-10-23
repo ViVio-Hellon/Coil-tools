@@ -822,10 +822,16 @@
       var el = $(id);
       if (el) { el.textContent = text; }
     };
-    set("#qWidth", (q.width || "") + "mm × " + count + "本");
+    // 風袋計算の本体と同じ式(統合 1.2.47。以前は VBA のまま 1 本分で「1条分」「ﾊﾟﾚｯﾄ+分」と出していた)
+    set("#qWidth", (q.width || "") + "mm × " + (q.count || count) + "本");
     set("#qTip", q.tip);
-    set("#qOne", q.one);
-    set("#qPallet", q.palletRoundUp + "（そのまま " + q.palletRaw + "）");
+    set("#qTipF", q.tipFormula);
+    set("#qCoils", q.coils);
+    set("#qCoilsF", q.coilsFormula);
+    set("#qCoilH", q.coilHeight);
+    set("#qCoilHF", q.coilHeightFormula);
+    set("#qPack", q.packHeight);
+    set("#qPackF", q.packFormula);
     card.hidden = false;
   }
   (function () {

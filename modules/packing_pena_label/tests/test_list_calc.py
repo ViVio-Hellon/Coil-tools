@@ -13,6 +13,7 @@ import unittest
 from modules.packing_pena_label.app.services import list_calc as LC
 from modules.packing_pena_label.app.services import tare_calc as TC
 from modules.packing_pena_label.app.services.vba_compat import fmt, ws_round, ws_roundup
+from modules.packing_pena_label.tests.test_http import HttpTestCase
 from modules.packing_pena_label.tests.test_tare_calc import table
 
 
@@ -142,20 +143,55 @@ class TestListNw(unittest.TestCase):
 
 
 class TestQuickHeight(unittest.TestCase):
-    """積み高さクイック計算は「1条分の参考表示」のため現行どおり。"""
+    """積み高さ計算(参考)は風袋計算の本体と同じ式(統合 1.2.47・現場の指摘)。
 
-    def test_uses_one_coil_not_count(self):
-        q = LC.quick_height(10, 53.5)
-        tipt = 11 * 0.7 / 1000
-        ta = 53.5 / 1000 + tipt
-        self.assertAlmostEqual(float(q["one"]), ta * 1000, places=3)
-        self.assertAlmostEqual(float(q["tip"]), tipt * 1000, places=3)
+    VBA は ``TA = 1 * col`` と本数を掛けず(「1条分」)、ハードボード 2.35 × 2 も足していなかった。
+    """
 
-    def test_pallet_excludes_hardboard(self):
-        q = LC.quick_height(10, 53.5)
-        ta = 53.5 / 1000 + 11 * 0.7 / 1000
-        self.assertAlmostEqual(float(q["palletRoundUp"]),
-                               ws_roundup(ta * 1000 + 300, -1), places=6)
+    def test_本数を掛ける_53_5mmで11本(self):
+        q = LC.quick_height(11, 53.5)
+        self.assertEqual((q["tip"], q["coils"], q["coilHeight"], q["packRaw"], q["packHeight"]),
+                         ("8.4", "588.5", "596.9", "901.6", "910.0"))
+        self.assertNotIn("1条分", q["message"])
+        self.assertIn("(11+1)枚 × 0.7", q["tipFormula"])
+        self.assertIn("ハードボード 2.35×2 = 901.6 → 10mm 切り上げ", q["packFormula"])
+
+    def test_表示は小数1桁(self):
+        for n in (1, 10, 11, 20, 33):
+            for w in (33.0, 40.0, 53.5, 63.0, 73.0, 82.5):
+                q = LC.quick_height(n, w)
+                for key in ("tip", "coils", "coilHeight", "packHeight", "packRaw"):
+                    with self.subTest(n=n, w=w, key=key):
+                        self.assertRegex(q[key], r"^\d+\.\d$")
+
+    def test_風袋計算の高さと同じ(self):
+        from modules.packing_pena_label.app.models import MaterialWeights
+        for n in (1, 5, 10, 11, 20):
+            for w in (33.0, 53.5, 82.5):
+                mat = MaterialWeights()
+                TC.set_coil_dimensions(mat, float(n), w, False)      # 風袋計算の本体(VBA SetCoilDimensions)
+                q = LC.quick_height(n, w)
+                with self.subTest(n=n, w=w):
+                    self.assertEqual(q["coilHeight"], fmt(mat.TA * 1000, "0.0"))
+                    self.assertEqual(q["packHeight"], fmt(ws_roundup(mat.KTA, -1), "0.0"))
+
+
+class QuickHeightHttpTest(HttpTestCase):
+    """積み高さ計算の API(統合 1.2.47)。本数は 1 以上の整数だけ。"""
+
+    def test_本数を掛けた高さを返す_整数でなければ断る(self):
+        cur = {"selectedOb": 5, "selectedCb": 0, "namedCb": False, "tip": "TIP1000",
+               "kensaNo": "N6X0945", "weight1": "", "weight2": "",
+               "coilH": {"1": "", "2": "", "3": "", "4": ""}}
+        _, j = self.post("/api/quick-height", {"current": cur, "coilCount": "11"})
+        self.assertTrue(j["ok"], j)
+        q = j["quick"]
+        self.assertEqual((q["count"], q["coilHeight"], q["packHeight"]), ("11", "596.9", "910.0"))
+        for bad in ("", "0", "11.5", "1E2", "-3", "あ"):
+            with self.subTest(bad=bad):
+                _, j = self.post("/api/quick-height", {"current": cur, "coilCount": bad})
+                self.assertFalse(j["ok"], j)
+                self.assertIn("1 以上の整数", j["message"])
 
 
 if __name__ == "__main__":
