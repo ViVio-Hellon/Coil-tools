@@ -133,9 +133,18 @@ class BuildResult:
                 "withSettings": self.with_settings, "zipPath": self.zip_path}
 
 
+#: 配布用フォルダの名前の頭(統合 1.2.48・現場の指定。機側(ラインの PC)に配る統合ツール)
+DIST_PREFIX = "機側用統合"
+
+
+def dist_name(version: str = "") -> str:
+    """配布用フォルダの名前: ``機側用統合_VER1.2.48``(版は統合ツールの版)。"""
+    return "%s_VER%s" % (DIST_PREFIX, version or APP_VERSION)
+
+
 def default_out() -> Path:
-    """既定の置き場所: アプリの隣に ``PackingPenaLabel_v1.5.0``。"""
-    return ROOT.parent / ("%s_v%s" % (APP_ID, APP_VERSION))
+    """既定の置き場所: アプリの隣に ``機側用統合_VER<統合ツールの版>``(以前は ``nlm.coil-packing-tools_v版``)。"""
+    return ROOT.parent / dist_name()
 
 
 def _excluded(name: str) -> bool:

@@ -41,7 +41,7 @@ DB処理・帳票は移植元のまま、それぞれ独立して動きます。
 | [`docs/ランチャー連携.md`](docs/ランチャー連携.md) | 業務ツール統合ランチャーとのつなぎ方 |
 | [`docs/数の丸め点検.md`](docs/数の丸め点検.md) | 3機能の丸め・切り捨ての点検の記録 |
 | [`docs/変更履歴.md`](docs/変更履歴.md) | 統合ツールの変更履歴と版の決まり |
-| [`docs/4M変化点_VBA移行対応.md`](docs/4M変化点_VBA移行対応.md) | VBA から Python への移行の 4M変化点への対応(統合 1.2.31〜1.2.47。変更前・後・紙への影響・記録・切り替えの確認) |
+| [`docs/4M変化点_VBA移行対応.md`](docs/4M変化点_VBA移行対応.md) | VBA から Python への移行の 4M変化点への対応(統合 1.2.31〜1.2.48。変更前・後・紙への影響・記録・切り替えの確認) |
 | `templates/manual/*.html` | ツール上の説明書(上の帯の「説明書」。現場向けの写真つき) |
 
 ### 梱包明細(`modules/packing_details/`)
@@ -117,7 +117,7 @@ DB処理・帳票は移植元のまま、それぞれ独立して動きます。
 ## 画面の作り
 
 ```
-上の帯   コイル梱包ツール VER1.2.47 [梱包明細] [ペナラベル] [資材計算]   画面の色[自動|ライト|ダーク] 説明書 ログ 接続OK [終了]
+上の帯   コイル梱包ツール VER1.2.48 [梱包明細] [ペナラベル] [資材計算]   画面の色[自動|ライト|ダーク] 説明書 ログ 接続OK [終了]
 中身     見せているタブの機能の画面(iframe)。ほかのタブは隠しているだけで消えない
 ```
 
@@ -165,7 +165,7 @@ scripts/make_shortcuts.vbs          配った先で押すと、ブラウザ版�
 scripts/desktop_smoke.py            exe を起動して、画面が届く・待ち受けない・止めたら Python も終わるを確かめる
 docs/統合設計.md                    調査・比較・採用した実装・影響・テスト
 docs/仕掛ファイルの仕様.md          仕掛ファイルの置き場所(第1パス・第2パス)・LS4LOT の2つの形式・列の関係
-docs/4M変化点_VBA移行対応.md       VBA から Python への移行の 4M変化点への対応(統合 1.2.31〜1.2.47)
+docs/4M変化点_VBA移行対応.md       VBA から Python への移行の 4M変化点への対応(統合 1.2.31〜1.2.48)
 docs/デスクトップ版.md              デスクトップ版の作り・動きの約束・作り方・確かめたこと
 ```
 
@@ -251,9 +251,9 @@ Python を 3.12 から 3.13 に上げるなど **Store の Python の版を変�
 
 | | 版 | 出どころ |
 |---|---|---|
-| コイル梱包ツール(統合ツール) | 1.2.47 | `config/app.json`(デスクトップ版の `src-tauri/tauri.conf.json`・`Cargo.toml` もそろえる) |
+| コイル梱包ツール(統合ツール) | 1.2.48 | `config/app.json`(デスクトップ版の `src-tauri/tauri.conf.json`・`Cargo.toml` もそろえる) |
 | 梱包明細 | 0.13.31 | `modules/packing_details/config/app.json` |
-| ペナラベル | 1.5.47 | `modules/packing_pena_label/app/config.py` の `APP_VERSION` |
+| ペナラベル | 1.5.48 | `modules/packing_pena_label/app/config.py` の `APP_VERSION` |
 | 資材計算 | 0.2.30 | `modules/packing_material_calculation/config/app.json` |
 
 機能の中身を変えたら、その機能の版と統合ツールの版の両方を上げます。統合画面や共通部分
@@ -334,6 +334,7 @@ exe の作成・exe を起動しての確認(`scripts/desktop_smoke.py`)を push
 
 `python scripts\make_dist.py`(またはペナラベルの設定画面の「配布用フォルダを作る」)で、
 配るものだけを新しいフォルダへ写します(tests・tools・手元DBの写し・ログは入りません)。
+フォルダの名前は **`機側用統合_VER<統合ツールの版>`**(例 `機側用統合_VER1.2.48`。アプリの隣に作ります。`--out` で場所を変えられます)。
 配った先では `コイル梱包ツール.exe`(無いとき・動かないときは `Start.vbs`)を押すだけです。
 
 **ショートカット**: 配った先の PC で `scripts\make_shortcuts.vbs` をダブルクリックすると、ツールのフォルダ

@@ -6,7 +6,7 @@ r"""配布用フォルダを作る（python-web-tools の scripts/make_dist.py �
 modules/packing_pena_label/app/services/dist_folder.py（ペナラベルの設定画面の
 「配布用フォルダを作る」と同じもの）。
 
-    python scripts\make_dist.py                        # アプリの隣に「nlm.coil-packing-tools_v版」
+    python scripts\make_dist.py                        # アプリの隣に「機側用統合_VER版」
     python scripts\make_dist.py --out D:\配布\今回      # 置き場所を指定
     python scripts\make_dist.py --zip                  # zip も作る
     python scripts\make_dist.py --no-settings          # 配布設定を入れない
@@ -32,7 +32,7 @@ def main(argv=None) -> int:
     from modules.packing_pena_label.app.services import dist_folder as DF
 
     parser = argparse.ArgumentParser(description="配布用フォルダを作る")
-    parser.add_argument("--out", help="作る場所（既定: アプリの隣に nlm.coil-packing-tools_v版）")
+    parser.add_argument("--out", help="作る場所（既定: アプリの隣に 機側用統合_VER版）")
     parser.add_argument("--no-settings", action="store_true",
                         help="配布設定（アプリ直下の 配布設定 フォルダ）を入れない")
     parser.add_argument("--force", action="store_true",

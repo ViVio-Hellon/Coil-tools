@@ -71,11 +71,20 @@ class DistFolderTest(unittest.TestCase):
         self.base = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, str(self.base), True)
         self.src = fake_app(self.base)
-        self.out = self.base / "out" / "PackingPenaLabel_vX"
+        self.out = self.base / "out" / "機側用統合_VERX"
 
     def build(self, **kw):
         kw.setdefault("root", self.src)
         return DF.build(self.out, **kw)
+
+    def test_既定の名前は機側用統合_VER統合ツールの版(self):
+        """現場の指定(統合 1.2.48): 配布用フォルダの名前は 機側用統合_VERxxx。"""
+        from common import versions
+        app = versions.all_versions()["app"]
+        self.assertEqual(DF.dist_name(), "機側用統合_VER" + app)
+        self.assertEqual(DF.default_out().name, "機側用統合_VER" + app)
+        self.assertEqual(DF.default_out().parent, DF.ROOT.parent, "アプリの隣に作る")
+        self.assertEqual(DF.dist_name("1.2.48"), "機側用統合_VER1.2.48")
 
     def test_only_what_is_distributed_goes_in(self):
         r = self.build()
