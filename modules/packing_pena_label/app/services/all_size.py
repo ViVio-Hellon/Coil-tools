@@ -266,13 +266,19 @@ class AllSizeService:
 
     @staticmethod
     def _stamp_of(csv_path: str, db_path: str):
+        """DB・CSV の印(大きさ・更新日時ns。DB は WAL の ``-wal`` も。統合 1.2.49)。"""
         out = []
         for path in (db_path, csv_path):
             try:
                 st = os.stat(path) if path else None
-                out.append((path, st.st_mtime, st.st_size) if st else (path, None, None))
+                out.append((path, st.st_mtime_ns, st.st_size) if st else (path, None, None))
             except OSError:
                 out.append((path, None, None))
+        try:
+            ws = os.stat(db_path + "-wal") if db_path else None
+            out.append((ws.st_size, ws.st_mtime_ns) if ws else None)
+        except OSError:
+            out.append(None)
         return tuple(out)
 
     def refresh(self) -> bool:
@@ -415,6 +421,28 @@ class AllSizeService:
 
         return {"ok": True, "level": "info", "message": "反映しました",
                 "sheets": sheets, "state": st}
+
+    def kataban_drift(self, combo_text: str) -> str:
+        """決定したときの型番と、いまの型番マスタの型番が違えば、その知らせ(統合 1.2.49・現場の指摘)。
+
+        全サイズの印刷は決定したときに控えた型番で刷る。以前は印刷のときに型番マスタを確かめず、
+        決定のあとに型番マスタを直しても前の型番のラベルが刷れた。型番マスタは小さな表なので、
+        印刷のときは印(更新日時)に頼らず読み直す。読めない・空なら比べない(今の内容のまま)。
+        """
+        self.reload_master(*self._paths)
+        if not self.master.rows:
+            return ""
+        entry = self.master.by_name(combo_text)
+        now = entry["kataban"] if entry else None
+        for name in sheet_names(combo_text):
+            sheet = self.get_sheet(name)
+            if not sheet or not (sheet.get("weightTop") or sheet.get("weightBottom")):
+                continue
+            before = sheet.get("kataban", "")
+            if now != before:
+                return ("型番マスタが変わりました(%s → %s)。決定し直してください"
+                        % (before or "空", "無し" if now is None else (now or "空")))
+        return ""
 
     def print_targets(self, combo_text: str) -> dict:
         """VBA ``CommandButton2_Click``。重量が 1 つも無ければ印刷しない。"""

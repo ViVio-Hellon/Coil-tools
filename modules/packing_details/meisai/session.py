@@ -35,6 +35,9 @@ _orders: list[lot_repo.OrderInfo] = []
 # 復元した直後か (VBA `mRestoredSnapshot`)。
 # 条番号を再表示すると使用済みが消えるので、そのときだけ確認を挟む
 _restored = False
+# 途中経過から丈数・前工程実績数を戻したか(統合 1.2.49)。`_restored` と違い、条番号を
+# 作り直しても消さない ── 台帳と違う値で作業していることを、ロットを開いている間は出す
+_from_snapshot = False
 
 
 def current() -> Optional[Board]:
@@ -60,6 +63,26 @@ def clear_restored() -> None:
     _restored = False
 
 
+def ledger_note() -> str:
+    """途中経過から戻した丈数・前工程実績数が、いまの台帳と違えば一言(統合 1.2.49・現場の指摘)。
+
+    **動きは変えない。** 途中経過を優先するのは VBA `RestoreSnapshot` のとおり(作業中の数を
+    勝手に変えない)。ただ、取り込みで台帳が直っても、ロットを入れ直すと途中経過の古い値に
+    戻るので、黙らずに台帳の値を出す。台帳に割数が無い(LS4LOT に無い)ロットは比べない。
+    """
+    board, info = _board, _lot
+    if not _from_snapshot or board is None or info is None:
+        return ""
+    tate, zen = info.tate_wari, info.zen_kotei_jisseki_su
+    if tate < 1 or zen <= 0:
+        return ""
+    if board.jou_su == tate and board.zen_kotei == zen:
+        return ""
+    return (f"台帳は丈{tate}・前工程{zen}に変わっています"
+            f"(いまは途中経過の丈{board.jou_su}・前工程{board.zen_kotei}で戻しています。"
+            "全クリアで台帳の値になります)。")
+
+
 def require() -> Board:
     """盤面が無ければ断る。呼び出し側で毎回 None を確かめずに済む。"""
     board = current()
@@ -70,12 +93,13 @@ def require() -> Board:
 
 def clear() -> None:
     """作業を捨てる。"""
-    global _board, _lot, _orders, _restored
+    global _board, _lot, _orders, _restored, _from_snapshot
     with _lock:
         _board = None
         _lot = None
         _orders = []
         _restored = False
+        _from_snapshot = False
 
 
 # ------------------------------------------------------------------
@@ -93,7 +117,7 @@ def open_lot(conn: sqlite3.Connection, lot_no: str) -> lot_repo.SearchResult:
     行っており、利用者への確認を挟む。画面側(`routes`)が尋ねてから
     `close_lot()` を呼ぶ。
     """
-    global _board, _lot, _orders, _restored
+    global _board, _lot, _orders, _restored, _from_snapshot
 
     result = lot_repo.search(conn, lot_no)
     if not result.found:
@@ -104,6 +128,7 @@ def open_lot(conn: sqlite3.Connection, lot_no: str) -> lot_repo.SearchResult:
         _lot = result.lot
         _orders = result.orders
         _restored = False
+        _from_snapshot = False
 
         board = Board(lot_no=result.lot.lot_no,
                       zen_kotei=result.lot.zen_kotei_jisseki_su)
@@ -133,9 +158,10 @@ def _restore(conn: sqlite3.Connection, board: Board) -> bool:
          (合わない状態で描くと、あるはずのコイルが出ない)
       2. 前工程実績数はスナップショット値で**上書きする**
          ── 台帳が更新されていても、作業中の数を勝手に変えない
+         (台帳と違えば `ledger_note` が画面に一言出す。統合 1.2.49)
       3. 丈数が範囲外なら諦める
     """
-    global _restored
+    global _restored, _from_snapshot
 
     snap = history_repo.load_snapshot(conn, board.lot_no)
     if snap is None:
@@ -167,6 +193,7 @@ def _restore(conn: sqlite3.Connection, board: Board) -> bool:
             board.restored_used.append(key)
 
     _restored = True
+    _from_snapshot = True
     log.info("_restore: 復元 %s 丈数=%s 合計=%s条 使用済=%s 廃棄=%s",
              board.lot_no, board.jou_su, sum(board.strands),
              len(board.restored_used), len(board.discarded))

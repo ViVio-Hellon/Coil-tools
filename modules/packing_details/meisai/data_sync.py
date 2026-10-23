@@ -20,6 +20,7 @@
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -260,19 +261,34 @@ def import_table(conn: sqlite3.Connection, table: str, source_path: Path, *,
     """
     result = result or ImportResult()
 
+    # **目印は読む前に取る**(統合 1.2.49・現場の指摘)。読み終えてから取ると、読んでいる間・
+    # 読み終えた直後に上流が書いた分を「取り込んだ」と覚えて、次から読まなくなる。
+    # 作成日時も同じ間に読む(読み終えたあとで目印が変わっていれば、次の取り込みで読み直す)
+    stamp = source_db.file_stamp(source_path)
+    created_at = source_created_at(source_path)
     try:
         rows, spec, note = read_source(table, source_path)
     except SyncError as exc:
         log.warning("%s: 読み取り失敗 %s", table, exc)
         result.errors.append(f"{table}: {exc}")
         return result
+    if source_db.file_stamp(source_path) != stamp:
+        log.info("%s: 読んでいる間に元が書き換わりました。次の取り込みで読み直します", table)
     results_format = spec is import_specs.RESULTS_SPEC
     if note:
         result.notes.append(note)
 
     # 実績の形式は、今月の行が無ければ**空にする**(先月の割数を使わない。現場の指示)
     if not rows and not results_format:
+        # **動きは変えない**(元が空なら入れ替えない ── 空の台帳で手元を消さない)。ただ
+        # 「0件」だけだと空にしたように見えるので、前の中身のままだと書き添える(統合 1.2.49)
         result.imported[table] = 0
+        kept = _local_count(conn, table)
+        if kept:
+            result.notes.append(f"{table}: 元の表が空なので、手元は前の中身のまま"
+                                f"({kept:,}件)です。入れ替えていません")
+        # この形の元は見た、とだけ覚える(「新しい台帳があります」を出し続けない)
+        _note_seen(conn, table, source_path, stamp)
         return result
 
     present = set(rows[0].keys()) if rows else {src for _c, src, _v in spec}
@@ -322,7 +338,7 @@ def import_table(conn: sqlite3.Connection, table: str, source_path: Path, *,
     result.imported[table] = imported
     if skipped:
         result.skipped[table] = skipped
-    _note_imported(conn, table, source_path, imported)
+    _note_imported(conn, table, source_path, imported, stamp=stamp, created_at=created_at)
     log.info("%s: %s件取り込み(%s件スキップ)", table, imported, skipped)
     return result
 
@@ -407,6 +423,7 @@ def merge_second(conn: sqlite3.Connection, table: str, path: Path,
     (2つ目の行は足さない)。読めなければ一言残して何もしない(1つ目の分は入っている)。
     """
     key = LOT_MERGE_KEYS[table]
+    stamp = source_db.file_stamp(path)        # 読む前に(`import_table` と同じ)
     try:
         rows, spec, _note = read_source(table, path)
     except SyncError as exc:
@@ -450,7 +467,7 @@ def merge_second(conn: sqlite3.Connection, table: str, path: Path,
         log.exception("%s: 2つ目から足す途中でエラー", table)
         result.errors.append(f"{table}: 第2パスから足せませんでした({exc})")
         return 0
-    _note_imported(conn, SECOND_NOTE.format(table=table), path, added)
+    _note_imported(conn, SECOND_NOTE.format(table=table), path, added, stamp=stamp)
     if added:
         result.imported[table] = result.imported.get(table, 0) + added
         what = "受注" if key == "受注番号" else "ロット"
@@ -463,43 +480,127 @@ def merge_second(conn: sqlite3.Connection, table: str, path: Path,
 # ==================================================================
 # 更新の検知
 # ==================================================================
+def stamp_text(stamp: Optional[tuple]) -> str:
+    """目印を記録に書く形(文字)にする。"""
+    return "" if stamp is None else json.dumps(stamp, separators=(",", ":"))
+
+
 def needs_import(conn: sqlite3.Connection, path: Path) -> bool:
-    """元ファイルが前回の取り込み以降に更新されているか。
+    """元ファイルが前回の取り込み以降に変わっているか。
 
     **一度も取り込んでいなければ「要る」と答える。** 分からないのに
     「変わっていない」と答えると、古い台帳を使い続けることになる。
 
-    ファイルを**開かずに**判定する(更新時刻だけ見る)ので、共有への
-    往復は1回で済む。
+    ファイルを**開かずに**判定する(大きさと更新時刻だけ見る)ので、共有への
+    往復は少なくて済む。
+
+    (統合 1.2.49・現場の指摘)比べるのは本体と `-wal` `-journal` の (大きさ, 更新時刻) で、
+    **違えば変わった**と見る(`source_db.file_stamp`)。以前は本体の更新時刻だけを `>` と
+    1秒の余裕で比べていたので、WAL で `-wal` にだけ書かれた・更新時刻の古いファイルで
+    置き換えた・読み終えてから記録を書くまでの間に書き換わった、を取りこぼした。
     """
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
+    stamp = source_db.file_stamp(Path(path))
+    if stamp is None:
         return False                       # 届いていない。見に行けない
-    row = conn.execute("SELECT 更新時刻 FROM 取り込み記録 WHERE ファイル = ?",
+    row = conn.execute("SELECT 目印 FROM 取り込み記録 WHERE ファイル = ?",
                        (str(path),)).fetchone()
-    # 1秒の余裕。共有フォルダは秒未満の精度が環境によって落ちる
-    return row is None or mtime > float(row[0]) + 1.0
+    # 目印が空(この版より前に取り込んだ記録)なら、分からないので「要る」
+    return row is None or str(row[0] or "") != stamp_text(stamp)
 
 
 def _note_imported(conn: sqlite3.Connection, table: str, path: Path,
-                   count: int) -> None:
-    """取り込んだ、と覚える。"""
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
-        mtime = 0.0
+                   count: int, *, stamp: Optional[tuple] = None,
+                   created_at: Optional[str] = None) -> None:
+    """取り込んだ、と覚える。
+
+    `stamp` は**読む前に取った**目印(`import_table`)。省けばいまの目印。
+    `created_at` も読んだときのもの。省けばいま読む。
+    """
+    if stamp is None:
+        stamp = source_db.file_stamp(Path(path))
+    mtime = stamp[0][1] / 1e9 if stamp else 0.0
+    if created_at is None:
+        created_at = source_created_at(path)
     with conn:
         conn.execute(
             "INSERT INTO 取り込み記録"
-            " (テーブル, ファイル, 更新時刻, 取り込み日時, 元作成日時, 件数)"
-            " VALUES (?, ?, ?, ?, ?, ?)"
+            " (テーブル, ファイル, 更新時刻, 取り込み日時, 元作成日時, 件数, 目印)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(テーブル) DO UPDATE SET"
             " ファイル=excluded.ファイル, 更新時刻=excluded.更新時刻,"
             " 取り込み日時=excluded.取り込み日時,"
-            " 元作成日時=excluded.元作成日時, 件数=excluded.件数",
+            " 元作成日時=excluded.元作成日時, 件数=excluded.件数, 目印=excluded.目印",
             (table, str(path), mtime, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-             source_created_at(path), count))
+             created_at, count, stamp_text(stamp)))
+
+
+def _note_seen(conn: sqlite3.Connection, table: str, path: Path,
+               stamp: Optional[tuple]) -> None:
+    """元を見たが入れ替えなかった(元が空)。**前に同じ元から取り込んだ記録の目印だけ**新しくする。
+
+    件数・取り込み日時は前のまま(手元の中身は前のまま)。記録が無ければ何もしない。
+    """
+    if stamp is None:
+        return
+    with conn:
+        conn.execute("UPDATE 取り込み記録 SET 目印 = ?, 更新時刻 = ?"
+                     " WHERE テーブル = ? AND ファイル = ?",
+                     (stamp_text(stamp), stamp[0][1] / 1e9, table, str(path)))
+
+
+def _local_count(conn: sqlite3.Connection, table: str) -> int:
+    try:
+        row = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row[0]) if row else 0
+
+
+def source_marks(found: Optional[dict[str, Path]] = None
+                 ) -> dict[str, list[tuple[str, Path, Optional[tuple]]]]:
+    """取り込み元の目印。`{手元の表名: [(記録の名前, 場所, 目印), ...]}`。
+
+    **ファイルの大きさと更新時刻を見るだけ**で、中身は読まない(共有が遅いときは、呼び手が
+    別のスレッドで待つ時間を区切る)。第2パスから足している表は、2つ目も並べる。
+    """
+    if found is None:
+        found = find_sources()
+    second = find_second_lots()
+    out: dict[str, list[tuple[str, Path, Optional[tuple]]]] = {}
+    for table, path in found.items():
+        items = [(table, path, source_db.file_stamp(path))]
+        extra = second.get(table)
+        if extra is not None and extra != path:
+            items.append((SECOND_NOTE.format(table=table), extra, source_db.file_stamp(extra)))
+        out[table] = items
+    return out
+
+
+def newer_sources(conn: sqlite3.Connection,
+                  marks: Optional[dict[str, list[tuple[str, Path, Optional[tuple]]]]] = None
+                  ) -> list[str]:
+    """**前に取り込んだあと、元が変わった**表(手元の表名)。画面の上の帯に
+    「新しい台帳があります」と出すため(統合 1.2.49・現場の指摘)。
+
+    `marks` は `source_marks()` の結果(省けばいま見る)。手元の記録と比べるだけ。
+    一度も取り込んでいない表は入れない(「まだ取り込まれていません」の案内が別にある)。
+    取り込んだ場所と違うファイルを見ているときも「変わった」とする。
+    """
+    if marks is None:
+        marks = source_marks()
+    out: list[str] = []
+    for table, items in marks.items():
+        for name, path, stamp in items:
+            if stamp is None:
+                continue                         # いまは届かない
+            row = conn.execute("SELECT ファイル, 目印 FROM 取り込み記録 WHERE テーブル = ?",
+                               (name,)).fetchone()
+            if row is None:
+                continue                         # 取り込んでいない(2つ目は足していない)
+            if str(row[0]) != str(path) or str(row[1] or "") != stamp_text(stamp):
+                out.append(table)
+                break
+    return out
 
 
 @dataclass(frozen=True)

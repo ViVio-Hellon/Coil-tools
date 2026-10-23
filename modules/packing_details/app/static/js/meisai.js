@@ -125,9 +125,11 @@ function renderLot(state) {
   $("stackCard").hidden = !hasStrands;
   $("outputCard").hidden = !(found && state.outputs.length);
 
+  // 丈数が入らなかった理由と、途中経過の値が台帳と違うこと(統合 1.2.49)
   const note = $("lotNote");
-  note.hidden = !(found && state.lot.jou_su_note);
-  if (found && state.lot.jou_su_note) note.textContent = state.lot.jou_su_note;
+  const lotNotes = found ? [state.lot.jou_su_note, state.lot.ledger_note].filter(Boolean) : [];
+  note.hidden = !lotNotes.length;
+  if (lotNotes.length) note.textContent = lotNotes.join("\n");
 
   if (!found) {
     $("warisu").textContent = "";
@@ -519,6 +521,7 @@ async function openLot(lotNo, confirm = false, cancelEdit = false) {
     if (await confirmAsk(body.message)) openLot(lotNo, true, cancelEdit);
     else $("lotNo").value = window.APP.state.lot_no || "";
   }
+  if (body && body.ok) checkNewLedger();
 }
 
 /** いま画面の重量欄に入っている値(表示している丈の数だけ。打ったまま)。 */
@@ -908,23 +911,54 @@ function afterImport(body) {
   renderTopStamps(body.stamps);
   const banner = document.getElementById("noDataBanner");
   if (banner && body.ok) banner.hidden = true;
+  // 「新しい台帳があります」も聞き直す(一部だけ取り込めたときは残る。統合 1.2.49)
+  $("newLedgerBanner").hidden = true;
+  checkNewLedger();
+}
+
+/*
+  新しい台帳があるか(統合 1.2.49・現場の指摘)。以前は動いている間は仕掛データを読み直さず、
+  上の帯も取り込んだ時点のままで「新しい台帳がある」とは言わなかった。画面を開いたとき・
+  ロットを入れたとき・前に戻ったとき・数分ごとに聞く。サーバはファイルの大きさと更新時刻を
+  見るだけ(中身は読まない)。確かめきれなかったときは帯をそのままにする。
+*/
+const LEDGER_POLL_MS = 3 * 60 * 1000;
+let ledgerChecking = false;
+async function checkNewLedger() {
+  if (ledgerChecking) return;
+  ledgerChecking = true;
+  try {
+    const body = await api.get("/api/import/check");
+    if (!body || !body.checked) return;
+    const newer = body.newer || [];
+    if (newer.length) {
+      $("newLedgerText").textContent =
+        `${body.message}取り込むと、次にロットを入れたときから新しい台帳で引けます。`;
+    }
+    $("newLedgerBanner").hidden = !newer.length;
+  } catch { /* 次に聞く */ } finally {
+    ledgerChecking = false;
+  }
 }
 
 async function runImport() {
   $("btnImport").disabled = true;
+  $("btnNewLedgerImport").disabled = true;
   try {
     // **進み具合の窓を出す。** 何を読んでいるか・何秒たったかが見えないと、
     // 押せていないと思って押し直す(現場の指摘: 反応が鈍い)
     const body = await importWithProgress({ force: true }, "取り込み中");
     // **開いているロットが古いままなら、そう言う。** 黙って
     // 読み直すと、手で直した前工程実績数が消える
-    notify([body.summary, body.note, ...body.errors].filter(Boolean).join("\n"),
-           body.ok ? "ok" : "danger");
+    // 知らせ(元が空なので前の中身のまま など。統合 1.2.49)も出す
+    notify([body.summary, ...(body.notes || []), body.note, ...body.errors]
+      .filter(Boolean).join("\n"), body.ok ? "ok" : "danger");
     afterImport(body);
   } catch (err) {
     showError(err);
   } finally {
     $("btnImport").disabled = false;
+    $("btnNewLedgerImport").disabled = false;
   }
 }
 
@@ -1007,6 +1041,8 @@ function wire() {
   $("btnEditCancel").addEventListener("click", cancelEdit);
   $("btnClearAll").addEventListener("click", () => clearAll());
   $("btnImport").addEventListener("click", runImport);
+  // 「新しい台帳があります」の帯から取り込む(左の「取り込み」と同じ。統合 1.2.49)
+  $("btnNewLedgerImport").addEventListener("click", runImport);
   wireBusy();
   settings.wire({ showError, afterImport });
   $("btnHistory").addEventListener("click", openHistory);
@@ -1130,6 +1166,12 @@ async function boot() {
   tab.answerPings(lockScreen);
   render(window.APP.state);
   health.start({ onLost: lockScreen });
+  // 新しい台帳があるか(統合 1.2.49)。開いたとき・前に戻ったとき・数分ごと
+  checkNewLedger();
+  setInterval(checkNewLedger, LEDGER_POLL_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkNewLedger();
+  });
 }
 
 boot();

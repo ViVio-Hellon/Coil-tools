@@ -417,6 +417,30 @@ def _try_copy(resolved: Path) -> sqlite3.Connection:
 # 付属ファイル(診断で「どれが置かれているか」を出す)
 _SIDECARS = ("-wal", "-shm", "-journal")
 
+# 中身が変わったかを見るときに一緒に見る付属ファイル。`-shm` は WAL の索引で中身ではない
+STAMP_SIDECARS = ("-wal", "-journal")
+
+
+def file_stamp(path: Path) -> Optional[tuple]:
+    """中身が変わったかを見る目印。**開かずに**、本体と `-wal` `-journal` の
+    (大きさ, 更新時刻ns) を並べたもの。本体が無ければ None。
+
+    (統合 1.2.49・現場の指摘)以前は本体の更新時刻だけを `>` と1秒の余裕で比べていたので、
+    WAL で `-wal` にだけ書かれた・更新時刻の古いファイルで置き換えた、を「変わっていない」と
+    取り違えた。`common/source_copy.py` の `_stamp` と同じ考え方で、**違えば変わった**と見る。
+    """
+    parts = []
+    for extra in ("",) + STAMP_SIDECARS:
+        try:
+            st = os.stat(str(path) + extra)
+        except OSError:
+            parts.append(None)
+            continue
+        parts.append((st.st_size, st.st_mtime_ns))
+    if parts[0] is None:
+        return None
+    return tuple(parts)
+
 
 def is_readable(path: Path) -> bool:
     """sqlite3 として開けるか。**中身までは見ない**。

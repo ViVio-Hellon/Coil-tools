@@ -113,6 +113,14 @@ def notice(snapshot: shared_settings.Snapshot) -> str:
                  else f"既定の「{DEFAULT}」")
         return (f"梱包資材マスタを読めないため、右上の文字は{where}で刷ります"
                 f"({snapshot.master.problem})。")
+    if (snapshot.source == "shared" and snapshot.master.state == "no_row"
+            and snapshot.qa_origin == shared_settings.ORIGIN_JSON):
+        # (統合 1.2.49・現場の指摘)マスタの ID=1 を空にした・行を消したとき、控えのJSON
+        # (前の値)で黙って刷っていた。マスタで直したつもりの人に、前の値だと伝える
+        return (f"梱包資材マスタの表「{shared_settings.MASTER_TABLE}」に ID="
+                f"{shared_settings.MASTER_QA_ID} の値が無い(空か、行が無い)ため、右上の文字は"
+                "控えのJSONに残っている前の値で刷ります。変えるときは設定画面か、"
+                "マスタの ID=1 の行で直してください。")
     if snapshot.source == "cache":
         return ("共有の設定に届かないため、右上の文字はこの端末が"
                 f"{snapshot.read_at or '前に'}に読んだ値で刷ります。"

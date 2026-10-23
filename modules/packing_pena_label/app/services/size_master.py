@@ -18,7 +18,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .vba_compat import val
 
@@ -176,6 +176,17 @@ _OB_KEYS[13] = "lblSpec_08_53_1"
 _OB_KEYS[14] = "lblSpec_08_53_2"
 
 
+def _file_stamp(path: Optional[str]):
+    """ファイルの印 (パス, 大きさ, 更新日時ns)。無ければ None。**読む前**に取る。"""
+    if not path:
+        return None
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (os.path.abspath(path), st.st_size, st.st_mtime_ns)
+
+
 class SizeMaster:
     """サイズ構成マスタ。"""
 
@@ -185,6 +196,14 @@ class SizeMaster:
         self._extra_rows: List[dict] = []
         self._extra_obs: set = set()
         self._notes: Dict[str, str] = {}
+        #: ラベル台紙一覧で上書きする前の値 ``{obIdx: (シート名, 型番)}``(JSON・内蔵定義・足したサイズの元の値)。
+        #: 上書きの前に毎回ここへ戻す(統合 1.2.49。空にした・行を消したのに前の上書きが残っていた)
+        self._base_labels: Dict[int, Tuple[str, str]] = {}
+        #: 最後に重ねたラベル台紙一覧(読み直したときに掛け直す)
+        self._overlay_rows: Dict[int, tuple] = {}
+        #: 読んだ JSON と、その印(読む前に取る。外で直されたら読み直す。統合 1.2.49)
+        self._json_path = json_path or ""
+        self._json_stamp = _file_stamp(json_path)
         loaded = False
         if json_path and os.path.exists(json_path):
             try:
@@ -207,6 +226,7 @@ class SizeMaster:
                     cb_key=cb, ob_key=_OB_KEYS[ob],
                     size_cell_label=f"{base}{SHEET_NAME_JOINER}{take}",
                 )
+                self._keep_base(ob)
 
     def _load_json(self, path: str) -> None:
         with open(path, encoding="utf-8") as f:
@@ -229,6 +249,7 @@ class SizeMaster:
                     ob_key=_OB_KEYS.get(ob, f"OptionButton{ob}"),
                     size_cell_label=labels.get(str(ob), default_label),
                 )
+                self._keep_base(ob)
         if not self._by_ob:
             raise ValueError("size_master.json にサイズ定義がありません")
 
@@ -260,11 +281,20 @@ class SizeMaster:
                     ob_key="OptionButton%d" % ob,
                     size_cell_label=f"{base}{SHEET_NAME_JOINER}{take}",
                 )
+                self._keep_base(ob)
                 self._extra_obs.add(ob)
             self._notes[base] = r.get("note", "")
             names.add(base)
             n += 1
+        # 足し直したサイズにも、前に重ねたラベル台紙一覧を掛け直す
+        if self._overlay_rows:
+            self.apply_label_overlay(self._overlay_rows)
         return n
+
+    def _keep_base(self, ob: int) -> None:
+        """作ったばかりの台紙の シート名・型番 を、上書きの前の値として控える。"""
+        cfg = self._by_ob[ob]
+        self._base_labels[ob] = (cfg.size_cell_label, cfg.kataban)
 
     def is_extra(self, ob_idx: int) -> bool:
         """あとから足したサイズか。"""
@@ -283,9 +313,19 @@ class SizeMaster:
         ``rows`` は ``{obIdx: (シート名, 型番)}``。
         空欄は「指定なし」として **上書きしない**
         （うっかり空にして型番が消えるのを避けるため）。
+
+        **重ねる前に、毎回 JSON の値(上書きの前の値)へ戻す**(統合 1.2.49・現場の指摘)。
+        以前はその場で上書きするだけだったので、型番・シート名を空にした・行を消した・表が読めなく
+        なった、のどれでも、動いたままの PC には前の上書きが残った(再起動した PC は JSON の値になり、
+        PC によって刷る型番が違った)。``rows`` が空なら JSON の値に戻るだけ。
         """
+        self._overlay_rows = {int(ob): tuple(pair) for ob, pair in (rows or {}).items()}
+        for ob, cfg in self._by_ob.items():
+            base = self._base_labels.get(ob)
+            if base is not None:
+                cfg.size_cell_label, cfg.kataban = base
         n = 0
-        for ob, pair in (rows or {}).items():
+        for ob, pair in self._overlay_rows.items():
             cfg = self._by_ob.get(int(ob))
             if cfg is None:
                 continue
@@ -313,20 +353,42 @@ class SizeMaster:
         """
         prev = dict(self._by_ob)
         prev_obs = set(self._extra_obs)
+        prev_base = dict(self._base_labels)
+        self._json_path = json_path or ""
+        self._json_stamp = _file_stamp(json_path)          # 読む前に取る
         try:
             self._by_ob = {}
             self._extra_obs = set()
+            self._base_labels = {}
             if json_path and os.path.exists(json_path):
                 self._load_json(json_path)
             else:
                 self._load_builtin()
+            # 足したサイズを足し直し、ラベル台紙一覧の上書きも掛け直す(apply_extra の中で)
             self.apply_extra(self._extra_rows)
             return True
         except Exception as exc:
             self._by_ob = prev
             self._extra_obs = prev_obs
+            self._base_labels = prev_base
             log.warning("サイズ構成マスタを読み直せません（従来の内容を維持）: %s", exc)
             return False
+
+    def refresh_if_changed(self) -> bool:
+        """size_master.json が外で直されていたら読み直す(統合 1.2.49・現場の指摘)。
+
+        以前は起動時と設定の保存時にしか読まず、JSON を直しても再起動するまで前の型番・シート名で
+        刷れた。ほかのマスタと同じく、読む前に取った印(大きさ・更新日時)と比べる。
+        読み直したら、ラベル台紙一覧の上書きも掛け直す。戻り値は「読み直したか」。
+        """
+        if not self._json_path:
+            return False
+        if _file_stamp(self._json_path) == self._json_stamp:
+            return False
+        ok = self.reload(self._json_path)
+        if ok:
+            log.info("size_master.json が直されたので読み直しました: %s", self._json_path)
+        return ok
 
     # ------------------------------------------------------------ 参照
     def get(self, ob_idx: int) -> Optional[SizeConfig]:

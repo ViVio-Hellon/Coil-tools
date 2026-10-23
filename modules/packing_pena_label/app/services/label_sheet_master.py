@@ -12,6 +12,8 @@
 **JSON は土台、マスタは上書き。**
 表が無い・読めない場合は JSON の値がそのまま使われるので、
 マスタを用意していない端末でも動く。
+上書きは毎回 JSON の値へ戻してから重ねる(統合 1.2.49)。空にした・行を消した・読めなくなった
+ときも、動いたままの PC と再起動した PC で同じ値になる。
 
 読み直しの契機
     1. ラベル台紙の画面を開いたとき（現場の求め）
@@ -53,6 +55,8 @@ class LabelSheetMaster:
         self._rows: Dict[int, Tuple[str, str]] = {}
         self._stamp: Optional[Tuple[str, float, int]] = None
         self._at = 0.0
+        #: 一時的に読めず、前に読めた内容で続けているか(統合 1.2.49)
+        self.serving_stale = False
 
     # ------------------------------------------------------------
     @staticmethod
@@ -77,10 +81,19 @@ class LabelSheetMaster:
         """共有マスタから読む。更新が無ければ前回の内容を返す。"""
         path = str(db_path or "")
         self.last_path = path
-        if not path or not os.path.exists(path):
+        if not path:
             self._rows = {}
             self.row_count = 0
-            self.last_error = "" if not path else "見つかりません: %s" % path
+            self.last_error = ""
+            self.serving_stale = False
+            return {}
+        if not os.path.exists(path):
+            # 一度読めていたなら、共有に届かないだけかもしれないので前の内容で続ける
+            # (資材マスタの D-8 と同じ。JSON の値へ黙って戻すと、上書きしていた型番と違う型番を刷る)
+            self.last_error = "見つかりません: %s" % path
+            if self._rows:
+                return self._keep_previous()
+            self.row_count = 0
             return {}
 
         now = time.monotonic()
@@ -113,16 +126,21 @@ class LabelSheetMaster:
             finally:
                 conn.close()
         except sqlite3.Error as exc:
-            # 表が無い端末でも動かす。JSON の値がそのまま使われる。
             self.last_error = str(exc)
+            if "no such table" not in str(exc).lower() and self._rows:
+                # ロック・一時的に読めない: 前の内容で続け、次に呼ばれたら読み直しを試す
+                return self._keep_previous()
+            # 表が無い端末でも動かす。JSON の値がそのまま使われる。
             log.info("%s を読めません（JSON の値を使います）: %s", TABLE_NAME, exc)
             self._rows = {}
             self.row_count = 0
+            self.serving_stale = False
             self._stamp = stamp
             self._at = now
             return {}
 
         self.last_error = ""
+        self.serving_stale = False
         self._rows = out
         self.row_count = len(out)
         self._stamp = stamp
@@ -130,10 +148,17 @@ class LabelSheetMaster:
         log.info("%s を読みました: %d 件 (%s)", TABLE_NAME, len(out), path)
         return dict(out)
 
+    def _keep_previous(self) -> Dict[int, Tuple[str, str]]:
+        """一時的に読めないとき、前に読めた内容で続ける(統合 1.2.49)。stamp は覚え直さない(次に読み直す)。"""
+        self.serving_stale = True
+        self._stamp = None
+        log.warning("%s を読めないため、前に読めた内容で続けます: %s", TABLE_NAME, self.last_error)
+        return dict(self._rows)
+
     # ------------------------------------------------------------
     def apply_to(self, master, db_path: str, force: bool = False) -> int:
         """サイズ構成へ上書きする。上書きした件数を返す。"""
         rows = self.load(db_path, force=force)
-        if not rows:
-            return 0
+        # 空(表が無い・読めない・行を消した)でも重ねる。重ねる前に JSON の値へ戻すので、
+        # 動いたままの PC に前の上書きが残らない(再起動した PC と同じになる。統合 1.2.49)
         return master.apply_label_overlay(rows)

@@ -415,9 +415,13 @@ class ApiRoutes:
         return {"ok": True, "state": self.wf.load_state().to_dict()}
 
     def _materials(self, body):
-        """資材マスタの内容（表記用フォームの ListView 相当）。"""
+        """資材マスタの内容（表記用フォームの ListView 相当）。
+
+        いまの内容を出す(鮮度チェックの間隔に隠れない。統合 1.2.49。計算内容の画面で、前の
+        計算式と並べて「いまのマスタ」として見せるので、直したのに前の単重が出ては困る)。
+        """
         try:
-            table = self.wf.materials.load()
+            table = self.wf.materials.load(check_now=True)
         except Exception as exc:
             return {"ok": False, "level": "error", "message": str(exc), "rows": []}
         return {"ok": True, "rows": table.as_rows(),

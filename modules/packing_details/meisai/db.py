@@ -211,6 +211,9 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("明細出力", "手入力ロット番号", "TEXT NOT NULL DEFAULT ''"),
     ("明細出力", "履歴ID", "TEXT NOT NULL DEFAULT ''"),
     ("明細履歴", "モード", "TEXT NOT NULL DEFAULT ''"),
+    # 取り込み元の目印(統合 1.2.49)。古いDBは空のまま ── 空なら「変わったかもしれない」と
+    # 見て、次の取り込みで1回だけ読み直す
+    ("取り込み記録", "目印", "TEXT NOT NULL DEFAULT ''"),
 )
 
 

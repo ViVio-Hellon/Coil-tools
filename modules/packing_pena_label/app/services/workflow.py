@@ -124,7 +124,18 @@ class Workflow:
         self.refresh_label_sheets()
 
     def refresh_sizes(self, force: bool = False) -> None:
-        """足したサイズを読み直す(別の PC で足された場合も、更新日時が変われば追いつく)。"""
+        """足したサイズを読み直す(別の PC で足された場合も、更新日時が変われば追いつく)。
+
+        size_master.json が外で直されていたら、それも読み直す(統合 1.2.49・現場の指摘。以前は
+        再起動するまで前の型番・シート名のままだった)。読み直したらラベル台紙一覧を掛け直す。
+        """
+        try:
+            if self.master.refresh_if_changed():
+                self.label_sheets.invalidate()
+                self.label_sheets.apply_to(self.master, self.materials.db_path, force=True)
+                self._drop_vanished_selection()
+        except Exception as exc:                      # noqa: BLE001
+            log.warning("サイズ構成マスタ(JSON)を読み直せません: %s", exc)
         try:
             rows = self.size_extra.load(self.materials.db_path, force=force)
             # 変わったときだけ入れ替える(入れ替えるとラベル台紙一覧の上書きが外れるので、掛け直す)
@@ -509,13 +520,16 @@ class Workflow:
         self.progress.step("ラベルへ写しています")
         transferred = self._transfer_coil_info(state)
 
-        # この計算に使った入力を控えておく（印刷時の食い違い検出用）
+        # この計算に使った入力を控えておく（印刷時の食い違い検出用）。
+        # 使った資材マスタの中身の指紋も入れる(統合 1.2.49・現場の指摘。以前は入力だけで、資材重量を
+        # 直しても前の NW/GW のラベル・風袋計算が止まらずに刷れた)
         self.progress.step("保存しています")
-        self.store.set_kv(self._CALC_INPUT_KEY, self._calc_fingerprint(state))
+        used = self._material_print(table)
+        self.store.set_kv(self._CALC_INPUT_KEY, dict(self._calc_fingerprint(state), material=used))
         # 風袋計算の結果(画面・印刷ビュー)がどの入力のものか。**クリアでは消さない** ──
         # 風袋計算の結果はクリアでも残るので、クリアのあと別の検番を反映して刷ると
         # 新しい見出しに前の結果が並ぶ(統合 1.2.26・構造点検で見つかった)
-        self.store.set_kv(self._TARE_INPUT_KEY, self._calc_fingerprint(state))
+        self.store.set_kv(self._TARE_INPUT_KEY, dict(self._calc_fingerprint(state), material=used))
         # どの取得元の、いつ時点の資材重量で計算したか(統合 1.2.31・現場の指示)。
         # 印刷の記録にもこれを写す(刷ったときではなく、計算したときの資材重量で刷るため)
         material = self.materials.describe()
@@ -535,7 +549,11 @@ class Workflow:
             "coils": coils, "notOnLabel": off_label,
             "material": material})
 
-        return Result(True, "計算しました", "info", {
+        # 前の内容(届かない)・設定のいちばん先の取得元以外で計算したら、注意にして理由を出す
+        # (統合 1.2.49。以前は右上の札が変わるだけで、返事は「計算しました」のままだった)
+        caution = self.material_caution(material)
+        return Result(True, "計算しました" + ("\n" + caution if caution else ""),
+                      "warn" if caution else "info", {
             "state": state.to_dict(),
             "tare": {str(k): v for k, v in results.items()},
             "transferred": transferred,
@@ -721,9 +739,13 @@ class Workflow:
         data["material"] = dict(self.materials.describe(),
                                 calcAt=time.strftime("%Y-%m-%d %H:%M:%S"))
         self._log(self.KIND_CALC, "羅列計算", {"width": data["width"], "material": data["material"]})
+        # 使った資材マスタの中身の指紋(開いたときに比べ、違えば印刷を止める。統合 1.2.49)
+        data["materialPrint"] = self._material_print(table)
         self.store.set_kv("list_result", data)
 
-        return Result(True, "羅列計算を作成しました", "info",
+        caution = self.material_caution(data["material"])
+        return Result(True, "羅列計算を作成しました" + ("\n" + caution if caution else ""),
+                      "warn" if caution else "info",
                       {"list": data, "materialSource": self.materials.last_source})
 
     @staticmethod
@@ -881,7 +903,7 @@ class Workflow:
     KIND_STOPPED = "止めた印刷"
 
     def record_print(self, path: str, query: Dict[str, List[str]],
-                     stopped: bool = False) -> Result:
+                     stopped: bool = False, reason: str = "") -> Result:
         """印刷の画面を開いたこと・止めた印刷を残す(統合 1.2.31・現場の指示。1.2.39 で止めた印刷も)。
 
         印刷の画面(ブラウザの印刷ダイアログ)を閉じたときに、画面から知らせてくる。
@@ -889,14 +911,16 @@ class Workflow:
         (刷った証拠にはならない)。``stopped`` は、入力が変わったまま印刷ビューを開き、
         「印刷（停止中）」で断ったとき(サーバが印刷ビューを描くときに残す)。
         資材重量は、その紙の値を計算したときのもの(計算の記録と同じ)を写す。
+        ``reason`` は止めた理由(資材重量・型番マスタが変わった等。統合 1.2.49)。無ければ入力が変わった。
         """
         title = self.PRINT_KINDS.get(path)
         if not title:
             return Result(False, "記録しない画面です", "info")
         payload: dict = {"path": path}
         if stopped:
-            payload["stopReason"] = ("入力が変わったまま「計算」し直していないので、印刷を止めた"
-                                     "(前の計算の NW・GW と新しい検番が混ざるのを防いだ)")
+            payload["stopReason"] = reason or (
+                "入力が変わったまま「計算」し直していないので、印刷を止めた"
+                "(前の計算の NW・GW と新しい検番が混ざるのを防いだ)")
         if path.startswith("/all-size"):
             combo = (query.get("combo") or [""])[0]
             st = self.all_size.load_state()
@@ -976,16 +1000,112 @@ class Workflow:
                       for i in (1, 2, 3, 4)},
         }
 
+    @staticmethod
+    def _material_print(table) -> dict:
+        """計算に使った資材マスタの中身の指紋と値(統合 1.2.49)。印刷のときにいまのマスタと比べる。"""
+        return {"hash": table.content_hash(), "values": table.values()}
+
+    def _current_material_print(self) -> Optional[dict]:
+        """いまの資材マスタの中身の指紋。読めない(届かず前の内容も無い)なら None(比べない)。"""
+        try:
+            table = self.materials.load(check_now=True)
+        except Exception:                                # noqa: BLE001 - 読めないなら比べない(D-8)
+            return None
+        if table.is_empty():
+            return None
+        return self._material_print(table)
+
+    @staticmethod
+    def _mat_text(v) -> str:
+        if v is None:
+            return "無し"
+        return "単位質量 %s・係数 %s" % tuple((list(v) + ["", ""])[:2])
+
+    @classmethod
+    def material_diff(cls, before: dict, after: dict) -> List[str]:
+        """変わった資材の「資材: 前 → 後」(単位質量だけ変わったら単位質量だけを言う)。"""
+        out = []
+        for name in sorted(set(before or {}) | set(after or {})):
+            b, a = (before or {}).get(name), (after or {}).get(name)
+            if b == a:
+                continue
+            if b is not None and a is not None and list(b)[1:] == list(a)[1:]:
+                out.append("%s: %s → %s" % (name, b[0], a[0]))
+            elif b is not None and a is not None and list(b)[:1] == list(a)[:1]:
+                out.append("%s: 係数 %s → %s" % (name, b[1], a[1]))
+            else:
+                out.append("%s: %s → %s" % (name, cls._mat_text(b), cls._mat_text(a)))
+        return out
+
+    def material_drift(self, used: Optional[dict]) -> str:
+        """計算に使った資材マスタと、いまの資材マスタが違えば、その知らせ(統合 1.2.49・現場の指摘)。
+
+        資材重量を直したあとも、前の NW/GW のラベル・風袋計算が刷れていた(入力だけを見ていた)。
+        控えが無い(この版より前に計算した)・いまのマスタが読めないときは比べない(止めない)。
+        """
+        if not isinstance(used, dict) or not used.get("hash"):
+            return ""
+        now = self._current_material_print()
+        if now is None or now["hash"] == used["hash"]:
+            return ""
+        changes = self.material_diff(used.get("values") or {}, now["values"]) or ["中身"]
+        shown = "、".join(changes[:5]) + ("　ほか %d 件" % (len(changes) - 5) if len(changes) > 5 else "")
+        return "資材重量が計算のあとに変わりました(%s)。もう一度「計算」を押してください" % shown
+
+    def material_caution(self, material: dict) -> str:
+        """前の内容・設定のいちばん先でない取得元で計算したときの理由(統合 1.2.49)。無ければ空。"""
+        material = material or {}
+        want = material.get("preferredLabel") or ""
+        when = material.get("asOf") or material.get("readAt") or ""
+        where = "資材マスタ(%s)に届かないため" % want if want else "資材マスタに届かないため"
+        if material.get("stale"):
+            return (where + "、%s時点の前の内容で計算しました。" % when
+                    + "届くようになったら、もう一度「計算」を押してください")
+        if material.get("fallback"):
+            return (where + "、%s(%s時点)で計算しました。" % (material.get("label", ""), when)
+                    + "届くようになったら、もう一度「計算」を押してください")
+        return ""
+
+    @staticmethod
+    def _inputs_of(saved: dict) -> dict:
+        """控えから入力の分だけ(資材マスタの指紋を除く)。"""
+        return {k: v for k, v in (saved or {}).items() if k != "material"}
+
+    def _stale_info(self, saved: Optional[dict], state: Optional[FormState]) -> dict:
+        if not saved:
+            return {"stale": False, "input": False, "material": ""}
+        st = state if state is not None else self.load_state()
+        changed = self._calc_fingerprint(st) != self._inputs_of(saved)
+        drift = self.material_drift(saved.get("material"))
+        return {"stale": bool(changed or drift), "input": changed, "material": drift}
+
+    def calc_stale_info(self, state: Optional[FormState] = None) -> dict:
+        """ラベルの本数・高さ・NW・GW が、いまの入力・いまの資材マスタのものでないか(理由つき)。
+
+        ``{"stale": 止めるか, "input": 入力が変わった, "material": 資材重量が変わった知らせ}``。
+        """
+        return self._stale_info(self.store.get_kv(self._CALC_INPUT_KEY, None), state)
+
+    def tare_stale_info(self, state: Optional[FormState] = None) -> dict:
+        """風袋計算の結果が、いまの入力・いまの資材マスタのものでないか(理由つき)。"""
+        saved = self.store.get_kv(self._TARE_INPUT_KEY, None)
+        if not saved:
+            return self.calc_stale_info(state)
+        return self._stale_info(saved, state)
+
+    def list_stale_info(self) -> dict:
+        """羅列計算の結果が、いまの資材マスタのものでないか(統合 1.2.49)。"""
+        data = self.store.get_kv("list_result") or {}
+        drift = self.material_drift(data.get("materialPrint"))
+        return {"stale": bool(drift), "input": False, "material": drift}
+
     def calc_is_stale(self, state: Optional[FormState] = None) -> bool:
         """いまの入力が、最後に計算したときと違うか。
 
         一度も計算していない場合は False（まだ古い値が載っていないため）。
+        資材マスタの中身が計算のあとに変わった場合も True(統合 1.2.49)。
         """
-        saved = self.store.get_kv(self._CALC_INPUT_KEY, None)
-        if not saved:
-            return False
-        st = state if state is not None else self.load_state()
-        return self._calc_fingerprint(st) != saved
+        return self.calc_stale_info(state)["stale"]
 
     def tare_is_stale(self, state: Optional[FormState] = None) -> bool:
         """風袋計算の結果が、いまの入力のものでないか(統合 1.2.26)。
@@ -998,11 +1118,7 @@ class Workflow:
         こちらは消さない控え(`_TARE_INPUT_KEY`)と比べる。控えが無い(この版より前に
         計算した)ときはラベル側の控えで判断する。
         """
-        saved = self.store.get_kv(self._TARE_INPUT_KEY, None)
-        if not saved:
-            return self.calc_is_stale(state)
-        st = state if state is not None else self.load_state()
-        return self._calc_fingerprint(st) != saved
+        return self.tare_stale_info(state)["stale"]
 
     def label_view(self, ob_idx: int) -> dict:
         # ラベル台紙を開いたときは **必ず読み直す**。
@@ -1020,10 +1136,13 @@ class Workflow:
         cells = self.store.get_cells(ob_idx)
         ken = header["kensaNo"]
         wt = header["weight"]
-        # 型番は **いまのマスタ** を優先する。
+        # 型番は **いまのマスタ** の値だけを使う。
         # header["kataban"] は重量反映のときに控えた値で、
         # そのあとマスタを直しても古いままになってしまう。
-        rows = LL.build_label_rows(ken, wt, cfg.kataban or header["kataban"],
+        # 以前はマスタの型番が空なら header["kataban"] へ逃げていたので、ラベル台紙一覧で型番を
+        # 空にしても前の型番が刷れた(統合 1.2.49)。空ならラベルを刷らない(印刷ビューで理由を出す)
+        kataban = cfg.kataban
+        rows = LL.build_label_rows(ken, wt, kataban,
                                    cfg.take_type) if ken or wt else []
         coil_info = []
         for r in (cfg.data_row, cfg.data_row + 1):
@@ -1041,8 +1160,9 @@ class Workflow:
             "kensaNo": ken,
             "weight": LL.weight_text(wt),          # 台紙のセル書式 0.0(統合 1.2.6)
             "weightLabel": "重量 丈%d" % take,
-            "kataban": cfg.kataban or header["kataban"],
+            "kataban": kataban,
         }
+        info = self.calc_stale_info()
         for n, ci in enumerate(coil_info, start=1):
             print_header["coilH%d" % n] = ci["coilH"]
             print_header["ta%d" % n] = ci["ta"]
@@ -1056,8 +1176,12 @@ class Workflow:
             "labels": rows,
             "coilInfo": coil_info,
             "cellCount": len(cells),
-            # 本数・高さ・NW・GW が現在の入力と食い違っていないか
-            "stale": self.calc_is_stale(),
+            # 本数・高さ・NW・GW が現在の入力・資材マスタと食い違っていないか(理由つき)
+            "stale": info["stale"],
+            "staleInput": info["input"],
+            "staleMaterial": info["material"],
+            # 型番が空(ラベル台紙一覧も JSON も空)。刷らない(統合 1.2.49)
+            "katabanMissing": bool(rows) and not str(kataban or "").strip(),
         }
 
     # ============================================================ その他

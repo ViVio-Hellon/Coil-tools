@@ -16,6 +16,8 @@ VBA の該当処理
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import logging
 import os
 import sqlite3
@@ -131,6 +133,19 @@ class MaterialTable:
         """VBA の ``IsEmpty(TempHiki)`` 相当。"""
         return not self.records or not self.fields
 
+    def values(self) -> Dict[str, List[str]]:
+        """``{資材名: [単位質量, 係数]}``(計算に使う中身だけ。統合 1.2.49)。"""
+        return {name: [mass, coef] for name, (mass, coef) in self._by_name.items()}
+
+    def content_hash(self) -> str:
+        """計算に使う中身(資材名・単位質量・係数)の指紋(統合 1.2.49・現場の指摘)。
+
+        計算したときの指紋を控えておき、印刷のときにいまの指紋と比べる。違えば、資材重量が
+        計算のあとに変わった(前の NW・GW のまま刷ろうとしている)と分かる。
+        """
+        text = json.dumps(sorted(self.values().items()), ensure_ascii=False)
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
 
 #: 取得元の呼び名(画面右上の札・記録と同じ)
 SOURCE_LABELS = {"sqlite": "SQLite", "access": "Access(ACE)", "csv": "CSV"}
@@ -170,8 +185,8 @@ class MaterialRepository:
         #: 鮮度チェックの間隔（秒）。0 で「毎回チェックする」
         self.refresh_sec = int(refresh_sec)
         self._cache: Optional[MaterialTable] = None
-        #: キャッシュ時点の (パス, 更新日時, サイズ)
-        self._cache_stamp: Optional[Tuple[str, float, int]] = None
+        #: キャッシュ時点の取得元の印(`_stamp`。**読む前**に取ったもの)
+        self._cache_stamp: Optional[tuple] = None
         self._cache_at = 0.0
         self._cache_at_wall = 0.0
         self._lock = threading.Lock()
@@ -184,13 +199,24 @@ class MaterialRepository:
 
     # ------------------------------------------------------------
     @staticmethod
-    def _stamp(path: str) -> Optional[Tuple[str, float, int]]:
-        """取得元ファイルの (パス, 更新日時, サイズ)。取れなければ None。"""
+    def _stamp(path: str) -> Optional[tuple]:
+        """取得元ファイルの印 (パス, 更新日時, サイズ, 更新日時ns, -wal の (サイズ, 更新日時ns))。
+
+        取れなければ None。**読む前に取る**(統合 1.2.49)。読んだあとに取ると、読んでいる途中に
+        書かれた変更の更新日時を「読んだ内容の印」として控えてしまい、その変更を読み直さなかった。
+        SQLite は WAL のとき変更が ``-wal`` にだけ書かれ、本体の更新日時・大きさが変わらないので、
+        ``-wal`` も印に入れる(無ければ None)。比べるのは ``!=``(どこか 1 つでも違えば読み直す)。
+        """
         try:
             st = os.stat(path)
-            return (os.path.abspath(path), st.st_mtime, st.st_size)
         except OSError:
             return None
+        try:
+            ws = os.stat(path + "-wal")
+            wal = (ws.st_size, ws.st_mtime_ns)
+        except OSError:
+            wal = None
+        return (os.path.abspath(path), st.st_mtime, st.st_size, st.st_mtime_ns, wal)
 
     def _source_path(self) -> str:
         """今まさに読むべき取得元のパス。
@@ -204,6 +230,30 @@ class MaterialRepository:
             return self.accdb_path
         return self.csv_path
 
+    def _source_kind(self) -> str:
+        """`_source_path` の種類("sqlite" / "access" / "csv" / "")。"""
+        path = self._source_path()
+        if not path:
+            return ""
+        if path == self.db_path:
+            return "sqlite"
+        if path == self.accdb_path:
+            return "access"
+        return "csv"
+
+    def preferred_source(self) -> str:
+        """設定でいちばん先に読むことになっている取得元("sqlite" / "access" / "csv" / "")。
+
+        これ以外で計算したら(SQLite に届かず CSV に落ちた等)、計算の返事で知らせる(統合 1.2.49)。
+        """
+        if self.db_path:
+            return "sqlite"
+        if self.prefer_access and AccessBridge.available() and self.accdb_path:
+            return "access"
+        if self.csv_path:
+            return "csv"
+        return ""
+
     def is_stale(self, check_now: bool = False) -> bool:
         """マスタが更新された可能性があるか。
 
@@ -213,7 +263,10 @@ class MaterialRepository:
 
         ``check_now`` を立てると、その間隔を飛ばして**必ず確かめる**。
         「計算」を押した瞬間のように、**古い単重で計算しては困る**場面で使う。
-        （確かめるのは stat 1 回。変わっていなければ読み直さない）
+        SQLite と CSV は **毎回読み直す**(統合 1.2.49)。更新日時と大きさだけでは、値を直しても
+        大きさの変わらない SQLite・更新日時の刻みが粗い共有・WAL(``-wal`` にだけ書かれる)の
+        変更を見逃した。資材重量は十数行の小さな表なので、読み直しても重くない。
+        Access(cscript 経由で数秒かかる)は今までどおり印(stat 1 回)で比べる。
         """
         if self._cache is None:
             return True
@@ -224,6 +277,8 @@ class MaterialRepository:
         # 届かずに直前の内容で動いているあいだは、確かめる時が来るたびに読み直しを試す
         # (届くようになったら「古い内容」を外す)
         if self.serving_stale:
+            return True
+        if check_now and self._source_kind() in ("sqlite", "csv"):
             return True
         return self._stamp(self._source_path()) != self._cache_stamp
 
@@ -242,10 +297,14 @@ class MaterialRepository:
             if use_cache and self._cache is not None \
                     and not self.is_stale(check_now=check_now):
                 return self._cache
-            if use_cache and self._cache is not None:
-                log.info("資材マスタが更新されたため読み直します: %s",
+            before = self._cache
+            table = self._load_locked()
+            # 「計算」「印刷」のたびに読み直すので、記録に残すのは中身が変わったときだけ
+            if before is not None and table is not before \
+                    and before.values() != table.values():
+                log.info("資材マスタの中身が変わっていたので読み直しました: %s",
                          self._source_path())
-            return self._load_locked()
+            return table
 
     def _load_locked(self) -> MaterialTable:
         errors = []
@@ -254,10 +313,11 @@ class MaterialRepository:
         if self.db_path:
             if os.path.exists(self.db_path):
                 try:
+                    stamp = self._stamp(self.db_path)          # 読む前に取る(統合 1.2.49)
                     table = self._load_sqlite(self.db_path)
                     self.last_source = "sqlite"
                     self.last_error = ""
-                    self._remember(table, self.db_path)
+                    self._remember(table, stamp)
                     return table
                 except sqlite3.Error as exc:
                     errors.append("SQLite: %s" % exc)
@@ -268,11 +328,12 @@ class MaterialRepository:
         # 2) Access
         if self.prefer_access and AccessBridge.available() and self.accdb_path:
             try:
+                stamp = self._stamp(self.accdb_path)           # 読む前に取る(統合 1.2.49)
                 fields, records = self.bridge.fetch(self.accdb_path, TABLE_NAME, "")
                 table = MaterialTable(fields, records, source=self.accdb_path)
                 self.last_source = "access"
                 self.last_error = ""
-                self._remember(table, self.accdb_path)
+                self._remember(table, stamp)
                 return table
             except AccessError as exc:
                 errors.append("Access: %s を読めません（%s）" % (self.accdb_path, exc))
@@ -282,13 +343,14 @@ class MaterialRepository:
         if self.csv_path:
             if os.path.exists(self.csv_path):
                 try:
+                    stamp = self._stamp(self.csv_path)         # 読む前に取る(統合 1.2.49)
                     table = self._load_csv(self.csv_path)
                 except (OSError, UnicodeDecodeError, csv.Error) as exc:
                     errors.append("CSV: %s を読めません（%s）" % (self.csv_path, exc))
                 else:
                     self.last_source = "csv"
                     self.last_error = "; ".join(errors)
-                    self._remember(table, self.csv_path)
+                    self._remember(table, stamp)
                     return table
             else:
                 errors.append("CSV: %s が見つかりません" % self.csv_path)
@@ -327,10 +389,11 @@ class MaterialRepository:
         lines.append("届くようになったら、もう一度「計算」を押してください。")
         return "\n".join(lines)
 
-    def _remember(self, table: MaterialTable, path: str) -> None:
+    def _remember(self, table: MaterialTable, stamp: Optional[tuple]) -> None:
+        """読んだ内容を控える。``stamp`` は**読む前**に取った取得元の印。"""
         self._cache = table
         self.serving_stale = False
-        self._cache_stamp = self._stamp(path)
+        self._cache_stamp = stamp
         self._cache_at = time.monotonic()     # 経過判定用
         self._cache_at_wall = time.time()     # 表示用
 
@@ -342,10 +405,15 @@ class MaterialRepository:
         """
         stamp = self._cache_stamp
         fmt = "%Y-%m-%d %H:%M:%S"
+        preferred = self.preferred_source()
         return {
             "source": self.last_source or "",
             "label": SOURCE_LABELS.get(self.last_source, "未読込"),
             "stale": bool(self.serving_stale),
+            # 設定でいちばん先に読む取得元と、それ以外で読んだか(統合 1.2.49)
+            "preferred": preferred,
+            "preferredLabel": SOURCE_LABELS.get(preferred, ""),
+            "fallback": bool(preferred and self.last_source and self.last_source != preferred),
             "path": stamp[0] if stamp else "",
             "asOf": time.strftime(fmt, time.localtime(stamp[1])) if stamp else "",
             "readAt": (time.strftime(fmt, time.localtime(self._cache_at_wall))
@@ -386,7 +454,8 @@ class MaterialRepository:
                        for r in cur.fetchall()]
         finally:
             conn.close()
-        log.info("SQLite から資材マスタを読みました: %s (%d 件)", path, len(records))
+        # 「計算」「印刷」のたびに読むので、ふだんの読みは debug に(統合 1.2.49)
+        log.debug("SQLite から資材マスタを読みました: %s (%d 件)", path, len(records))
         return MaterialTable(fields, records, source=path)
 
     @staticmethod

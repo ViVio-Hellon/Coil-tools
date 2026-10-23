@@ -62,6 +62,13 @@
   </div>
   {% endif %}
 
+  {#- 新しい台帳がある(統合 1.2.49・現場の指摘)。動いている間に取り込み元が変わったら出す。
+      ファイルの大きさと更新時刻を見るだけ(meisai.js の checkNewLedger)。押せば取り込む -#}
+  <div class="banner" id="newLedgerBanner" hidden>
+    <span id="newLedgerText">新しい台帳があります。</span>
+    <button type="button" class="primary" id="btnNewLedgerImport">取り込む</button>
+  </div>
+
   {#- 左に「引く→決める」の3枚、右に「積む→出す」。
       **積み上げは3枚の横に置く。** 上下に離れていると、条番号を
       押したあと目を下へ振ることになる -#}

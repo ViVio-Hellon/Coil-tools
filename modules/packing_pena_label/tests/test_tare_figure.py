@@ -144,8 +144,13 @@ class TarePageTest(unittest.TestCase):
             def all_tare(self):
                 return {1: p}
 
+            # 統合 1.2.49: 風袋計算の画面は、計算したときの資材重量の素性(画面だけ)も控えから読む
+            def get_kv(self, key, default=None):
+                return default
+
         class WF:
             store = Store()
+            _TARE_MATERIAL_KEY = "tare_material"
 
             def load_state(self):
                 from modules.packing_pena_label.app.models import FormState as WorkState
@@ -153,6 +158,10 @@ class TarePageTest(unittest.TestCase):
 
             def tare_is_stale(self, state=None):
                 return False
+
+            # 統合 1.2.49: 止める理由(入力が変わった・資材重量が変わった)を分けて聞くようになった
+            def tare_stale_info(self, state=None):
+                return {"stale": False, "input": False, "material": ""}
 
             @staticmethod
             def visible_slots(state):
@@ -183,8 +192,14 @@ class BreakdownCoilTest(unittest.TestCase):
             def all_tare(self):
                 return data
 
+            # 統合 1.2.49: 計算内容の画面は、計算したときの資材マスタの時点を控えから読む
+            def get_kv(self, key, default=None):
+                return default
+
         class WF:
             store = Store()
+            _TARE_INPUT_KEY = "tare_result_inputs"
+            _TARE_MATERIAL_KEY = "tare_material"
 
         pages = PageRoutes.__new__(PageRoutes)
         pages.wf = WF()

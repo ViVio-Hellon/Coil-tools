@@ -124,6 +124,10 @@ dialog .foot .tools{display:flex; gap:8px; flex:none}
 .banner.danger{border-left-color:var(--danger); background:var(--danger-soft)}
 .banner.ok{border-left-color:var(--ok); background:var(--ok-soft)}
 .banner[hidden]{display:none !important}
+/* ロットの断り書きは2つ並ぶことがある(丈数が入らない理由・途中経過が台帳と違う。統合 1.2.49) */
+#lotNote{white-space:pre-line}
+/* 新しい台帳がある(統合 1.2.49)。押せば取り込む */
+#newLedgerBanner{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
 
 /* ---------- 部品 ---------- */
 .card{

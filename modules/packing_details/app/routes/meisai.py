@@ -240,6 +240,8 @@ def _state(conn) -> dict:
             # 縦割数が上限を超えると丈数が自動で入らない。
             # **理由を画面に出す** ── 入らないだけだと壊れて見える
             "jou_su_note": _jou_su_note(lot),
+            # 途中経過から戻した丈数・前工程実績数が台帳と違う(統合 1.2.49)
+            "ledger_note": session.ledger_note(),
         }
         state["orders"] = [{"order_no": o.order_no, "spec_no": o.spec_no,
                             "customer": o.customer, "deliver_to": o.deliver_to}
@@ -398,6 +400,9 @@ def open_lot():
         board = session.require()
         message = (f"前回の条番号情報を復元しました。"
                    f"（丈数:{board.jou_su} 合計:{sum(board.strands)}条）")
+        # 取り込みで台帳が直っていても、丈数・前工程実績数は途中経過の値に戻る(VBA のとおり)。
+        # 違えば黙らない(統合 1.2.49・現場の指摘)
+        message += session.ledger_note()
     return _ok(conn, message=message)
 
 
@@ -822,7 +827,25 @@ def current_qa_mark():
     業務データは含まないが、紙面と同じくトークンは要る。
     """
     value, snapshot = qa_mark.resolve()
-    return jsonify({"qa_mark": value, "notice": qa_mark.notice(snapshot)})
+    body = {"qa_mark": value, "notice": qa_mark.notice(snapshot)}
+    # その紙がまだ使えるか(作り直し・取り消し・全クリアされていないか)も返す(統合 1.2.49)
+    if request.args.get("slips"):
+        body["slips"] = _check_slips()
+    return jsonify(body)
+
+
+def _check_slips() -> dict:
+    return meisai_service.check_slips(get_db(), request.args.get("slips", "").split(","))
+
+
+@bp.get("/report/slip-check")
+def slip_check():
+    """開いたままの紙面が、まだそのまま刷ってよいか(統合 1.2.49・現場の指摘)。
+
+    紙面が**刷る直前**(「印刷する」・Ctrl+P の `beforeprint`)に聞く。手元の明細出力を
+    引くだけで、共有は見ない(刷る前に待たせない)。`?slips=<管理番号>:<履歴ID>,...`。
+    """
+    return jsonify(_check_slips())
 
 
 @bp.get("/report/<lot_no>/<int:seq_no>")
@@ -998,6 +1021,48 @@ def import_progress():
     return jsonify(state)
 
 
+# 「新しい台帳があります」を確かめるときに待つ秒。共有が遅い・届かないときは、確かめきれない
+# とだけ返す(画面を待たせない)
+NEWER_WAIT_SEC = 3.0
+
+
+@bp.get("/api/import/check")
+def import_check():
+    """前に取り込んだあと、取り込み元が変わったか(統合 1.2.49・現場の指摘)。
+
+    以前は、動いている間は仕掛データを読み直さず、上の帯も取り込んだ時点のまま
+    「新しい台帳がある」とは言わなかった(起動時の自動取り込みだけ)。画面を開いたとき・
+    ロットを入れたとき・前に戻ったとき・数分ごとに、画面がここを聞く。
+
+    **ファイルの大きさと更新時刻を見るだけ**(`data_sync.newer_sources`)。中身は読まない。
+    待つのは `NEWER_WAIT_SEC` まで。取り込み中は聞かない(取り込み終われば分かる)。
+    """
+    with _progress_lock:
+        running = _progress["running"]
+    if running:
+        return jsonify({"ok": True, "newer": [], "checked": False})
+    box: dict = {}
+
+    def look() -> None:
+        # 共有を見に行くのはここだけ(大きさと更新時刻)。手元の記録と比べるのは下で
+        try:
+            box["marks"] = data_sync.source_marks()
+        except Exception as exc:                  # noqa: BLE001 - 帯のために画面を止めない
+            box["error"] = str(exc)
+
+    thread = threading.Thread(target=look, name="details-newer", daemon=True)
+    thread.start()
+    thread.join(NEWER_WAIT_SEC)
+    if "marks" not in box:
+        if "error" in box:
+            log.info("新しい台帳があるか確かめられませんでした: %s", box["error"])
+        return jsonify({"ok": True, "newer": [], "checked": False})
+    newer = data_sync.newer_sources(get_db(), box["marks"])
+    return jsonify({"ok": True, "newer": newer, "checked": True,
+                    "message": ("新しい台帳があります（" + "・".join(newer) + "）。"
+                                if newer else "")})
+
+
 @bp.post("/api/import")
 def run_import():
     """取り込み元から読み直す。
@@ -1029,12 +1094,21 @@ def run_import():
     # かといって黙って読み直すのも駄目で、**「修正する」で手入力した
     # 前工程実績数が消える**(LS4LOT に無いロットではこれが常用手段)。
     # どちらを選ぶかは利用者にしか決められないので、事実だけ伝える。
+    #
+    # (統合 1.2.49・現場の指摘)**一部でも入れ替わったら言う**(以前は全部うまくいったとき
+    # だけで、一部失敗すると黙っていた)。入れ直したときの動きも、実際のとおりに言う:
+    # 途中経過(条番号表示のあと)があれば丈数・前工程実績数は途中経過の値に戻る(VBA の
+    # とおり。台帳の値にするには全クリア)。無ければ台帳の値になる(手で直した数は消える)
     note = ""
     board = session.current()
-    if result.ok and board is not None and board.lot_no:
+    if result.imported and board is not None and board.lot_no:
         note = (f"ロット {board.lot_no} は取り込み前の内容のままです。"
-                "新しい台帳で引き直すには、ロット番号を入れ直してください"
-                "（手で直した前工程実績数は入れ直しになります）。")
+                "新しい台帳で引き直すには、ロット番号を入れ直してください")
+        if history_repo.load_snapshot(conn, board.lot_no) is not None:
+            note += ("（途中経過があるので、丈数・前工程実績数は途中経過の値に戻ります。"
+                     "台帳の値にするには「全クリア」してください）。")
+        else:
+            note += "（手で直した前工程実績数は台帳の値に戻ります）。"
 
     return jsonify({
         "ok": result.ok,

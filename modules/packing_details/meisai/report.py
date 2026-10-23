@@ -73,10 +73,11 @@ VBA は紙がExcelシートだったので、刷る前にセルへ打ち込め�
 """
 from __future__ import annotations
 
+import json
 from typing import Iterable, Optional
 
 from . import config, printing, qa_mark
-from .meisai_service import Output
+from .meisai_service import Output, slip_identity
 
 # 紙面の色 (VBA `RGB(...)`)
 COLOR_QA = "#ff0000"          # RGB(255, 0, 0)
@@ -231,6 +232,21 @@ def _sheet_css() -> str:
     border:1px solid #0e6a72; border-radius:4px; cursor:pointer; }}
   .editbar .print:hover{{ filter:brightness(1.08); }}
 }}
+
+/* 開いたままの紙面が古くなった(作り直し・取り消し・全クリア。統合 1.2.49)。紙面を隠して
+   大きく断る。**印刷のときも**紙面の代わりにこの断りが出る(Ctrl+P で刷られても、古い
+   積み順・重量は紙に出ない)。履歴から作り直した紙面は過去の記録なので、ここに来ない */
+.stale-slip{{ display:none; }}
+body.slip-stale .stale-slip{{ display:block; margin:24px auto; max-width:180mm;
+  padding:24px 28px; border:4px solid #c62828; border-radius:6px; background:#fff3f3;
+  color:#b71c1c; font-family:"Meiryo UI",Meiryo,sans-serif; text-align:center; }}
+body.slip-stale .stale-slip .stale-title{{ font-size:22pt; font-weight:bold; }}
+body.slip-stale .stale-slip .stale-detail{{ margin-top:12px; font-size:12pt; color:#333; }}
+body.slip-stale .sheet, body.slip-stale .editbar{{ display:none !important; }}
+@media print{{
+  body.slip-stale .stale-slip{{ display:block !important; }}
+  body.slip-stale .sheet{{ display:none !important; }}
+}}
 {cols_css}"""
 
 
@@ -349,7 +365,9 @@ EDIT_HINT = (
     "点線の欄に <b>サイズ・LOTNO</b> を書き足せます"
     "（紙面の「寸法」「検番」の行）。空のままなら何も印字しません。"
     "書き足した内容はこの明細に残ります。"
-    ' <button type="button" class="print" onclick="window.print()">印刷する</button>'
+    # 刷る前に、この紙がまだ使えるか聞く(`cptPrint`。統合 1.2.49)。仕掛けが無ければそのまま刷る
+    ' <button type="button" class="print"'
+    ' onclick="window.cptPrint ? window.cptPrint() : window.print()">印刷する</button>'
 )
 
 
@@ -373,9 +391,12 @@ def render(outputs: Iterable[Output], *, title: Optional[str] = None,
     # `resolved` は呼び手が先に読んだもの(`qa_mark.resolve()`)── 同じ値を
     # 明細の履歴にも残すので、2度読んで食い違わせない
     qa, snapshot = resolved if resolved is not None else qa_mark.resolve()
+    items = list(outputs)
+    # 紙面を作ったときの身元。前に戻ったとき・刷る前に、まだ使えるか聞く(統合 1.2.49)
+    slips = [i for i in (slip_identity(o) for o in items) if i]
     return printing.render_html(
-        build_report(outputs, title=title, edit=bool(edit_url), qa=qa),
-        edit_url=edit_url, edit_hint=EDIT_HINT, script=_qa_script(),
+        build_report(items, title=title, edit=bool(edit_url), qa=qa),
+        edit_url=edit_url, edit_hint=EDIT_HINT, script=_qa_script(slips=slips),
         notice=qa_mark.notice(snapshot), badge=badge)
 
 
@@ -460,13 +481,68 @@ def render_history(slips: list[dict], *, current_qa: str, source: str = "shared"
 #    ほかのラインで変えたとき・知らせを取りこぼしたとき(裏で凍結されて
 #    いた等)は、前に戻したときに共有の今の文字を聞き直す ── 古い文字の
 #    まま刷らせない。共有に届かなくなった・戻ったときの断り書きも差し替える
+# 3. **古くなった紙面で刷らせない**(統合 1.2.49・現場の指摘)。前に戻ったときに、その紙が
+#    まだ使えるか(作り直し・取り消し・全クリア・ロットの切り替えで消えていないか)も聞く。
+#    刷る直前(「印刷する」・Ctrl+P の `beforeprint`)にも聞く ── ここは待てないので同期で。
+#    使えなければ紙面を隠して大きく断る(印刷しても断りだけが出る)。聞けなかったとき
+#    (アプリが閉じた等)は止めない。履歴から作り直した紙面は過去の記録なので聞かない
 _QA_SCRIPT = """
 <script>
 (function () {
   var MM = 96 / 25.4, BASE = __BASE__, MIN = __MIN__, FIT = __FIT__ * MM;
   // 履歴から作り直した紙面は、**記録した文字のまま**刷る(いまの文字へ差し替えない)
   var SYNC = __SYNC__;
+  // この紙面を作ったときの身元(`<管理番号>:<履歴ID>`)。履歴の紙面は空
+  var SLIPS = __SLIPS__;
   var CHANNEL = "meisai.print.v1";
+  function token() { return new URLSearchParams(location.search).get("t") || ""; }
+  // 紙面は `<入口>/report/<lot>/<no>` で開く。問い合わせ先も同じ入口の下
+  function root() { return location.pathname.split("/report/")[0]; }
+  var SLIP_QS = SLIPS.length ? "&slips=" + encodeURIComponent(SLIPS.join(",")) : "";
+  var slipCheckedAt = 0;
+  function stale(b) {
+    if (!b || b.valid !== false) return;
+    var box = document.getElementById("staleSlip");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "staleSlip";
+      box.className = "stale-slip";
+      box.setAttribute("role", "alert");
+      document.body.insertBefore(box, document.body.firstChild);
+    }
+    box.textContent = "";
+    var title = document.createElement("div");
+    title.className = "stale-title";
+    title.textContent = b.title || "この紙は作り直されました。開き直してください";
+    box.appendChild(title);
+    if (b.detail) {
+      var detail = document.createElement("div");
+      detail.className = "stale-detail";
+      detail.textContent = b.detail;
+      box.appendChild(detail);
+    }
+    document.body.classList.add("slip-stale");
+  }
+  // 刷る直前に聞く。**同期**(印刷の前の知らせは待ってくれない)。使えなければ false
+  function slipOk() {
+    if (!SLIPS.length) return true;
+    if (document.body.classList.contains("slip-stale")) return false;
+    if (Date.now() - slipCheckedAt < 1500) return true;   // 「印刷する」→ beforeprint の2度聞きを省く
+    try {
+      var x = new XMLHttpRequest();
+      x.open("GET", root() + "/report/slip-check?t=" + encodeURIComponent(token()) + SLIP_QS, false);
+      x.send();
+      if (x.status === 200) {
+        slipCheckedAt = Date.now();
+        var b = JSON.parse(x.responseText);
+        stale(b);
+        return b.valid !== false;
+      }
+    } catch (e) { /* 聞けなければ止めない */ }
+    return true;
+  }
+  window.cptPrint = function () { if (slipOk()) window.print(); };
+  window.addEventListener("beforeprint", function () { slipOk(); });
   function fit(cell) {
     var text = cell.querySelector(".qa-text");
     if (!text) return;
@@ -493,13 +569,17 @@ _QA_SCRIPT = """
     fitAll();
   }
   function sync() {
-    var t = new URLSearchParams(location.search).get("t") || "";
-    // 紙面は `<入口>/report/<lot>/<no>` で開く。問い合わせ先も同じ入口の下
     // (統合版では機能ごとに入口が付く。紙面のURLから組めば入口を知らなくてよい)
-    var root = location.pathname.split("/report/")[0];
-    fetch(root + "/report/qa-mark?t=" + encodeURIComponent(t), { cache: "no-store" })
+    // その紙がまだ使えるかも一緒に聞く(`slips`。統合 1.2.49)
+    fetch(root() + "/report/qa-mark?t=" + encodeURIComponent(token()) + SLIP_QS,
+          { cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (b) { if (b) { apply(b.qa_mark); note(b.notice); } })
+      .then(function (b) {
+        if (!b) return;
+        apply(b.qa_mark);
+        note(b.notice);
+        if (b.slips) { slipCheckedAt = Date.now(); stale(b.slips); }
+      })
       .catch(function () {});
   }
   fitAll();
@@ -520,8 +600,10 @@ _QA_SCRIPT = """
 """
 
 
-def _qa_script(*, sync: bool = True) -> str:
+def _qa_script(*, sync: bool = True, slips: Optional[list[str]] = None) -> str:
+    # 身元は数字・英数字と `:` だけ(`slip_identity`)。`</script>` を作れない形で埋める
     return (_QA_SCRIPT.replace("__SYNC__", "true" if sync else "false")
+            .replace("__SLIPS__", json.dumps(list(slips or []) if sync else []))
             .replace("__BASE__", f"{QA_FONT_PT:g}")
             .replace("__MIN__", f"{QA_MIN_FONT_PT:g}")
             .replace("__FIT__", f"{_qa_fit_mm():.2f}"))

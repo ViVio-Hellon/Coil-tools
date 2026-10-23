@@ -524,6 +524,66 @@ def find_output(conn: sqlite3.Connection, lot_no: str,
     return _to_output(row) if row else None
 
 
+# ==================================================================
+# 開いたままの紙面がまだ使えるか (統合 1.2.49・現場の指摘)
+# ==================================================================
+def slip_identity(output: Output) -> str:
+    """紙面を作ったときの身元。`<管理番号>:<履歴ID>`。行が無い(試験の作り物)なら空。
+
+    出力済み修正で出し直すと行が作り直されて `管理番号` も `履歴ID` も変わる。全クリア・
+    ロットの切り替えでは行が消える。どちらも、開いたままの紙面の身元が見つからなくなる。
+    """
+    if not output.row_id:
+        return ""
+    return f"{output.row_id}:{output.history_id}"
+
+
+def check_slips(conn: sqlite3.Connection, identities) -> dict:
+    """開いたままの紙面(`slip_identity` の並び)が、まだそのまま刷ってよいか。
+
+    以前は、No1 の紙面のタブを残したまま「出力済み修正」で積み直す・全クリア・ロットの
+    切り替えをしたあと、古いタブで刷ると、もう使わない積み順・重量の紙が出た(紙面のタブは
+    右上の文字しか聞き直さなかった)。**手元の明細出力を引くだけ**(共有は見ない)。
+
+    戻り値 `{"valid": bool, "title": 大きく出す一言, "detail": どの紙か}`。
+    """
+    from .slip_history import STATE_CANCELLED, STATE_REPLACED
+
+    gone: list[tuple[str, str]] = []
+    for item in identities or []:
+        row_text, _, history_id = str(item).strip().partition(":")
+        if not row_text.isdigit():
+            continue
+        row = conn.execute("SELECT 履歴ID FROM 明細出力 WHERE 管理番号 = ?",
+                           (int(row_text),)).fetchone()
+        if row is not None and (not history_id or str(row[0] or "") == history_id):
+            continue
+        name, state = "", ""
+        if history_id:
+            found = conn.execute("SELECT ロット番号, No, 状態 FROM 明細履歴 WHERE 送信ID = ?",
+                                 (history_id,)).fetchone()
+            if found is not None:
+                name, state = f"{found[0]}-No{found[1]}", str(found[2] or "")
+        gone.append((name, state))
+    if not gone:
+        return {"valid": True, "title": "", "detail": ""}
+    names = "・".join(n for n, _ in gone if n) or "この紙"
+    states = {st for _, st in gone}
+    if states == {STATE_REPLACED}:
+        title = "この紙は作り直されました。開き直してください"
+        detail = (f"{names} は「出力済み修正」で積み直されました。この画面は前の中身なので"
+                  "刷れません。出力済みの一覧から選んで「印刷」で開き直してください。")
+    elif states == {STATE_CANCELLED}:
+        title = "この紙は取り消されました"
+        detail = f"{names} は「全クリア」で取り消されました。この紙は刷りません。"
+    else:
+        title = "この紙は作り直されました(または取り消されました)。開き直してください"
+        detail = (f"{names} は作り直し・取り消し・ロットの切り替えで、もうありません。"
+                  "この画面は前の中身なので刷れません。")
+    log.info("check_slips: 古い紙面を止めました (%s)", names)
+    return {"valid": False, "title": title, "detail": detail}
+
+
 def delete_lot_outputs(conn: sqlite3.Connection, lot_no: str) -> int:
     """そのロットの出力を全部消す (VBA `DeleteLotSheets`)。
 

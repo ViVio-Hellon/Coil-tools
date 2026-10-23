@@ -36,6 +36,68 @@ NO_AUTOPRINT_ENV = "COIL_PACKING_TOOLS_E2E_NO_AUTOPRINT"
 _STALE_BLOCKED = "入力が変わっています。メイン画面で「計算」を実行してください"
 
 
+#: 資材重量が計算のあとに変わったときの、印刷ボタンの説明(統合 1.2.49)
+_MATERIAL_BLOCKED = "資材重量が計算のあとに変わりました。メイン画面で「計算」を実行してください"
+#: 型番が空のときの、印刷ボタンの説明(統合 1.2.49)
+_KATABAN_BLOCKED = "型番が空です。マスタ管理の「ラベル台紙一覧」で型番を入れてください"
+#: 全サイズで型番マスタが変わったときの、印刷ボタンの説明(統合 1.2.49)
+_ALLSIZE_BLOCKED = "型番マスタが変わりました。全サイズの画面で「決定」し直してください"
+
+
+def _stop_print_note(title_html: str, why_html: str, hide_selector: str, paper_html: str) -> str:
+    """印刷を止める知らせ(画面)と、Ctrl+P で刷られたときに紙へ出す理由(統合 1.2.49 で共通にした)。
+
+    ボタンを消すだけでは Ctrl+P / メニューから刷れてしまうので、印刷では
+    `hide_selector` を消して理由を紙に出す。
+    """
+    return ('<div class="card no-print stalebox">'
+            f'<b>{title_html}</b><br>'
+            + why_html +
+            '<div class="btn-row">'
+            '<button type="button" class="btn primary" data-close-tab>'
+            'このタブを閉じる(本ツールのタブへ戻る)</button>'
+            '</div></div>'
+            '<style>@media print{'
+            f'{hide_selector}{{display:none !important}}'
+            '.stopprint{display:block !important}'
+            '}</style>'
+            f'<div class="stopprint">{paper_html}</div>')
+
+
+def _material_print_note(message: str, hide_selector: str) -> str:
+    """資材重量が計算のあとに変わったので、印刷を止める知らせ(統合 1.2.49・現場の指摘)。
+
+    以前は入力(検番・重量・本数)しか見ていなかったので、資材重量を直したあとも前の NW・GW の
+    ラベル・風袋計算が刷れた。どの資材が・何から何に変わったかを出す。
+    """
+    return _stop_print_note(
+        "資材重量が計算のあとに変わりました。印刷を止めています。",
+        esc(message) + '<br>このまま刷ると<b>前の資材重量で出した NW・GW・風袋の紙</b>になります。'
+        '<b>メイン画面で「計算」を実行してください。</b>',
+        hide_selector,
+        '資材重量が計算のあとに変わったため、印刷できません。<br>'
+        'メイン画面で「計算」を実行してから印刷してください。')
+
+
+def _material_line(material: dict) -> str:
+    """「資材重量: 取得元 何時時点(古い内容)」(画面だけ。紙には刷らない。統合 1.2.49)。"""
+    if not material:
+        return ""
+    when = material.get("asOf") or material.get("readAt") or ""
+    stale = material.get("stale")
+    fallback = material.get("fallback")
+    text = "資材重量: %s %s時点" % (material.get("label", ""), when)
+    if stale:
+        text += "(古い内容)"
+    elif fallback:
+        text += "(%s に届かず)" % material.get("preferredLabel", "")
+    cls = "hint no-print" + (" logstale" if stale or fallback else "")
+    style = ' style="color:var(--err)"' if stale or fallback else ""
+    return (f'<div class="{cls}"{style}>{esc(text)}'
+            + (f'　計算: {esc(material.get("calcAt", ""))}' if material.get("calcAt") else "")
+            + '</div>')
+
+
 def _stale_print_note(why_html: str, hide_selector: str) -> str:
     """入力が変わったまま(計算し直していない)の印刷を止める知らせ(ラベル・風袋計算で共通)。
 
@@ -413,31 +475,53 @@ class PageRoutes:
         foot = (f'<div class="printfoot"><span></span>'
                 f'<span>{esc(today)}印刷</span></div>')
         # 入力を変えて計算し直していないなら刷らせない(ラベルと同じ決まり。統合 1.2.26)。
-        # 見出しはいまの検番、中身は前の計算 ── 別々のコイルの値が混ざった紙になる
-        stale = self.wf.tare_is_stale(state)
-        stale_note = _stale_print_note(
+        # 見出しはいまの検番、中身は前の計算 ── 別々のコイルの値が混ざった紙になる。
+        # 資材重量が計算のあとに変わった場合も止める(統合 1.2.49・現場の指摘)
+        info = self.wf.tare_stale_info(state)
+        stale = info["stale"]
+        stale_note = (_stale_print_note(
             "検査番号・サイズの見出しはいまの入力ですが、<b>風袋・NW・GW は前に「計算」を"
             "押したときのもの</b>です。",
-            ".blocks") if stale else ""
+            ".blocks") if info["input"] else "") + (
+            _material_print_note(info["material"], ".blocks") if info["material"] else "")
         if stale and print_view:
             # 止めた印刷を記録に残す(混ざった紙を止めた証拠。統合 1.2.39)
-            self.wf.record_print("/tare/print", {}, stopped=True)
+            self.wf.record_print("/tare/print", {}, stopped=True,
+                                 reason=self._stop_reason(info))
         tools = ('' if print_view else
                  '<div class="btn-row no-print" style="margin-bottom:10px">'
                  f'<a class="btn" href="{self.base}/tare/print" target="_blank" rel="noopener">'
                  '印刷ビューを開く</a>'
-                 + ('<button class="btn" disabled title="入力が変わっています。'
-                    'メイン画面で「計算」を実行してください">このまま印刷（停止中）</button>'
+                 + (f'<button class="btn" disabled title="{esc(self._blocked_text(info))}">'
+                    'このまま印刷（停止中）</button>'
                     if stale else
                     '<button class="btn" onclick="window.print()">このまま印刷</button>')
                  + '</div>')
         # 画面では梱包ごとに図(断面図・重さの内訳)を出すので、1 列に並べて図を大きく見せる
         grid = "blocks" if print_view else "blocks blocks--fig"
-        body = (stale_note + head + warn + tools + f'<div class="{grid}">' + "".join(blocks)
+        # どの取得元の、いつ時点の資材重量で計算したか(画面だけ。統合 1.2.49)
+        mline = _material_line(self.wf.store.get_kv(self.wf._TARE_MATERIAL_KEY, {}) or {})
+        body = (stale_note + head + mline + warn + tools + f'<div class="{grid}">' + "".join(blocks)
                 + '</div>' + foot)
         script = _autoprint_script() if print_view and not stale else ""
         return self._shell("風袋計算", body, "tare", script, print_only=print_view,
-                           print_blocked=(_STALE_BLOCKED if stale and print_view else ""))
+                           print_blocked=(self._blocked_text(info) if stale and print_view else ""))
+
+    @staticmethod
+    def _stop_reason(info: dict) -> str:
+        """止めた印刷の記録に残す理由(統合 1.2.49)。入力が変わっただけなら空(記録側の決まり文句)。"""
+        if info.get("material"):
+            return "資材重量が計算のあとに変わったので、印刷を止めた(" + info["material"] + ")"
+        return ""
+
+    @staticmethod
+    def _blocked_text(info: dict) -> str:
+        """印刷ボタンを止めるときの説明(統合 1.2.49)。"""
+        if info.get("input"):
+            return _STALE_BLOCKED
+        if info.get("material"):
+            return _MATERIAL_BLOCKED
+        return _STALE_BLOCKED
 
     def _report_head(self, title: str, state) -> str:
         sizes = " / ".join([s for s in (state.lbl_size1, state.lbl_size2) if s])
@@ -481,11 +565,20 @@ class PageRoutes:
                 '<br>(VBA の羅列計算は 8 項目・ハードボード無しの別の計算でしたが、2026.09 に'
                 '風袋計算へそろえました。以前この注記は古い説明のままでした)</div>')
 
+        # 計算のあとに資材重量が変わっていたら刷らせない(風袋計算・ラベルと同じ。統合 1.2.49)
+        info = self.wf.list_stale_info()
+        stale = info["stale"]
+        stale_note = _material_print_note(info["material"], ".scroll") if stale else ""
+        if stale and print_view:
+            self.wf.record_print("/list/print", {}, stopped=True, reason=self._stop_reason(info))
         tools = ('' if print_view else
                  '<div class="btn-row no-print" style="margin-bottom:10px">'
                  f'<a class="btn" href="{self.base}/list/print" target="_blank" rel="noopener">'
                  '印刷ビューを開く</a>'
-                 '<button class="btn" onclick="window.print()">このまま印刷</button></div>')
+                 + (f'<button class="btn" disabled title="{esc(_MATERIAL_BLOCKED)}">'
+                    'このまま印刷（停止中）</button>' if stale else
+                    '<button class="btn" onclick="window.print()">このまま印刷</button>')
+                 + '</div>')
 
         today = datetime.date.today().strftime("%Y.%m.%d")
         foot = (f'<div class="printfoot"><span>{esc(data.get("footer", ""))}</span>'
@@ -493,12 +586,13 @@ class PageRoutes:
         head = (f'<div class="report-head"><div class="ttl">羅列計算（1〜50本）</div>'
                 f'<div class="report-meta">巾: {esc(data.get("width", ""))}mm　'
                 f'{esc(data.get("footer", ""))}</div></div>')
-        body = (head + warn + note + tools +
+        body = (stale_note + head + _material_line(data.get("material") or {}) + warn + note + tools +
                 f'<div class="scroll"><table class="tbl"><thead><tr>{heads}</tr></thead>'
                 f'<tbody>{"".join(trs)}</tbody></table></div>' + foot)
         script = _autoprint_script() \
-            if print_view else ""
-        return self._shell("羅列計算", body, "list", script, print_only=print_view)
+            if print_view and not stale else ""
+        return self._shell("羅列計算", body, "list", script, print_only=print_view,
+                           print_blocked=(self._blocked_text(info) if stale and print_view else ""))
 
     # ============================================================ 計算内訳
     def breakdown(self, coil: Optional[int] = None) -> str:
@@ -560,7 +654,27 @@ class PageRoutes:
                 f'（<b>{esc(p["coilHeightDiffMm"])}mm 低い</b>）。<br>'
                 f'バンドの締結代ぶん低くしています。</div>')
 
+        # 計算したときの資材マスタの時点と、いまのマスタと違う資材(統合 1.2.49・現場の指摘)。
+        # 下の「資材マスタ」はいまの内容なので、計算のあとに直すと、前の計算式といまの単重が並んで
+        # 食い違って見えた
+        used = (self.wf.store.get_kv(self.wf._TARE_INPUT_KEY) or {}).get("material") or {}
+        mat = self.wf.store.get_kv(self.wf._TARE_MATERIAL_KEY, {}) or {}
+        when = mat.get("asOf") or mat.get("readAt") or ""
+        mat_note = ""
+        if mat:
+            mat_note = (f'<div class="hint">計算したときの資材マスタ: {esc(mat.get("label", ""))} '
+                        f'{esc(when)}時点{"(古い内容)" if mat.get("stale") else ""}'
+                        f'　計算: {esc(mat.get("calcAt", ""))}</div>')
+        now_print = self.wf._current_material_print() if used.get("hash") else None
+        if now_print and now_print["hash"] != used.get("hash"):
+            diffs = self.wf.material_diff(used.get("values") or {}, now_print["values"])
+            mat_note += ('<div class="card stalebox"><b>いまの資材マスタと違う資材があります。</b>'
+                         'この画面の重量・計算式は計算したときの資材重量です。下の「資材マスタ」は'
+                         'いまの内容です。<br>' + "<br>".join(esc(d) for d in diffs)
+                         + '<br>ラベル・風袋計算の印刷は止めています。'
+                         'メイン画面で「計算」を実行してください。</div>')
         body = (f'<div class="card"><h2>計算内容（表記用）— {esc(p["title"])}</h2>'
+                f'{mat_note}'
                 f'<div class="hint">巾 {esc(p["width"])}mm / 外径 {esc(p["tempDiameter"])} '
                 f'/ 半径 {esc(p["halfDiameter"])} / 外周 {esc(p["gai"])}m / '
                 f'コイル高さ {esc(p["coilHeightMm"])}mm / 梱包高さ {esc(p["taDisplay"])}mm / '
@@ -569,7 +683,7 @@ class PageRoutes:
                 f'<div class="btn-row no-print">{tabs}</div>'
                 f'<table class="tbl"><thead><tr><th>資材</th><th>重量(kg)</th>'
                 f'<th>計算式</th></tr></thead><tbody>{rows}</tbody></table></div>'
-                f'<div class="card"><h2>資材マスタ</h2>'
+                f'<div class="card"><h2>資材マスタ（いまの内容）</h2>'
                 f'<div id="matList" class="hint">読込中…</div></div>')
         script = ("<script>fetch(pplUrl('/api/materials'),{headers:pplHeaders()})"
                   ".then(r=>r.json()).then(j=>{"
@@ -589,7 +703,8 @@ class PageRoutes:
         # 一覧も印刷ビューも、開いた時点のマスタで出す
         self.wf.refresh_label_sheets(force=True)
         master = self.wf.master
-        stale = self.wf.calc_is_stale()
+        info = self.wf.calc_stale_info()
+        stale = info["stale"]
         if not ob_list:
             cards = []
             for cfg in master.all():
@@ -613,13 +728,20 @@ class PageRoutes:
                        else (' / <span class="off">印刷（停止中）</span>'
                              if filled else '')) + '</td></tr>')
             warn = ''
-            if stale:
+            if info["input"]:
                 warn = ('<div class="card stalebox">'
                         '<b>入力が変わっています。印刷を止めています。</b>'
                         'ラベルの <b>本数・高さ・NW・GW</b> は前回「計算」した'
                         'ときのものです。'
                         f'<a href="{self.base}/">メイン画面</a>で「計算」を実行してください。'
                         '</div>')
+            if info["material"]:
+                # 資材重量が計算のあとに変わった(統合 1.2.49・現場の指摘)
+                warn += ('<div class="card stalebox">'
+                         '<b>資材重量が計算のあとに変わりました。印刷を止めています。</b><br>'
+                         + esc(info["material"]) +
+                         f'<br><a href="{self.base}/">メイン画面</a>で「計算」を実行してください。'
+                         '</div>')
             body = (warn + '<div class="card"><h2>ラベル台紙一覧</h2>'
                     '<table class="tbl"><thead><tr><th>obIdx</th><th>シート名</th>'
                     '<th>型番</th><th>データ行</th><th>追加行</th><th>検査番号</th>'
@@ -661,8 +783,9 @@ class PageRoutes:
                 f'<td class="num">{esc(c["gw"])}</td></tr>' for c in v["coilInfo"])
             sections.append(
                 f'<div class="card"><h2>{esc(cfg["sheetName"])}'
+                # 型番はいまのマスタの値(刷る型番)。重量反映のときに控えた型番ではない(統合 1.2.49)
                 f'（検番 {esc(v["header"]["kensaNo"])} / 重量 {esc(v["printHeader"]["weight"])}kg '
-                f'/ 型番 {esc(v["header"]["kataban"])}）</h2>'
+                f'/ 型番 {esc(v["printHeader"]["kataban"] or "空(刷りません)")}）</h2>'
                 f'<table class="tbl" style="max-width:520px"><thead><tr><th>行</th>'
                 f'<th>本数</th><th>高さ</th><th>NW</th><th>GW</th></tr></thead>'
                 f'<tbody>{ci}</tbody></table>'
@@ -753,12 +876,16 @@ class PageRoutes:
 
         blocks: List[dict] = []
         total = 0
-        stale = False
+        info = {"stale": False, "input": False, "material": ""}
+        no_kataban: List[str] = []
         for ob in ob_list:
             v = self.wf.label_view(ob)
             if not v or not v["labels"]:
                 continue
-            stale = stale or bool(v.get("stale"))
+            info["input"] = info["input"] or bool(v.get("staleInput"))
+            info["material"] = info["material"] or v.get("staleMaterial") or ""
+            if v.get("katabanMissing"):
+                no_kataban.append((v.get("printHeader") or {}).get("sizeName", "") or str(ob))
             labs = [{
                 "kensaNo": l["kensaNo"], "coilNo": l["coilNo"],
                 "kataban": l["kataban"], "weight": l["weight"],
@@ -781,14 +908,31 @@ class PageRoutes:
         # 値は VBA どおりのままにし、刷る前に気付けるようにする。
         # 食い違っている間は **印刷させない**（2026.09 決定）。
         # 出荷ラベルなので、気付かずに刷れてしまう余地を残さない。
-        stale_note = _stale_print_note(
+        # 資材重量が計算のあとに変わった・型番が空、も止める(統合 1.2.49・現場の指摘)
+        info["stale"] = bool(info["input"] or info["material"])
+        stale = info["stale"] or bool(no_kataban)
+        stale_note = (_stale_print_note(
             'ヘッダー帯の <b>本数・高さ・NW・GW</b> は「計算」を押したときの'
             'ものです。検番・重量だけが新しくなっています。',
-            ".sheet") if stale else ""
+            ".sheet") if info["input"] else "") + (
+            _material_print_note(info["material"], ".sheet") if info["material"] else "")
+        reason = self._stop_reason(info)
+        if no_kataban:
+            # 型番が空なら刷らない。以前は重量反映のときに控えた型番(前の型番)へ逃げて刷れた
+            why = ("型番が空です(%s)。ラベル台紙一覧と size_master.json の型番が両方とも空なので、"
+                   "印刷を止めています。" % "、".join(no_kataban))
+            stale_note += _stop_print_note(
+                "型番が空です。印刷を止めています。",
+                esc(why) + '<br><b>設定 → マスタ管理の「ラベル台紙一覧」で型番を入れてください。</b>',
+                ".sheet",
+                "型番が空のため、印刷できません。<br>ラベル台紙一覧で型番を入れてから印刷してください。")
+            reason = (reason + " / " if reason else "") + "型番が空なので、印刷を止めた(" + why + ")"
         if stale and not guides:
             # 止めた印刷を記録に残す(混ざったラベルを止めた証拠。統合 1.2.39。枠線の確認は除く)
             self.wf.record_print("/labels/print", {"ob": [",".join(map(str, ob_list))]},
-                                 stopped=True)
+                                 stopped=True, reason=reason)
+        blocked = (self._blocked_text(info) if info["stale"] else
+                   _KATABAN_BLOCKED if no_kataban else "")
 
         font_css = self._barcode_font_css()
         pages = LS.render_blocks(
@@ -808,9 +952,9 @@ class PageRoutes:
                 '刷ったものがラベルからずれるときは'
                 f'<a href="{self.base}/labels/calibration">位置合わせ</a>で一度だけ直してください'
                 '（「左へ 2.5mm ずれている」のように入れるだけ。以後ずっと効きます）。</p>'
-                '<div class="btn-row">'
-                + ('<button class="btn" disabled title="入力が変わっています。'
-                   'メイン画面で「計算」を実行してください">印刷する（停止中）</button>'
+                + _material_line(self.wf.store.get_kv(self.wf._TARE_MATERIAL_KEY, {}) or {})
+                + '<div class="btn-row">'
+                + (f'<button class="btn" disabled title="{esc(blocked)}">印刷する（停止中）</button>'
                    if stale else
                    '<button class="btn" onclick="window.print()">印刷する</button>')
                 + f'<a class="btn" href="{self.base}/labels/print?ob={",".join(map(str, ob_list))}'
@@ -819,7 +963,7 @@ class PageRoutes:
                 '</div></div>')
         return self._shell("ラベル印刷",
                            stale_note + note + font_css + pages, "labels", print_only=True,
-                           print_blocked=_STALE_BLOCKED if stale else "")
+                           print_blocked=blocked)
 
     def label_calibration(self) -> str:
         """試し刷りで位置を合わせる画面。
@@ -1242,6 +1386,9 @@ class PageRoutes:
                                '<div class="empty">サイズが指定されていません。</div>', "all",
                                print_only=True)
         n1, n2 = sheet_names(combo)
+        # 決定したあとに型番マスタが変わっていたら刷らせない(統合 1.2.49・現場の指摘)。
+        # 印刷は決定したときに控えた型番で刷るので、前の型番のラベルになる
+        drift = svc.kataban_drift(combo)
         # バーコードは指定サイズのラベルと同じ描き方(既定は SVG。フォントに頼らない)。
         # 以前は「Libre Barcode 39」の字形に頼った文字で、そのフォントが無い PC では
         # *型番* の文字がそのまま刷られていた(統合 1.2.16 の検証で見つけた)
@@ -1300,9 +1447,21 @@ class PageRoutes:
             return self._shell("全サイズ印刷",
                                '<div class="empty">重量インプットがありません。</div>', "all",
                                print_only=True)
-        script = _autoprint_script()
-        return self._shell("全サイズ印刷", self._barcode_font_css() + "".join(blocks), "all",
-                           script, print_only=True)
+        note = ""
+        if drift:
+            note = _stop_print_note(
+                "型番マスタが変わりました。印刷を止めています。",
+                esc(drift) + '<br>このまま刷ると<b>前の型番のラベル</b>になります。'
+                '<b>全サイズの画面で「決定」し直してください。</b>',
+                ".labelsheet",
+                "型番マスタが変わったため、印刷できません。<br>"
+                "全サイズの画面で「決定」し直してから印刷してください。")
+            self.wf.record_print("/all-size/print", {"combo": [combo]}, stopped=True,
+                                 reason="型番マスタが決定のあとに変わったので、印刷を止めた(" + drift + ")")
+        script = "" if drift else _autoprint_script()
+        return self._shell("全サイズ印刷", note + self._barcode_font_css() + "".join(blocks), "all",
+                           script, print_only=True,
+                           print_blocked=_ALLSIZE_BLOCKED if drift else "")
 
     # ============================================================ 設定
     def settings(self) -> str:
@@ -2800,7 +2959,8 @@ class PageRoutes:
         # 「単位質量 × 係数」の 係数 が何を表すかはコードから読み取れない。
         # 全件 1 なら実質未使用と分かるので、ここで見えるようにしておく。
         try:
-            table = self.wf.materials.load()
+            # 診断はいまの内容で(鮮度チェックの間隔に隠れない。統合 1.2.49)
+            table = self.wf.materials.load(check_now=True)
             odd = ["%s=%s" % (name, coef)
                    for name, coef in table.coefficients()
                    if (coef or "").strip() not in ("", "1", "1.0", "1.00")]

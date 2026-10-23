@@ -392,10 +392,12 @@ def _order_label(source: Source, sort: str, sort_dir: str, default: str = "") ->
 def browse(source_key: str = "", table: str = "", *, query: str = "",
            sort: str = "", sort_dir: str = "asc", limit: int = ROW_LIMIT,
            timeout: float = READ_WAIT_SEC) -> View:
-    """見るファイルの表の一覧と、選んだ表の1ページ。**共有から直に読む。**
+    """見るファイルの表の一覧と、選んだ表の1ページ。**開くたびに共有の今の中身を読む。**
 
-    写しではなく元を読むのは、このアプリが書いた履歴や、総合ツールで直した
-    マスタが**本当に入ったか**をここで確かめられるようにするため。
+    読むときは、ほかの取り込み元と同じく手元へ写してから開く(`source_db` →
+    `common/source_copy.py`。統合 1.2.28)。中身が変わっていれば写し直すので、このアプリが
+    書いた履歴や、総合ツールで直したマスタが**本当に入ったか**をここで確かめられる。
+    (統合 1.2.49 で説明を直した: 以前は「共有から直に読む」と書いていたが、今は写しを読む)
     """
     source = source_of(source_key)
     folder = _folder_of(source)
@@ -411,9 +413,11 @@ def browse(source_key: str = "", table: str = "", *, query: str = "",
         view = blank()
         path = _find(source, folder)
         view.path = str(path)
+        # 目印は**開く前に**取る(開いたあとで取ると、その間に書かれた分の行数を古いまま覚える)
+        stamp = _stamp(path)
         conn = _open(path)
         try:
-            _fill(conn, source, view, table, sort, max(1, int(limit)), _stamp(path))
+            _fill(conn, source, view, table, sort, max(1, int(limit)), stamp)
         finally:
             conn.close()
         return view
@@ -438,20 +442,17 @@ def browse(source_key: str = "", table: str = "", *, query: str = "",
 
 # 表ごとの行数の控え。**ファイルが変わっていなければ数え直さない**(並べ替え・
 # 絞り込みのたびに全部の表を数えると、共有の上ではそのぶん待たせる)。
-# 変わったかどうかは更新時刻と大きさで見る(書かれれば必ずどちらかが変わる)
+# 変わったかどうかは本体と `-wal` `-journal` の大きさと更新時刻で見る(統合 1.2.49。
+# 以前は本体だけを見ていたので、WAL で `-wal` にだけ書かれた行を数え直さなかった)
 _counts_lock = threading.Lock()
-_counts_cache: dict[str, tuple[tuple[int, int], dict[str, int]]] = {}
+_counts_cache: dict[str, tuple[tuple, dict[str, int]]] = {}
 
 
-def _stamp(path: Path) -> Optional[tuple[int, int]]:
-    try:
-        st = path.stat()
-    except OSError:
-        return None
-    return (st.st_mtime_ns, st.st_size)
+def _stamp(path: Path) -> Optional[tuple]:
+    return source_db.file_stamp(path)
 
 
-def _counts(conn: sqlite3.Connection, path: str, stamp: Optional[tuple[int, int]],
+def _counts(conn: sqlite3.Connection, path: str, stamp: Optional[tuple],
             names: list[str]) -> dict[str, int]:
     with _counts_lock:
         cached = _counts_cache.get(path)
@@ -466,7 +467,7 @@ def _counts(conn: sqlite3.Connection, path: str, stamp: Optional[tuple[int, int]
 
 
 def _fill(conn: sqlite3.Connection, source: Source, view: View, wanted: str,
-          sort: str, limit: int, stamp: Optional[tuple[int, int]] = None) -> None:
+          sort: str, limit: int, stamp: Optional[tuple] = None) -> None:
     names = _ordered(source, _table_names(conn))
     counts = _counts(conn, view.path, stamp, names)
     view.tables = [TableInfo(n, counts[n], TABLE_NOTES.get((source.key, n), ""))

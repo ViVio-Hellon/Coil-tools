@@ -136,7 +136,11 @@ CREATE TABLE IF NOT EXISTS 取り込み記録 (
     -- 取り込み元の `_更新情報` にある作成日時。画面に
     -- 「いつ時点の台帳か」を出すために持つ(LS4LOT には無いので空)
     元作成日時   TEXT NOT NULL DEFAULT '',
-    件数        INTEGER NOT NULL DEFAULT 0
+    件数        INTEGER NOT NULL DEFAULT 0,
+    -- 読む前に取った元ファイルの目印(本体・-wal・-journal の大きさと更新時刻)。
+    -- **違えば変わった**と見る(統合 1.2.49。`data_sync.needs_import`)。
+    -- 列を足したので `db._ADDED_COLUMNS` にも書いてある
+    目印        TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_torikomi_file ON 取り込み記録(ファイル);
 

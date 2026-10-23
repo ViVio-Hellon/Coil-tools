@@ -33,7 +33,7 @@ def _args(source: dict) -> dict:
 
 @bp.get("/api/master/browse")
 def browse():
-    """表の一覧と、選んだ表の中身(1ページ)。**共有から直に読む。**"""
+    """表の一覧と、選んだ表の中身(1ページ)。**開くたびに共有の今の中身を(手元へ写してから)読む。**"""
     view = master_browse.browse(request.args.get("source", ""),
                                 request.args.get("table", ""), **_args(request.args))
     body = view.to_dict()
