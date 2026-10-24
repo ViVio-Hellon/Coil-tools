@@ -197,14 +197,14 @@ def main() -> int:
             print(f"[NG] exe が先に終わりました(終了コード {app.returncode})")
             ok = False
             break
-        logs = sorted((work / "logs").glob("コイル梱包ツール_*.log"))
+        logs = sorted((work / "logs" / "coilpacking").glob("coilpacking_*.log"))
         text = logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
         match = footprint.search(text)
         if match:
             seen = match.group(0)
             break
         time.sleep(0.5)
-    logs = sorted((work / "logs").glob("*.log"))
+    logs = sorted((work / "logs").rglob("*.log"))
     if seen:
         print(f"[OK] 画面が Python から届きました({time.monotonic() - started:.1f}秒): {seen}")
         text = logs[-1].read_text(encoding="utf-8", errors="replace")

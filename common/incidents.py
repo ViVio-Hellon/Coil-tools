@@ -6,8 +6,10 @@ r"""エラーの記録 ── なぜなぜ分析のために「そのときの�
 ログ(1日1ファイル)には何でも流れてくるので、あとから「13日の 10時ごろのあのエラー」を
 探すのは骨が折れる。そこで、**エラーが起きたらその場で1件のファイル**を作る:
 
-    <ログの置き場所>\incidents\コイル梱包ツール_<PC名>_E20261001-104512-3F9A.md
-    (統合 1.2.51 からファイル名にツール名と PC 名を入れた。前は E20261001-104512-3F9A.md)
+    <ログの出力パス>\coilpacking\incidents\coilpacking_なぜなぜ_<PC名>_E20261001-104512-3F9A.md
+    (統合 1.2.53 から。日報複合ツールの決まり「<ツールID>_<種類>_<PC名>_…」に合わせた。
+     前は 1.2.50 まで E….md、1.2.51〜1.2.52 は コイル梱包ツール_<PC名>_E….md。前の物も読めて、
+     残す日数を過ぎたら消える。もう書かない)
 
 中身はなぜなぜ分析の順に並べる:
 
@@ -46,6 +48,8 @@ from . import logging_utils
 log = logging.getLogger("coil_packing_tools.incidents")
 
 FOLDER = "incidents"
+#: ファイル名の種類(`<ツールID>_なぜなぜ_<PC名>_<番号>.md`)
+KIND = "なぜなぜ"
 ID_RE = re.compile(r"^E\d{8}-\d{6}-[0-9A-F]{4}$")
 
 #: 同じ内容の画面のエラーを1件にまとめる時間(秒)
@@ -72,32 +76,55 @@ def folder() -> Path:
     return logging_utils.log_dir() / FOLDER
 
 
-#: ファイル名から番号を取り出す(いまの名前・前の名前のどちらでも)
-_NAME_RE = re.compile(r"(?:^|_)(E\d{8}-\d{6}-[0-9A-F]{4})\.md$")
+_ID = r"(E\d{8}-\d{6}-[0-9A-F]{4})"
 
 
 def file_name(eid: str) -> str:
-    """1件のファイル名: `<ツール名>_<PC名>_<番号>.md`(取り出しても、どのツール・どの PC の記録か分かる)。"""
-    return f"{logging_utils.file_prefix()}_{eid}.md"
+    """1件のファイル名: `<ツールID>_なぜなぜ_<PC名>_<番号>.md`(取り出しても、どのツール・どの PC の記録か分かる)。"""
+    return f"{logging_utils.file_prefix(KIND)}_{eid}.md"
+
+
+def _own_id(name: str) -> str:
+    """この端末の、いまの名前の記録なら番号。"""
+    m = re.match(rf"^{re.escape(logging_utils.file_prefix(KIND))}_{_ID}\.md$", name)
+    return m.group(1) if m else ""
+
+
+def _legacy_id(name: str) -> str:
+    """前の名前(`E….md`・`コイル梱包ツール_<この PC>_E….md`)の記録なら番号。"""
+    m = (re.match(rf"^{_ID}\.md$", name)
+         or re.match(rf"^{re.escape(logging_utils.OLD_TOOL_NAME)}_{re.escape(logging_utils.pc_name())}_{_ID}\.md$",
+                     name))
+    return m.group(1) if m else ""
+
+
+def _places() -> list[tuple[Path, Any]]:
+    """読む・片付ける場所と、そこで自分の物と見なす名前。いまの場所が先、前の場所があと(もう書かない)。"""
+    current = list(dict.fromkeys([folder(), logging_utils.default_log_dir() / FOLDER]))
+    return ([(p, _own_id) for p in current]
+            + [(p / FOLDER, _legacy_id) for p in logging_utils.legacy_dirs()])
 
 
 def path_for(eid: str) -> Path:
-    """番号の記録のファイル。いまの名前 → 前の名前(番号だけ) → ほかの PC 名の名前、の順に探す。無ければいまの名前。"""
-    here = folder()
-    new = here / file_name(eid)
+    """番号の記録のファイル。いまの名前 → 前の場所・前の名前 → 同じツールのほかの PC の物、の順に探す。
+
+    無ければいまの名前(新しく書く場所)。
+    """
+    new = folder() / file_name(eid)
     if new.exists():
         return new
-    old = here / f"{eid}.md"
-    if old.exists():
-        return old
-    for hit in sorted(here.glob(f"*_{eid}.md")):
+    for place, match in _places():
+        try:
+            names = os.listdir(place)
+        except OSError:
+            continue
+        for name in names:
+            if match(name) == eid:
+                return place / name
+    prefix = f"{logging_utils.tool_id()}_{KIND}_"
+    for hit in sorted(folder().glob(f"{prefix}*_{eid}.md")):
         return hit
     return new
-
-
-def _id_of(name: str) -> str:
-    m = _NAME_RE.search(name)
-    return m.group(1) if m else ""
 
 
 def new_id(now: Optional[datetime] = None) -> str:
@@ -237,7 +264,9 @@ def record(kind: str, title: str, *, shown: str = "", exc: Optional[BaseExceptio
 
 
 def _append_repeat(eid: str) -> None:
-    path = path_for(eid)
+    path = folder() / file_name(eid)                     # いまの場所だけ(前の場所にはもう書かない)
+    if not path.exists():
+        return
     try:
         with path.open("a", encoding="utf-8") as f:
             f.write(f"- {time.strftime('%Y/%m/%d %H:%M:%S')} 同じエラーがもう一度起きました\n")
@@ -353,18 +382,23 @@ def _rel(filename: str) -> str:
 # ------------------------------------------------------------------
 def list_recent(limit: int = 100) -> list[dict]:
     """新しい順。1件 = 番号・日時・種類・要約・機能。"""
-    try:
-        names = [n for n in os.listdir(folder()) if _id_of(n)]
-    except OSError:
-        return []
-    names.sort(key=_id_of, reverse=True)                 # 番号(日時)の新しい順。名前の頭(ツール名)で並べない
+    found: dict[str, Path] = {}
+    for place, match in _places():                       # いまの場所が先(同じ番号は先に見つけた方)
+        try:
+            names = os.listdir(place)
+        except OSError:
+            continue
+        for name in names:
+            eid = match(name)
+            if eid and eid not in found:
+                found[eid] = place / name
     out = []
-    for name in names[:limit]:
-        eid = _id_of(name)
+    for eid in sorted(found, reverse=True)[:limit]:      # 番号(日時)の新しい順
+        path = found[eid]
         info = {"id": eid, "when": _when(eid), "kind": "", "title": "", "module": "",
                 "repeats": 0}
         try:
-            with (folder() / name).open(encoding="utf-8") as f:
+            with path.open(encoding="utf-8") as f:
                 for line in f:
                     if line.startswith("- 種類: ") and not info["kind"]:
                         info["kind"] = line[6:].strip()
@@ -401,14 +435,13 @@ def cleanup_old(keep_days: Optional[int] = None, *, today: Optional[date] = None
     days = keep_days if keep_days is not None else local_settings.log_keep_days()
     limit = (today or date.today()) - timedelta(days=days)
     removed = []
-    for base in {logging_utils.log_dir(), logging_utils.default_log_dir(), *logging_utils.legacy_dirs()}:
-        target = Path(base) / FOLDER
+    for target, match in _places():                      # この端末の・このツールの物だけ
         try:
             names = os.listdir(target)
         except OSError:
             continue
         for name in names:
-            eid = _id_of(name)
+            eid = match(name)
             if not eid:
                 continue
             try:

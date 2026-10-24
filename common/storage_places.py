@@ -100,7 +100,7 @@ def log_place() -> Place:
     from . import logging_utils
     note = logging_utils.log_problem()
     if not note and logging_utils.configured_log_dir():
-        note = "出力先を設定しています（その下のツールの名前・PC の名前のフォルダに書きます）"
+        note = "出力先を設定しています（その下のツールIDのフォルダに、PC名入りの名前で書きます）"
     return Place("ログ", str(logging_utils.log_dir()),
                  "動いた記録とエラーの記録（3機能共通。なぜなぜ分析に使う）。"
                  "出力先・残す日数は上の帯の「ログ」で変えられます", note)

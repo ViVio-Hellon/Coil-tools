@@ -398,7 +398,7 @@ class Rig:
         return out
 
     def log_text(self):
-        logs = sorted((self.home / "local" / "logs").glob("*.log"))
+        logs = sorted((self.home / "local" / "logs").rglob("*.log"))   # logs\coilpacking\ の下(統合 1.2.53)
         return logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
 
     def close(self):

@@ -226,12 +226,11 @@ class LogDirSettingTest(unittest.TestCase):
         res = self.send(action="save", log_dir=str(target), keep_days=90)
         self.assertEqual(res.status_code, 200, res.get_json())
         body = res.get_json()
-        # 統合 1.2.51: <出力先>\<ツール名>\<PC名>(ほかのツールのログと混ざらない)
-        self.assertEqual(body["dir"], str(target / "コイル梱包ツール" / logging_utils.pc_name()))
+        # 統合 1.2.53: <出力パス>\<ツールID>(日報複合ツールの決まり。PC名はファイル名に入る)
+        self.assertEqual(body["dir"], str(target / "coilpacking"))
         self.assertEqual(body["keep_days"], 90)
         logging.getLogger("coil_packing_tools.x").info("出力先を変えたあとの行")
-        today = (target / "コイル梱包ツール" / logging_utils.pc_name()
-                 / f"コイル梱包ツール_{logging_utils.pc_name()}_{date.today():%Y%m%d}.log")
+        today = target / "coilpacking" / f"coilpacking_{logging_utils.pc_name()}_{date.today():%Y%m%d}.log"
         self.assertIn("出力先を変えたあとの行", today.read_text(encoding="utf-8"))
         status = self.client.get("/api/log/status", headers=H).get_json()
         self.assertEqual(status["configured"], str(target))
@@ -275,116 +274,132 @@ class LogDirSettingTest(unittest.TestCase):
         self.assertIn("ログの出力先に書けなくなりました", text)
 
 
-class CleanupTest(unittest.TestCase):
-    def test_only_old_files_with_our_names_are_removed(self):
-        from common import incidents, logging_utils
-        folder = Path(tempfile.mkdtemp(prefix="cpt-clean-"))
-        today = date(2026, 10, 1)
-        old = today - timedelta(days=200)
-        names = [f"coil_packing_tools_{old:%Y%m%d}.log", f"coil_packing_tools_{today:%Y%m%d}.log",
-                 "人が置いたメモ.log", f"other_{old:%Y%m%d}.log"]
-        for n in names:
-            (folder / n).write_text("x", encoding="utf-8")
-        (folder / "incidents").mkdir()
-        old_inc = f"E{old:%Y%m%d}-101010-ABCD.md"
-        new_inc = f"E{today:%Y%m%d}-101010-ABCD.md"
-        for n in (old_inc, new_inc, "メモ.md"):
-            (folder / "incidents" / n).write_text("x", encoding="utf-8")
-        with mock.patch.object(logging_utils, "log_dir", return_value=folder):
-            removed = logging_utils.cleanup_old(180, today=today)
-            removed_inc = incidents.cleanup_old(180, today=today)
-        self.assertEqual(removed, [names[0]])
-        self.assertEqual(removed_inc, [old_inc])
-        self.assertEqual(sorted(p.name for p in folder.iterdir() if p.is_file()), sorted(names[1:]))
+class LogPlaceRuleTest(unittest.TestCase):
+    """ログの置き場所と名前の決まり(統合 1.2.53。日報複合ツール all-tools に合わせる)
 
-
-class ToolNameInFileNameTest(unittest.TestCase):
-    """統合 1.2.51・現場の指摘: 出力先にはいろいろなツールが書くので、取り出してもどのツールの物か分かるように。
-
-    - フォルダ: <出力先>\\コイル梱包ツール\\<PC名>\\
-    - ログ: コイル梱包ツール_<PC名>_YYYYMMDD.log
-    - エラーの記録: incidents\\コイル梱包ツール_<PC名>_E…md
-    - 前の名前(coil_packing_tools_YYYYMMDD.log・E…md)も読めて、残す日数を過ぎたら消える
+    1. <出力パス>\\<ツールID>\\ に書く(出力パスの直下に置かない。ツールIDは半角英小文字)
+    2. ファイル名は <ツールID>_ で始め、PC名を必ず入れる(coilpacking_<PC>_YYYYMMDD.log・
+       incidents\\coilpacking_なぜなぜ_<PC>_E….md)
+    3. 出力パスを決めていない・届かないときは、この端末の logs\\coilpacking\\ に同じ形で書く
+    4. 前の場所・前の名前のログは移さない・もう書かない。読む・片付けるときは前の場所の自分のログも見る
+    5. ほかのツールのファイル・フォルダは読まない・消さない。消すのは自分のツールの・この端末の物だけ
     """
+
+    PC = "LINE-PC2"
 
     def setUp(self):
         from common import logging_utils
         self.lu = logging_utils
-        self.folder = Path(tempfile.mkdtemp(prefix="cpt-name-"))
-        self.addCleanup(shutil.rmtree, self.folder, True)
-        patcher = mock.patch.object(logging_utils, "log_dir", return_value=self.folder)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.tmp = Path(tempfile.mkdtemp(prefix="cpt-rule-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.share = self.tmp / "share"
+        self.cur = self.share / "coilpacking"
+        self.local = self.tmp / "local_logs"
+        for patcher in (mock.patch.dict(os.environ, {"COMPUTERNAME": self.PC}),
+                        mock.patch.object(logging_utils, "log_dir", return_value=self.cur),
+                        mock.patch.object(logging_utils, "local_logs_root", return_value=self.local),
+                        mock.patch.object(logging_utils, "_env_base", return_value=None),
+                        mock.patch.object(logging_utils, "configured_log_dir", return_value=str(self.share))):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
-    def test_names_have_the_tool_and_the_pc(self):
+    def put(self, path: Path, text="x"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    # 1・2
+    def test_1_2_place_and_names(self):
         from common import incidents
-        with mock.patch.dict(os.environ, {"COMPUTERNAME": "LINE-PC2"}):
-            self.assertEqual(self.lu.tool_name(), "コイル梱包ツール")
-            self.assertEqual(self.lu.log_path_for(date(2026, 10, 23)).name,
-                             "コイル梱包ツール_LINE-PC2_20261023.log")
-            self.assertEqual(self.lu.target_for(str(self.folder / "share")),
-                             self.folder / "share" / "コイル梱包ツール" / "LINE-PC2")
-            self.assertEqual(incidents.file_name("E20261023-101010-ABCD"),
-                             "コイル梱包ツール_LINE-PC2_E20261023-101010-ABCD.md")
+        self.assertEqual(self.lu.tool_id(), "coilpacking")
+        self.assertRegex(self.lu.tool_id(), r"^[a-z][a-z0-9]*$")
+        self.assertEqual(self.lu.target_for(str(self.share)), self.share / "coilpacking")
+        self.lu.log_dir.return_value = self.lu.target_for(str(self.share))
+        self.assertEqual(self.lu.log_path_for(date(2026, 10, 24)),
+                         self.share / "coilpacking" / "coilpacking_LINE-PC2_20261024.log")
+        self.assertEqual(incidents.file_name("E20261024-101010-ABCD"),
+                         "coilpacking_なぜなぜ_LINE-PC2_E20261024-101010-ABCD.md")
+        self.assertEqual(incidents.folder(), self.share / "coilpacking" / "incidents")
+        self.assertEqual(self.lu.default_log_dir(), self.local / "coilpacking", "3. この端末でも同じ形")
 
-    def test_tool_name_is_safe_for_a_file_name(self):
-        with mock.patch.object(self.lu.app_config, "display_name", return_value='a/b:c*"'):
-            self.assertEqual(self.lu.tool_name(), "a_b_c__")
-        with mock.patch.object(self.lu.app_config, "display_name", side_effect=OSError):
-            self.assertEqual(self.lu.tool_name(), "CoilPackingTools")
+    def test_tool_id_must_be_lowercase_ascii(self):
+        for bad in ("CoilPacking", "コイル", "coil-packing", "1coil", ""):
+            with self.subTest(bad=bad), mock.patch.object(self.lu.app_config, "load",
+                                                          return_value={"tool_id": bad}):
+                self.assertEqual(self.lu.tool_id(), "coilpacking")
+        with mock.patch.object(self.lu.app_config, "load", return_value={"tool_id": "coil2"}):
+            self.assertEqual(self.lu.tool_id(), "coil2")
 
-    def test_a_new_record_gets_the_new_name_and_old_ones_still_read(self):
+    def test_env_override_also_gets_the_tool_folder(self):
+        with mock.patch.object(self.lu, "_env_base", return_value=self.tmp / "env"):
+            self.assertEqual(self.lu.resolve_log_dir(), (self.tmp / "env" / "coilpacking", ""))
+
+    # 4: 前の場所の自分の記録も読む・新しくは書かない
+    def test_4_new_records_go_to_the_new_place_and_old_ones_are_read(self):
         from common import incidents
         try:
-            raise ValueError("新しい名前の試験")
+            raise ValueError("新しい決まりの試験")
         except ValueError as exc:
-            eid = incidents.record("server", "新しい名前の試験", exc=exc)
-        files = sorted(p.name for p in (self.folder / "incidents").iterdir())
-        self.assertEqual(files, [incidents.file_name(eid)])
-        self.assertTrue(files[0].startswith(f"コイル梱包ツール_{self.lu.pc_name()}_E"))
-        old = "E20261001-101010-ABCD"
-        (self.folder / "incidents" / f"{old}.md").write_text("- 要約: 前の名前\n", encoding="utf-8")
-        other_pc = "E20261002-101010-ABCD"
-        (self.folder / "incidents" / f"コイル梱包ツール_OTHER-PC_{other_pc}.md").write_text(
-            "- 要約: ほかの PC\n", encoding="utf-8")
-        self.assertIn("前の名前", incidents.read(old))
-        self.assertIn("ほかの PC", incidents.read(other_pc))
-        self.assertEqual(incidents.path_for(old).name, f"{old}.md")
+            eid = incidents.record("server", "新しい決まり", exc=exc)
+        self.assertEqual([p.name for p in (self.cur / "incidents").iterdir()], [incidents.file_name(eid)])
+        old_150 = self.put(self.share / self.PC / "incidents" / "E20261001-101010-AAAA.md", "- 要約: 1.2.50\n")
+        old_151 = self.put(self.share / "コイル梱包ツール" / self.PC / "incidents"
+                           / f"コイル梱包ツール_{self.PC}_E20261002-101010-BBBB.md", "- 要約: 1.2.51\n")
+        old_local = self.put(self.local / "incidents" / "E20261003-101010-CCCC.md", "- 要約: 端末\n")
+        # ほかのツール・ほかの PC の前の物は読まない
+        self.put(self.share / "nippou" / "incidents" / "E20261004-101010-DDDD.md")
+        self.put(self.share / "コイル梱包ツール" / self.PC / "incidents"
+                 / "コイル梱包ツール_OTHER-PC_E20261005-101010-EEEE.md")
         ids = [x["id"] for x in incidents.list_recent()]
-        self.assertEqual(ids, [eid, other_pc, old], "名前の頭ではなく番号(日時)の新しい順")
+        self.assertEqual(ids, [eid, "E20261003-101010-CCCC", "E20261002-101010-BBBB", "E20261001-101010-AAAA"])
+        self.assertIn("1.2.50", incidents.read("E20261001-101010-AAAA"))
+        self.assertEqual(incidents.path_for("E20261002-101010-BBBB"), old_151)
+        self.assertIsNone(incidents.read("E20261004-101010-DDDD"))
+        # 同じエラーの「もう一度」は前の場所に書かない
+        incidents._append_repeat("E20261001-101010-AAAA")
+        self.assertEqual(old_150.read_text(encoding="utf-8"), "- 要約: 1.2.50\n")
+        self.assertTrue(old_local.exists())
 
-    def test_cleanup_handles_new_and_old_names_and_the_old_place(self):
+    def test_4_today_view_reads_todays_old_file_too(self):
+        today = date.today()
+        old = self.put(self.share / self.PC / f"coil_packing_tools_{today:%Y%m%d}.log", "朝の行\n")
+        self.put(self.local / f"コイル梱包ツール_{self.PC}_{today:%Y%m%d}.log", "端末の行\n")
+        self.put(self.local / f"コイル梱包ツール_OTHER-PC_{today:%Y%m%d}.log", "ほかの PC\n")
+        got = self.lu.legacy_log_paths_for(today)
+        self.assertIn(old, got)
+        self.assertEqual(len(got), 2)
+
+    # 4・5: 片付けるのは自分のツールの・この端末の物だけ(前の場所の自分の物も)
+    def test_4_5_cleanup_only_this_tool_and_this_pc(self):
         from common import incidents
-        today = date(2026, 10, 23)
+        today = date(2026, 10, 24)
         old = today - timedelta(days=200)
-        pc = self.lu.pc_name()
-        names = [f"コイル梱包ツール_{pc}_{old:%Y%m%d}.log", f"コイル梱包ツール_{pc}_{today:%Y%m%d}.log",
-                 f"coil_packing_tools_{old:%Y%m%d}.log", f"dbviewer_{old:%Y%m%d}.log"]
-        for n in names:
-            (self.folder / n).write_text("x", encoding="utf-8")
-        legacy = self.folder / "前の場所" / pc
-        (legacy / "incidents").mkdir(parents=True)
-        legacy_names = [f"coil_packing_tools_{old:%Y%m%d}.log", f"nippou_{old:%Y%m%d}.log",
-                        f"コイル梱包ツール_{pc}_{old:%Y%m%d}.log"]
-        for n in legacy_names:
-            (legacy / n).write_text("x", encoding="utf-8")
-        (legacy / "incidents" / f"E{old:%Y%m%d}-101010-ABCD.md").write_text("x", encoding="utf-8")
-        with mock.patch.object(self.lu, "legacy_dirs", return_value=[legacy]):
-            removed = self.lu.cleanup_old(180, today=today)
-            removed_inc = incidents.cleanup_old(180, today=today)
-        self.assertEqual(sorted(removed), sorted([names[0], names[2], legacy_names[0]]))
-        self.assertEqual(removed_inc, [f"E{old:%Y%m%d}-101010-ABCD.md"])
-        self.assertEqual(sorted(p.name for p in legacy.iterdir() if p.is_file()),
-                         sorted(legacy_names[1:]), "前の場所では前の名前だけ消す(ほかのツールの物に触らない)")
-        self.assertTrue((self.folder / names[3]).exists(), "ほかのツールのログには触らない")
-
-    def test_legacy_dir_is_the_old_pc_folder_only_when_configured(self):
-        with mock.patch.object(self.lu, "configured_log_dir", return_value=str(self.folder / "share")), \
-                mock.patch.dict(os.environ, {self.lu.ENV_LOG_DIR: ""}):
-            self.assertEqual(self.lu.legacy_dirs(), [self.folder / "share" / self.lu.pc_name()])
-        with mock.patch.object(self.lu, "configured_log_dir", return_value=""), \
-                mock.patch.dict(os.environ, {self.lu.ENV_LOG_DIR: ""}):
-            self.assertEqual(self.lu.legacy_dirs(), [])
+        mine_old = self.put(self.cur / f"coilpacking_{self.PC}_{old:%Y%m%d}.log")
+        mine_new = self.put(self.cur / f"coilpacking_{self.PC}_{today:%Y%m%d}.log")
+        other_pc = self.put(self.cur / f"coilpacking_OTHER-PC_{old:%Y%m%d}.log")
+        kind_named = self.put(self.cur / f"coilpacking_記録_{self.PC}_{old:%Y%m%d}.log")
+        memo = self.put(self.cur / "人が置いたメモ.log")
+        other_tool = self.put(self.share / "nippou" / f"nippou_{self.PC}_{old:%Y%m%d}.log")
+        root_other = self.put(self.share / f"dbviewer_{self.PC}_{old:%Y%m%d}.log")
+        leg150 = self.put(self.share / self.PC / f"coil_packing_tools_{old:%Y%m%d}.log")
+        leg150_other = self.put(self.share / self.PC / f"nippou_{old:%Y%m%d}.log")
+        leg151 = self.put(self.share / "コイル梱包ツール" / self.PC / f"コイル梱包ツール_{self.PC}_{old:%Y%m%d}.log")
+        leg_local = self.put(self.local / f"coil_packing_tools_{old:%Y%m%d}.log")
+        leg_local_new = self.put(self.local / f"coil_packing_tools_{today:%Y%m%d}.log")
+        inc_mine = self.put(self.cur / "incidents" / f"coilpacking_なぜなぜ_{self.PC}_E{old:%Y%m%d}-101010-ABCD.md")
+        inc_other = self.put(self.cur / "incidents" / f"coilpacking_なぜなぜ_OTHER-PC_E{old:%Y%m%d}-101010-ABCD.md")
+        inc_leg = self.put(self.share / self.PC / "incidents" / f"E{old:%Y%m%d}-101010-ABCD.md")
+        inc_memo = self.put(self.local / "incidents" / "メモ.md")
+        removed = self.lu.cleanup_old(180, today=today)
+        removed_inc = incidents.cleanup_old(180, today=today)
+        gone = [mine_old, leg150, leg151, leg_local, inc_mine, inc_leg]
+        kept = [mine_new, other_pc, kind_named, memo, other_tool, root_other, leg150_other, leg_local_new,
+                inc_other, inc_memo]
+        for p in gone:
+            self.assertFalse(p.exists(), p)
+        for p in kept:
+            self.assertTrue(p.exists(), p)
+        self.assertEqual(len(removed) + len(removed_inc), len(gone))
 
 
 class PenaIncidentTest(unittest.TestCase):

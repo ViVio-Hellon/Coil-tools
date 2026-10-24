@@ -184,7 +184,7 @@ def main(argv=None) -> int:
                 # 裏に回った合図が届く(裏では心拍が止まっても終わらない)
                 pg.evaluate("()=>{Object.defineProperty(document,'visibilityState',{get:()=>'hidden',configurable:true});document.dispatchEvent(new Event('visibilitychange'));}")
                 pg.wait_for_timeout(800)
-                log_text = "".join(p.read_text(encoding="utf-8") for p in (local / "logs").glob("*.log"))
+                log_text = "".join(p.read_text(encoding="utf-8") for p in (local / "logs").rglob("*.log"))
                 check("裏に回った合図がサーバに届く", "hidden" in log_text and "裏に回りました" in log_text)
                 check("コンソールにエラーが無い", not errs, "; ".join(errs)[:200])
 
@@ -244,7 +244,7 @@ def main(argv=None) -> int:
     check("止まる", p3.returncode == 0 and gone, p3.stdout.strip().splitlines()[-1][:60] if p3.stdout.strip() else "")
     check("ロックが消える", not (local / "runtime" / "main.lock").exists())
     out = proc.communicate(timeout=10)[0]
-    logs = list((local / "logs").glob("コイル梱包ツール_*.log"))
+    logs = list((local / "logs" / "coilpacking").glob("coilpacking_*.log"))
     check("ログが1つのファイルに集まる", len(logs) == 1 and all(k in logs[0].read_text(encoding="utf-8") for k in ("meisai", "coil_tool", "packing_pena_label")), str([l.name for l in logs]))
 
     if not no_browser:
@@ -324,7 +324,7 @@ def main(argv=None) -> int:
                 except subprocess.TimeoutExpired:
                     proc2.kill()
             proc2.communicate(timeout=10)
-            log_text = "".join(p.read_text(encoding="utf-8") for p in (local / "logs").glob("*.log"))
+            log_text = "".join(p.read_text(encoding="utf-8") for p in (local / "logs").rglob("*.log"))
             check("ログに「ほかに開いている画面がある」と残る", "ほかに" in log_text and "終了しません" in log_text)
             check("ログに閉じられたので終了したと残る", "誰も見ていないので終了します(画面が閉じられました)" in log_text)
             check("自動終了でもロックが消える", not (local / "runtime" / "main.lock").exists())
@@ -391,7 +391,7 @@ def main(argv=None) -> int:
     out_old = old.communicate(timeout=10)[0]; out_new = new.communicate(timeout=10)[0]
     if not (h_new and old_gone):
         print("--- 古いほう ---"); print(out_old[-1200:]); print("--- 新しいほう ---"); print(out_new[-1500:])
-    log_text = "".join(p.read_text(encoding="utf-8") for p in (local / "logs").glob("*.log"))
+    log_text = "".join(p.read_text(encoding="utf-8") for p in (local / "logs").rglob("*.log"))
     check("ログに何の版が違ったかが残る", "別の版を終わらせました(梱包明細 %s → 9.9.9)" % before in log_text)
     check("ログに起動した版の一覧が残る", "版: コイル梱包ツール" in log_text and "梱包明細 9.9.9" in log_text)
     check("ログに3機能の手元の領域と手元DBが残る",

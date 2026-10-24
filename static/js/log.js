@@ -129,7 +129,7 @@
     $("nowFile").textContent = s.today_file || "";
     $("defDir").textContent = s.default_dir || "";
     $("pcName").textContent = s.pc_name || "";
-    $("toolName").textContent = s.tool_name || "";
+    $("toolName").textContent = s.tool_id || "";
     $("dirInput").placeholder = "空なら このPCの既定: " + (s.default_dir || "");
     $("keepNote").textContent = "既定 " + s.keep_days_default + " 日(" + s.keep_days_min +
                                 "〜" + s.keep_days_max + ")";

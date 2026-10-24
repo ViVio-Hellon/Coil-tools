@@ -31,7 +31,7 @@ JSON はコメントを書けないので、各キーの説明はこのモジュ
 
     %LOCALAPPDATA%\\CoilPackingTools\\
       runtime\\  … PID・ポート・ロック(停止後は消してよい)
-      logs\\     … コイル梱包ツール_<PC名>_YYYYMMDD.log(3機能ぶんを1つに)
+      logs\\coilpacking\\ … coilpacking_<PC名>_YYYYMMDD.log(3機能ぶんを1つに。出力パスを決めていないとき)
       pycache\\  … PYTHONPYCACHEPREFIX の向き先
       cache\\ work\\ backup\\ data\\ … 統合アプリ自身のぶん(いまは使っていない)
 
@@ -66,6 +66,8 @@ from . import modes  # noqa: E402  (定数より先に読む必要がある)
 _FALLBACK: dict[str, Any] = {
     "app_id": "nlm.coil-packing-tools",
     "display_name": "コイル梱包ツール",
+    # ログの出力パスの下のフォルダ名・ファイル名の頭(半角英小文字。統合 1.2.53。日報複合ツールに合わせる)
+    "tool_id": "coilpacking",
     "version": "0.0.0",
     "monitor_level": 2,
     "local_dir_name": "CoilPackingTools",

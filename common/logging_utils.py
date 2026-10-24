@@ -15,13 +15,22 @@
   「梱包明細で出力した直後に資材計算が固まった」のような、
   機能をまたぐ経緯を突き合わせられない
 
-【置き場所】既定は `%LOCALAPPDATA%\\CoilPackingTools\\logs\\`(このPC)。
-**上の帯の「ログ」で出力先を変えられる**(統合 1.0.12。現場の指摘: エラーの後追いが
-できない。ログ出力は設定でパス指定できるようにする)。変えた先には**PC の名前のフォルダ**を
-作って書く ── 共有フォルダを指して全ラインのPCが同じファイルへ書くと、Windows の
-ファイルの鍵で行が欠ける。出力先に書けない(共有が切れた等)ときは、黙って捨てずに
-**このPCの既定の場所へ切り替えて**書き続け、そのことをログと画面に残す。
-環境変数 `COIL_PACKING_TOOLS_LOG_DIR` があればそちらが勝つ(試験・CI 用)。
+【置き場所と名前の決まり】(統合 1.2.53。日報複合ツール all-tools に合わせる)
+
+    <ログの出力パス>\\<ツールID>\\<ツールID>_<PC名>_YYYYMMDD.log
+    <ログの出力パス>\\<ツールID>\\incidents\\<ツールID>_なぜなぜ_<PC名>_E….md   (エラーの記録)
+
+- ツールIDは半角英小文字(`config/app.json` の `tool_id`。既定 `coilpacking`)。出力パスの直下には置かない
+- ファイル名は必ず `<ツールID>_` で始め、**PC名を必ず入れる**(共有フォルダで何台もが同じファイルに書かない)
+- 出力パスは上の帯の「ログ」で決める(統合 1.0.12)。決めていない・届かないときは、この端末の
+  `%LOCALAPPDATA%\\CoilPackingTools\\logs\\` を出力パスにして同じ形で書く(`logs\\coilpacking\\coilpacking_…`)。
+  書けなくなったら黙って捨てずに切り替えて書き続け、そのことをログと画面に残す。ログが書けないことで止めない
+- 前の場所・前の名前のログ(1.2.50 まで `<出力先>\\<PC名>\\coil_packing_tools_YYYYMMDD.log`、1.2.51〜1.2.52
+  `<出力先>\\コイル梱包ツール\\<PC名>\\コイル梱包ツール_<PC名>_YYYYMMDD.log`、この端末の `logs\\` 直下)は
+  移さない・もう書かない。画面で読むとき・残す日数で片付けるときは、前の場所の自分のログも見る(`legacy_dirs`)
+- ほかのツールのファイル・フォルダ(nippou\\ kanban\\ など)は読まない・消さない。消すのは**このツールの・この端末の**
+  名前のファイルだけ
+- 環境変数 `COIL_PACKING_TOOLS_LOG_DIR` があれば、それを出力パスにする(試験・CI 用。下にツールIDのフォルダを作る)
 
 【後追いのための仕掛け】
 - 1行ごとに、どの要求の中の行かを `[要求 R-xxxxxx]` で付ける(並んで来る要求の行が
@@ -89,27 +98,51 @@ def pc_name() -> str:
     return re.sub(r'[\\/:*?"<>|]', "_", name).strip() or "PC"
 
 
-def tool_name() -> str:
-    """ツールの名前(`config/app.json` の display_name。例「コイル梱包ツール」)。フォルダ・ファイル名に使う。
+#: ツールIDの既定と形(半角英小文字。数字は2文字目から)
+DEFAULT_TOOL_ID = "coilpacking"
+_TOOL_ID_FORM = re.compile(r"^[a-z][a-z0-9]*$")
+#: 1.2.51〜1.2.52 のフォルダ・ファイル名の頭(表示名)。前の場所を読む・片付けるときだけ使う
+OLD_TOOL_NAME = "コイル梱包ツール"
 
-    統合 1.2.51・現場の指摘: ログの出力先にはいろいろなツールが書くので、どのツールのファイルか分からない。
-    ツールの名前のフォルダを作ってその下に書き、ファイル名にもツールの名前を入れる(取り出したときにも分かるように)。
+
+def tool_id() -> str:
+    """ツールID(`config/app.json` の `tool_id`。半角英小文字。形が違えば既定の `coilpacking`)。
+
+    ログの出力パスの下のフォルダ名と、ファイル名の頭に使う(統合 1.2.53。日報複合ツールに合わせる)。
     """
     try:
-        name = app_config.display_name()
+        value = str(app_config.load().get("tool_id") or "").strip()
     except Exception:                                   # noqa: BLE001 - 設定が読めなくてもログは書く
-        name = ""
-    return re.sub(r'[\\/:*?"<>|]', "_", str(name or "")).strip() or "CoilPackingTools"
+        value = ""
+    return value if _TOOL_ID_FORM.match(value) else DEFAULT_TOOL_ID
 
 
-def file_prefix() -> str:
-    """ログ・エラーの記録のファイル名の頭: `<ツール名>_<PC名>`(例 コイル梱包ツール_NLM-NGY-240638)。"""
-    return f"{tool_name()}_{pc_name()}"
+def tool_name() -> str:
+    """画面に出すツールの名前(表示名。例「コイル梱包ツール」)。"""
+    try:
+        return str(app_config.display_name() or "").strip() or tool_id()
+    except Exception:                                   # noqa: BLE001
+        return tool_id()
+
+
+def file_prefix(kind: str = "") -> str:
+    """ファイル名の頭: `<ツールID>_[<種類>_]<PC名>`(例 coilpacking_NLM-NGY-240638・coilpacking_なぜなぜ_NLM-NGY-240638)。"""
+    return "_".join(x for x in (tool_id(), kind, pc_name()) if x)
+
+
+def local_logs_root() -> Path:
+    """この端末のローカルの logs(`%LOCALAPPDATA%\\CoilPackingTools\\logs`)。出力パスを決めていないときの出力パス。"""
+    return app_config.local_dir("logs")
 
 
 def default_log_dir() -> Path:
-    """このPCの既定の置き場所(`%LOCALAPPDATA%\\CoilPackingTools\\logs`)。"""
-    return app_config.local_dir("logs")
+    """この端末の既定の置き場所(`…\\logs\\<ツールID>`)。出力パスを決めていない・届かないときに書く。"""
+    return local_logs_root() / tool_id()
+
+
+def _env_base() -> Optional[Path]:
+    override = (os.environ.get(ENV_LOG_DIR) or "").strip()
+    return Path(override) if override else None
 
 
 def configured_log_dir() -> str:
@@ -119,26 +152,46 @@ def configured_log_dir() -> str:
     return raw.strip() if isinstance(raw, str) else ""
 
 
-def target_for(text: str) -> Path:
-    """設定に書く値から、実際に書くフォルダ(`<出力先>\\<ツール名>\\<PC名>`。統合 1.2.51 でツール名のフォルダを足した)。
-
-    相対で書くとアプリのフォルダからたどる(3機能の置き場所の設定と同じ決まり)。
-    """
+def base_for(text: str) -> Path:
+    """設定に書く値(出力パス)を、実際のフォルダに。相対で書くとアプリのフォルダからたどる。"""
     base = Path(os.path.expandvars(text.strip()))
     if not base.is_absolute():
         base = Path(app_config.APP_ROOT) / base
-    return base / tool_name() / pc_name()
+    return base
+
+
+def target_for(text: str) -> Path:
+    """出力パスから、実際に書くフォルダ(`<出力パス>\\<ツールID>`。統合 1.2.53)。
+
+    PC の名前のフォルダは作らない(ファイル名に PC名が入るので、何台もが同じファイルに書かない)。
+    """
+    return base_for(text) / tool_id()
 
 
 def legacy_dirs() -> list[Path]:
-    """1.2.50 までの置き場所(`<出力先>\\<PC名>`)。残す日数を過ぎた古いファイルを消すのに使う(新しくは書かない)。"""
-    configured = configured_log_dir() if not (os.environ.get(ENV_LOG_DIR) or "").strip() else ""
-    if not configured:
-        return []
-    base = Path(os.path.expandvars(configured.strip()))
-    if not base.is_absolute():
-        base = Path(app_config.APP_ROOT) / base
-    return [base / pc_name()]
+    """前の置き場所(**読む・片付けるだけ。もう書かない**)。どれも、この端末の・このツールのもの。
+
+    - この端末のローカルの logs 直下(1.2.52 まで)
+    - 出力パスを決めていれば `<出力パス>\\<PC名>`(1.2.50 まで)・`<出力パス>\\コイル梱包ツール\\<PC名>`(1.2.51〜1.2.52)
+    - 試験用の環境変数があれば、その直下
+
+    同じフォルダにあるほかのツールのファイルには触らないよう、読む・消すのは前の名前のファイルだけ
+    (`_LEGACY_LOG_NAMES`)。
+    """
+    out = [local_logs_root()]
+    env = _env_base()
+    if env is not None:
+        out.append(env)
+    else:
+        configured = configured_log_dir()
+        if configured:
+            base = base_for(configured)
+            out += [base / pc_name(), base / OLD_TOOL_NAME / pc_name()]
+    seen: list[Path] = []
+    for p in out:
+        if p not in seen:
+            seen.append(p)
+    return seen
 
 
 def writable_problem(folder: Path) -> str:
@@ -155,9 +208,9 @@ def writable_problem(folder: Path) -> str:
 
 def resolve_log_dir() -> tuple[Path, str]:
     """(書く場所, 設定どおりに書けない理由)。環境変数 > 設定 > このPCの既定。"""
-    override = os.environ.get(ENV_LOG_DIR)
-    if override and override.strip():
-        return Path(override.strip()), ""
+    env = _env_base()
+    if env is not None:
+        return env / tool_id(), ""
     configured = configured_log_dir()
     if configured:
         target = target_for(configured)
@@ -169,10 +222,10 @@ def resolve_log_dir() -> tuple[Path, str]:
 
 
 def log_dir() -> Path:
-    """いまログを書いている場所。"""
-    override = os.environ.get(ENV_LOG_DIR)
-    if override and override.strip():
-        return Path(override.strip())
+    """いまログを書いている場所(`<出力パス>\\<ツールID>`)。"""
+    env = _env_base()
+    if env is not None:
+        return env / tool_id()
     with _where_lock:
         if _where["dir"] is None:
             _where["dir"], _where["problem"] = resolve_log_dir()
@@ -187,8 +240,19 @@ def log_problem() -> str:
 
 
 def log_path_for(day: date) -> Path:
-    """その日のログファイル。**名前の作り方はここ1か所**。"""
+    """その日のログファイル(`<ツールID>_<PC名>_YYYYMMDD.log`)。**名前の作り方はここ1か所**。"""
     return log_dir() / f"{file_prefix()}_{day:%Y%m%d}.log"
+
+
+def legacy_log_paths_for(day: date) -> list[Path]:
+    """前の場所・前の名前の、その日の自分のログ(あるものだけ)。画面で今日のログを読むときに前に足す。"""
+    out = []
+    for folder in legacy_dirs():
+        for name in (f"{FILE_PREFIX}_{day:%Y%m%d}.log", f"{OLD_TOOL_NAME}_{pc_name()}_{day:%Y%m%d}.log"):
+            path = folder / name
+            if path.is_file() and path not in out:
+                out.append(path)
+    return out
 
 
 class DailyFileHandler(logging.FileHandler):  # noqa: D101 - 下に説明
@@ -334,6 +398,7 @@ def status() -> dict:
         "env_override": override,
         "pc_name": pc_name(),
         "tool_name": tool_name(),
+        "tool_id": tool_id(),
         "today_file": str(log_path_for(date.today())),
         "keep_days": local_settings.log_keep_days(),
         "keep_days_default": local_settings.LOG_KEEP_DAYS_DEFAULT,
@@ -342,34 +407,37 @@ def status() -> dict:
     }
 
 
-_LOG_NAME_OLD = re.compile(rf"^{FILE_PREFIX}_(\d{{8}})\.log$")
+def _own_log_match(name: str):
+    """**この端末の**いまの名前のログ(`<ツールID>_<PC名>_YYYYMMDD.log`)なら日付の部分。ほかの PC の物は None。"""
+    return re.match(rf"^{re.escape(file_prefix())}_(\d{{8}})\.log$", name)
 
 
-def _log_name_match(name: str):
-    """このツールのログの名前なら日付の部分。いまの名前(`<ツール名>_<PC名>_YYYYMMDD.log`)と 1.2.50 までの名前。"""
-    m = re.match(rf"^{re.escape(tool_name())}_.+_(\d{{8}})\.log$", name)
-    return m or _LOG_NAME_OLD.match(name)
+def _legacy_log_match(name: str):
+    """前の名前の自分のログ(`coil_packing_tools_YYYYMMDD.log`・`コイル梱包ツール_<この PC>_YYYYMMDD.log`)なら日付の部分。"""
+    return (re.match(rf"^{FILE_PREFIX}_(\d{{8}})\.log$", name)
+            or re.match(rf"^{re.escape(OLD_TOOL_NAME)}_{re.escape(pc_name())}_(\d{{8}})\.log$", name))
 
 
 def cleanup_old(keep_days: Optional[int] = None, *, today: Optional[date] = None) -> list[str]:
-    """残す日数を過ぎたログを消す(いまの場所と、このPCの既定の場所)。消した名前を返す。
+    """残す日数を過ぎたログを消す(いまの場所・この端末の既定の場所・前の場所)。消した名前を返す。
 
-    **名前の決まった物だけ**消す(`<ツール名>_<PC名>_YYYYMMDD.log` と前の `coil_packing_tools_YYYYMMDD.log`)。同じフォルダに
-    人が置いたファイルには触らない。エラーの記録は `incidents.cleanup_old` が消す。
+    **このツールの・この端末の名前のファイルだけ**消す(いまの場所では `<ツールID>_<この PC>_YYYYMMDD.log`、
+    前の場所では前の名前)。共有の `<ツールID>` フォルダにあるほかの PC のログ・人が置いたファイル・
+    ほかのツールのファイルには触らない。エラーの記録は `incidents.cleanup_old` が消す。
     """
     from . import local_settings
     days = keep_days if keep_days is not None else local_settings.log_keep_days()
     limit = (today or date.today()) - timedelta(days=days)
     removed: list[str] = []
-    legacy = set(legacy_dirs())
-    for folder in {log_dir(), default_log_dir()} | legacy:
+    plan = [(folder, _own_log_match) for folder in dict.fromkeys([log_dir(), default_log_dir()])]
+    plan += [(folder, _legacy_log_match) for folder in legacy_dirs()]
+    for folder, match in plan:
         try:
             names = os.listdir(folder)
         except OSError:
             continue
         for name in names:
-            # 前の置き場所では前の名前だけ(ほかのツールのファイルに触らない)
-            m = _LOG_NAME_OLD.match(name) if folder in legacy else _log_name_match(name)
+            m = match(name)
             if not m:
                 continue
             try:

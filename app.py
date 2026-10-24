@@ -930,7 +930,11 @@ def _log_routes(bp: Blueprint) -> None:
         except ValueError:
             limit = 300
         path = Path(logging_utils.log_path_for(date.today()))
-        lines = _tail(path, 512 * 1024)
+        # 前の場所・前の名前の今日のログ(入れ替えた日の朝のぶん)も前に足す(統合 1.2.53。もう書かない)
+        lines = []
+        for old in logging_utils.legacy_log_paths_for(date.today()):
+            lines += _tail(old, 256 * 1024)
+        lines += _tail(path, 512 * 1024)
         if only == "problems":
             lines = [l for l in lines if " | WARNING | " in l or " | ERROR | " in l
                      or " | CRITICAL | " in l]

@@ -41,9 +41,9 @@ from typing import Any, Optional
 from . import dist_settings, local_settings
 
 
-def _tool_name() -> str:
+def _tool_id() -> str:
     from . import logging_utils                          # 起動の最初に読むので、使うときに読む
-    return logging_utils.tool_name()
+    return logging_utils.tool_id()
 
 #: 書き出す場所。**統合アプリのフォルダの直下 `配布設定\common\`**(環境変数で変えられる)
 DIR = Path(os.environ.get("COIL_PACKING_TOOLS_DISTRIBUTION_DIR",
@@ -282,8 +282,8 @@ def _readme(meta: dict[str, Any]) -> str:
     for key, value in meta["settings"].items():
         lines.append(f"  {ITEM_LABELS[key]}: {_show(key, value)}")
     lines += ["",
-              "ログの出力先に共有フォルダを指すと、その下にツールの名前のフォルダと PC の名前のフォルダ"
-              f"(<出力先>\\{_tool_name()}\\<PC名>)を作って書きます。",
+              f"ログの出力先に共有フォルダを指すと、その下にツールIDのフォルダ(<出力先>\\{_tool_id()}\\)を作って書きます。"
+              f"ファイル名は {_tool_id()}_<PC名>_<日付>.log(PC名が入るので、何台もが同じファイルに書きません)。",
               "",
               "配った先で起きること",
               "  起動したときにこのフォルダを読み込みます。",
