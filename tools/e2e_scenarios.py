@@ -1666,21 +1666,35 @@ def scenario_trail(app: App, ctx, sh: Shell, note: dict) -> None:
     eid = found.group(0)
     # 「中身を見る」→ 統合画面の「ログ」が開いて、その記録が出る
     m.locator("#cpt-error-notice button", has_text="中身を見る").click()
-    ok = wait_until(lambda: sh.page.locator("#logDialog[open]").count() == 1, 10)
+    t0 = time.monotonic()
+    ok = wait_until(lambda: sh.page.locator("#logDialog[open]").count() == 1, 20)
+    t_dialog = time.monotonic() - t0
     lf = None
     if ok:
-        wait_until(lambda: sh.page.frame(url=re.compile(r"/log\?")) is not None, 10)
-        lf = sh.page.frame(url=re.compile(r"/log\?"))
+        # ログ画面の枠は統合画面の #logDialog の中だけを探す(ほかの /log? の画面と取り違えない)
+        def log_frame():
+            el = sh.page.query_selector("#logDialog iframe")
+            fr = el.content_frame() if el else None
+            return fr if fr is not None and "/log?" in (fr.url or "") else None
+        wait_until(lambda: log_frame() is not None, 20)
+        lf = log_frame()
     shown_text = ""
     if lf is not None:
-        wait_until(lambda: TRAIL_MARK in (lf.locator("#incText").text_content() or ""), 10)
+        wait_until(lambda: TRAIL_MARK in (lf.locator("#incText").text_content() or ""), 20)
         shown_text = lf.locator("#incText").text_content() or ""
-    check("後追い: 「中身を見る」で記録が開く(なぜなぜの欄つき)",
-          eid in shown_text and TRAIL_MARK in shown_text and "なぜ1" in shown_text
-          and "資材計算" in shown_text, shown_text[:200])
+    opened = (eid in shown_text and TRAIL_MARK in shown_text and "なぜ1" in shown_text
+              and "資材計算" in shown_text)
+    # 落ちたときは様子を残す(1 回だけ落ちて理由が分からなかったため)
+    diag = "" if opened else (f"dialog={ok}({t_dialog:.1f}秒) frame={'あり' if lf else 'なし'} "
+                              f"frames={[f.url.split('?')[0] for f in sh.page.frames]} "
+                              f"text={shown_text[:80]!r}")
+    check("後追い: 「中身を見る」で記録が開く(なぜなぜの欄つき)", opened, shown_text[:200] if opened else diag)
     check("後追い: 記録がファイルに残る",
           bool(list((app.local / "logs" / "coilpacking" / "incidents").glob(f"coilpacking_なぜなぜ_*_{eid}.md"))))
     if lf is None:
+        # ログ画面が開いたまま残ると、あとの段の操作がすべて止まる。閉じてから次へ
+        if sh.page.locator("#logDialog[open]").count():
+            sh.page.click("#logClose")
         return
     # --- 出力先を変える(共有フォルダのつもり)→ <出力パス>\coilpacking\ に書かれる(統合 1.2.53。日報複合ツールの決まり)
     lf.click('.tab[data-tab="settings"]')

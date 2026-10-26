@@ -374,8 +374,8 @@ def breakdown_svg(p: dict) -> str:
             f'fill="{COLOR[key]}" rx="2"/>')
         add(f'<text x="{W - 10}" y="{y + 12}" class="tf-v" text-anchor="end">'
             f'{_esc(disp.get(key, ""))}kg ・ {_pct(v, hu)}</text>')
-        # ポリシートの式の「5502」は 550 の 2 乗(計算式の欄の書き方のまま)。図では ² で出す
-        tip = re.sub(r"×(\d+)2 ", r"×\1² ", body or head)
+        # 2 乗は計算式の欄では「^2」。図では ² で出す(ペナラベル 1.5.51 まで VBA のまま「5502」と出ていた)
+        tip = (body or head).replace("^2", "²")
         add(f'<text x="26" y="{y + 27}" class="tf-f">{_esc(tip)}</text>')
     yb = y0 + len(ITEMS) * row_h + 14
     add(f'<text x="10" y="{yb}" class="tf-sm">ハードボード: {_esc(hb_kind(p))}'

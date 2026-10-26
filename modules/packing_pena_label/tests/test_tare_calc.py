@@ -425,5 +425,39 @@ class TestSheetFormulaText(unittest.TestCase):
             self.assertTrue(text.strip(), "%s が空" % key)
 
 
+class TestPolySheet(unittest.TestCase):
+    """ポリシート(ペナラベル 1.5.51・現場の指摘: 側面の面積の単位がそろっておらず、側面の分がほぼ 0)。
+
+    底面 = 半径² × π(mm²)を 2 枚ぶん m² に直し、側面 = (TA + TA/2) × GAI(m²)を足して × 単重 × 係数。
+    VBA は (底面×2 + 側面) / 10^6 で、最初から m² の側面まで 100 万分の 1 にしていた。
+    """
+
+    def setUp(self):
+        self.mat = TC.calculate_materials(table(), 11, 1, 53.5, "TIP1000", "CheckBox5", 0,
+                                          10.0, 12.0, True, False, all_coil_empty=False)
+
+    def test_side_area_is_counted_in_square_metres(self):
+        m = self.mat
+        bottom = TC.val(550 ** 2 * TC.PI) * 2 / 10 ** 6       # TIP1000 の半径 550mm
+        side = (m.TA + m.TA / 2) * m.GAI
+        self.assertAlmostEqual(m.POR, (bottom + side) * 0.09 * 1, places=9)
+        self.assertGreater(side, 1.0, "側面は数 m² ある(ほぼ 0 ではない)")
+        old_vba = (TC.val(550 ** 2 * TC.PI) * 2 + side) / 10 ** 6 * 0.09
+        self.assertAlmostEqual(m.POR - old_vba, side * (1 - 1e-6) * 0.09, places=9)   # VBA の式より側面の分だけ重い
+
+    def test_breakdown_text_matches_the_calculation(self):
+        text = self.mat.formulas["PORsiki"]
+        self.assertIn("2×π×550^2mm²", text, "2 乗は ^2(VBA は「5502」と ^ が抜けていた)")
+        self.assertNotIn("5502", text)
+        self.assertIn("側面:1.5×", text, "側面は 1.5×高さ×外周(VBA は 2π×半径×TA と出していた)")
+        self.assertNotIn("2π×550×", text)
+        self.assertTrue(text.rstrip().endswith(TC.display_values(self.mat)["POR"]))
+
+    def test_sheet_formula_divides_only_the_bottom(self):
+        f = TC.sheet_formulas(self.mat, 11, 1, 10.0, 12.0)["POR"]
+        self.assertIn("[(550^2*π*2)/ 10 ^ 6]+[(", f)
+        self.assertNotIn("/ 10 ^ 6]*", f.split("+")[1], "側面は 10^6 で割らない")
+
+
 if __name__ == "__main__":
     unittest.main()

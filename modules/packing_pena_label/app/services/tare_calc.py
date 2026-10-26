@@ -245,16 +245,26 @@ def _calc_esa(table, mat, missing) -> float:
 
 
 def _calc_por(table, mat, tip, missing) -> float:
-    """ポリシート。円柱の表面積（底面×2 + 側面）。包み分は高さの半分。"""
+    """ポリシート。円柱の表面積(底面×2 + 側面)× 単重 × 係数。包み代として高さの半分を足す。
+
+    【VBA の誤りを直した(ペナラベル 1.5.51・現場の指摘)】VBA は
+        AREA  = 半径² × π            … mm²(半径を mm で入れている)
+        AREA2 = (TA + TA/2) × GAI    … m²(TA も GAI も m)
+        (AREA × 2 + AREA2) / 10^6    … mm² を m² に直す割り算を、最初から m² の側面にも掛けていた
+    ため、側面の分がほぼ 0 になっていた。**底面だけを m² に直してから側面を足す。**
+    計算内訳の式の表示も直した(VBA は「2π×5502」と ^ が抜け、側面を「2π×半径×TA」と実際の計算と違う式で出していた)。
+    """
     mass, coef = _unit(table, M.MAT_POR, missing, mat, "POR")
     mat.units["POR"] = (mass, coef)
     half = TIP_DIAMETER.get(tip, (0, 0))[1]
-    area = val(half ** 2 * PI)
-    area2 = val((mat.TA + mat.TA / 2) * mat.GAI)
-    result = val((area * 2 + area2) / 10 ** 6 * mass * coef)
+    area = val(half ** 2 * PI)                          # 底面1枚(mm²)
+    area2 = val((mat.TA + mat.TA / 2) * mat.GAI)        # 側面(m²)。高さ × 1.5(半分は包み代)× 外周
+    bottom_m2 = area * 2 / 10 ** 6                      # 底面2枚を m² に
+    result = val((bottom_m2 + area2) * mass * coef)
     mat.formulas["PORsiki"] = (
-        "【ポリシート】円柱の表面積＝2πr^2＋2πrh\n"
-        f"(底面:2π×{half}2 + 側面:2π×{half}×{fmt(mat.TA, '0.000')}) × "
+        "【ポリシート】表面積＝底面2枚(2×π×半径^2)＋側面(1.5×高さ×外周。高さの半分は包み代)\n"
+        f"(底面:2×π×{half}^2mm²={fmt(bottom_m2, '0.000')}m² + "
+        f"側面:1.5×{fmt(mat.TA, '0.000')}m×{fmt(mat.GAI, '0.000')}m={fmt(area2, '0.000')}m²) × "
         f"{fmt(mass, '0.000')} = {fmt(result, '0.000')}")
     return result
 
@@ -584,8 +594,9 @@ def sheet_formulas(mat: MaterialWeights, coil_text: float, coil_no: int,
         "SUT": (f"{d}*{gai}/ 10 ^ 3)*{STRETCH_WRAPS}*{sut[0]}*{sut[1]}"
                 f"[約{STRETCH_WRAPS}周計算]"),
         "ESA": f"{d}*{gai}/ 10 ^ 3){esa_mul}*{esa[0]}*{esa[1]}{esa_tag}",
-        "POR": (f"[({h}^ 2 * PIN*2)]+[(({ta}+{ta}/ 2)*{d}*{gai}/ 10 ^ 3))"
-                f"/ 10 ^ 6]*{por[0]}*{por[1]}  包み分は高さの半分とする"),
+        # 底面(mm²)だけを m² に直してから側面(m²)を足す(ペナラベル 1.5.51。VBA は側面まで 10^6 で割っていた)
+        "POR": (f"([({h}^2*π*2)/ 10 ^ 6]+[({ta}+{ta}/ 2)*{gai}])"
+                f"*{por[0]}*{por[1]}  包み分は高さの半分とする"),
         "HB": mat.formulas.get("HBsiki", ""),
         "PAR": f"{par[0]}*{PALLET_QTY}",
         "PET": (f"[({d}*{gai}/ 10 ^ 3+{BAND_SLACK_M})*4)]"
