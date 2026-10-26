@@ -612,6 +612,8 @@ def set_stack_max():
                                   "value")), 400
     try:
         board.set_stack_max(int(raw))
+    except RefusedError as exc:
+        return _refused(exc, 409)
     except ValueError as exc:
         return jsonify(error_body("out_of_range", str(exc), "value")), 400
     return _ok(conn)

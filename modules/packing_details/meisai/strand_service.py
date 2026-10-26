@@ -33,6 +33,7 @@ REFUSE_USED = "used"                # すでに積み上げ済み
 REFUSE_DISCARDED = "discarded"      # 廃棄済みなので積めない
 REFUSE_UNKNOWN_KEY = "unknown_key"  # そんな条番号は無い
 REFUSE_EMPTY_SLOT = "empty_slot"    # 空のスロットを解除しようとした
+REFUSE_STACK_SHRINK = "stack_shrink"  # 積み条数を減らすと、積んだコイルのスロットが無くなる
 REFUSE_EDITING = "editing"          # 出力済みの修正中なので、その操作はできない
 REFUSE_STACKING = "stacking"        # 積み上げ中のコイルがあるので修正に入れない
 REFUSE_UNKNOWN_OUTPUT = "unknown_output"  # その出力済みの条番号が、いまの盤面に無い
@@ -235,16 +236,28 @@ class Board:
         log.debug("build_strands: 合計=%s 配分=%s", self.zen_kotei, self.strands)
 
     def set_stack_max(self, value: int) -> None:
-        """積み条数を決めてスロットを作り直す (VBA `txtTsumiJouSu_Change`)。
+        """積み条数を決める (VBA `txtTsumiJouSu_Change`)。**積んだコイルはそのまま残す。**
 
-        VBA は `ResetGimmickBUsed` で**いま割り当たっているものだけ**を
-        戻してから作り直す。スロットを空にすれば同じことになる。
+        【VBA から変えた(VER 0.13.33・現場の求め)】VBA は `ResetGimmickBUsed` で積んだものを
+        全部外してから作り直していた。そのため積み始めてから積み条数を変えると、積んだコイルが
+        全部外れて積み直しになっていた(「積み始めたら変えられない」のと同じ)。いまは
+        - 増やす … 上に空きのスロットを足す
+        - 減らす … 上の空きのスロットを取る。取るスロットに積んだコイルがあれば断る
+          (どれを外すかを勝手に決めない。上のスロットを先に解除してもらう)
         """
         if not 1 <= value <= config.STACK_LIMIT:
             raise ValueError(
                 f"積み条数は1〜{config.STACK_LIMIT}です: {value}")
+        kept = list(self.slots[:value])
+        dropped = [(i + 1, k) for i, k in enumerate(self.slots[value:], start=value) if k]
+        if dropped:
+            where = "・".join(f"スロット{no}: {key}" for no, key in dropped)
+            raise RefusedError(
+                REFUSE_STACK_SHRINK,
+                f"積み条数を{value}にすると、積んだコイル({where})のスロットが無くなります。"
+                "そのコイルを先に解除してから減らしてください。")
         self.stack_max = value
-        self.clear_slots()
+        self.slots = kept + [None] * (value - len(kept))
 
     def clear_slots(self) -> None:
         """スロットを空にする (VBA `ClearGimmickC` 相当)。"""

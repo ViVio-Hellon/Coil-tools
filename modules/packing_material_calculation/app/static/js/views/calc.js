@@ -41,6 +41,10 @@ function rememberAdded(key) {
   try { sessionStorage.setItem(ADDED_KEY, key); } catch (e) { /* 使えなくても動く */ }
 }
 
+// 最後に送った検入数・外径。同じ値なら送り直さない(「計算Start」が先に送ったあと、欄を離れたときの
+// change で送り直さないように。資材計算 0.2.34)
+let sentInput = null;
+
 function render(v) {
   lastView = v;
   // 描き終えてから(描くたびに)、積んでいない計算を覚え直す
@@ -51,6 +55,10 @@ function render(v) {
   if (document.activeElement !== $('#lot')) $('#lot').value = v.input.LOT;
   if (document.activeElement !== $('#ins')) $('#ins').value = v.input.検入数;
   if (document.activeElement !== $('#outer')) $('#outer').value = v.input.外径;
+  // サーバが整形した値(10 → 10.00 など)を「送った値」にする。打ちかけの欄があるときは触らない
+  if (document.activeElement !== $('#ins') && document.activeElement !== $('#outer')) {
+    sentInput = { 検入数: $('#ins').value, 外径: $('#outer').value };
+  }
   if (document.activeElement !== $('#stack')) $('#stack').value = r.積数;
   showOrderChoices(v);
 
@@ -204,11 +212,18 @@ $('#order-no').addEventListener('change', async (e) => {
 // ------------------------------------------------------------------
 // 入力
 // ------------------------------------------------------------------
+async function sendInput() {
+  const body = { 検入数: $('#ins').value, 外径: $('#outer').value };
+  sentInput = { ...body };
+  return call('/api/calc/input', body);
+}
+function inputChanged() {
+  return !sentInput || sentInput.検入数 !== $('#ins').value || sentInput.外径 !== $('#outer').value;
+}
 ['ins', 'outer'].forEach(id => {
   $('#' + id).addEventListener('change', async () => {
-    apply(await call('/api/calc/input', {
-      検入数: $('#ins').value, 外径: $('#outer').value,
-    }));
+    if (!inputChanged()) return;
+    apply(await sendInput());
   });
 });
 
@@ -222,7 +237,21 @@ $('#stack').addEventListener('change', async () => {
 // ------------------------------------------------------------------
 // 計算
 // ------------------------------------------------------------------
+// 【1回押しても何も起きないことがあった(資材計算 0.2.34・現場の指摘)】検入数・外径を打ってすぐ
+// 「計算Start」を押すと、押した瞬間に欄から外れて change で検入数が送られ、その返事で上のお知らせ欄
+// (#messages)が出たり消えたりしてボタンが下へずれ、離したときにはボタンの外 ── クリックにならなかった。
+// 押した瞬間は欄から外さない(mousedown を止める)。打った値は計算の前にこちらで送る
+$('#run').addEventListener('mousedown', (e) => {
+  const at = document.activeElement;
+  if (at && (at.id === 'ins' || at.id === 'outer')) e.preventDefault();
+});
 $('#run').addEventListener('click', async () => {
+  if (inputChanged() && ($('#ins').value !== '' || $('#outer').value !== '')) {
+    const sent = await sendInput();
+    if (!sent.ok) { apply(sent); return; }
+  }
+  const at = document.activeElement;
+  if (at && (at.id === 'ins' || at.id === 'outer')) at.blur();   // 送った値と同じなので change は送らない
   const r = await call('/api/calc/run', {});
   apply(r, r.ok ? `台数 ${r.view.result.台数} 台 / ﾘﾌﾟﾗ ${r.view.result.TotalC} 本` : '');
 });

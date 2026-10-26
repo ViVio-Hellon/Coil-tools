@@ -451,16 +451,30 @@ def details_weights_late_reply(ctx, fr):
     details_weights(fr, *before)            # 元へ戻す(あとの試験が使う)
 
 
-def details_stack_and_output(fr, keys):
+def details_slots(fr):
+    return fr.evaluate("[...document.querySelectorAll('#stack button.slot')].map(b => b.textContent.trim())")
+
+
+def details_stack_and_output(fr, keys, resize=False):
+    """積んで出力する。`resize` なら積みかけで積み条数(積み本数)を増やして戻し、積んだものが残るか見る
+    (梱包明細 VER 0.13.33・現場の求め。VBA は積み条数を変えると全部外れて積み直しになった)。"""
     fr.click("#btnStrands")
     if not wait_until(lambda: visible(fr, "#strandCard"), 8):
         return "条番号が出ない: " + text(fr, "#notice")
     fr.fill("#stackMax", str(len(keys)))
     fr.press("#stackMax", "Tab")
     wait_until(lambda: fr.evaluate("document.querySelectorAll('#stack button.slot').length") == len(keys), 5)
-    for k in keys:
+    for i, k in enumerate(keys):
         fr.click(f'#grid button.coil[data-key="{k}"]')
         fr.wait_for_timeout(150)
+        if resize and i == 1:
+            fr.click('[data-stack="1"]')               # 積み条数を1つ増やす(＋)
+            grown = wait_until(lambda: len(details_slots(fr)) == len(keys) + 1, 5)
+            kept = details_slots(fr)[:2] == list(keys[:2])
+            fr.click('[data-stack="-1"]')              # 戻す(上の空きだけ取れる)
+            back = wait_until(lambda: len(details_slots(fr)) == len(keys), 5)
+            if not (grown and kept and back and details_slots(fr)[:2] == list(keys[:2])):
+                return f"積み条数を変えたら積んだコイルが外れた: {details_slots(fr)}"
     if not wait_until(lambda: fr.evaluate("!document.querySelector('#btnOutput').disabled"), 5):
         return "出力が押せない"
     fr.click("#btnOutput")
@@ -589,6 +603,26 @@ def material_ins(fr, value: str) -> None:
         fr.press("#ins", "Tab")
 
 
+def material_run_right_after_typing(app, fr):
+    """検入数を打って Tab で抜けずに、人の速さ(押して 0.15 秒で離す)で「計算Start」を押す。
+    以前は押した瞬間に送られた検入数の返事で上のお知らせ欄が動き、ボタンがずれて1回目が空振りした。"""
+    page = fr.page
+    results = []
+    for value in ("12", "10"):
+        fr.click("#ins")
+        fr.fill("#ins", value)
+        box = fr.locator("#run").bounding_box()
+        n0 = app.logs().count("/api/calc/run")
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.wait_for_timeout(150)
+        page.mouse.up()
+        ran = wait_until(lambda: app.logs().count("/api/calc/run") > n0, 5)
+        results.append((value, bool(ran), text(fr, "#ins")))
+        page.wait_for_timeout(500)
+    return all(r[1] for r in results), results
+
+
 def material_calc(fr, lot, ins="10"):
     fr.fill("#lot", "")
     fr.type("#lot", lot, delay=20)
@@ -617,7 +651,7 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
           text(fr, "#warisu"))
     details_weights(fr, 250, 248)
     details_weights_late_reply(ctx, fr)
-    err = details_stack_and_output(fr, ["1-12", "1-11", "2-12", "2-11"])
+    err = details_stack_and_output(fr, ["1-12", "1-11", "2-12", "2-11"], resize=True)
     check("梱包明細: 重量 → 条番号表示 → 積み → 出力", not err, err or text(fr, "#notice"))
     with ctx.expect_page() as info:
         fr.click("#btnPrint")
@@ -625,6 +659,9 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
     report.wait_for_load_state()
     note["report"] = report
     check("梱包明細: 帳票が別タブで開く", "L5160Z0-No1" in report.title(), report.url.split("?")[0])
+    check("梱包明細: 帳票に「印刷する」と「このタブを閉じる」(統合 1.2.55)",
+          report.locator(".editbar button.print").count() == 1
+          and report.locator(".editbar button[data-close-tab]").count() == 1)
     rows = report.evaluate("[...document.querySelectorAll('tr.r-data td')].map(t => t.textContent.trim()).filter(Boolean)")
     check("梱包明細: 帳票に積んだ4本と重量", sum(1 for r in rows if r.endswith("Kg")) == 4, rows[:8])
     report.click('span.edit[data-placeholder="サイズ"]')
@@ -695,6 +732,8 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
     check("資材計算: 担当者を選べる(名簿の機側の人)", note["worker"], note["worker"])
     err = material_calc(fr, "A123456")
     check("資材計算: ロット → 検入数 → 計算", not err, err)
+    check("資材計算: 検入数を打ってすぐ「計算Start」を押しても1回で計算する(0.2.34)",
+          *material_run_right_after_typing(app, fr))
     fr.check("#size-fixed")
     fr.click("#add")
     check("資材計算: チェックリストへ積む", material_toast(fr, "行目に積みました"), text(fr, "#toast"))
@@ -722,7 +761,11 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
     rep.wait_for_load_state()
     check("資材計算: チェックリストの印刷が別タブで開く",
           "A123456" in rep.content() and "チェックリスト" in rep.title() + rep.content(), rep.url.split("?")[0])
-    rep.close()
+    rep.click(".printbar button[data-close-tab]")
+    check("資材計算: チェックリストの印刷を「このタブを閉じる」で閉じられる(統合 1.2.55)",
+          wait_until(lambda: rep.is_closed(), 5))
+    if not rep.is_closed():
+        rep.close()
     fr.click("a#to-order")
     fr.wait_for_load_state()
     fr = sh.frame("material")

@@ -231,6 +231,10 @@ def _sheet_css() -> str:
     font-weight:bold; color:#fff; background:#0e6a72;
     border:1px solid #0e6a72; border-radius:4px; cursor:pointer; }}
   .editbar .print:hover{{ filter:brightness(1.08); }}
+  .editbar .close{{ margin-left:.4em; padding:3px 12px; font:inherit; color:#1f2937;
+    background:#fff; border:1px solid #9ca3af; border-radius:4px; cursor:pointer; }}
+  .editbar .close:hover{{ background:#f3f4f6; }}
+  .editbar .close-note{{ margin-left:.6em; color:#b45309; }}
 }}
 
 /* 開いたままの紙面が古くなった(作り直し・取り消し・全クリア。統合 1.2.49)。紙面を隠して
@@ -360,6 +364,18 @@ def build_report(outputs: Iterable[Output], *,
     return report
 
 
+#: 「このタブを閉じる」(ペナラベルの印刷用のタブと同じ。統合 1.2.55・現場の指摘: 印刷プレビューに閉じるが無い)。
+#: 閉じられない開き方(ブラウザが許さない)のときは、ブラウザの × で閉じるよう案内する
+CLOSE_BUTTON = (
+    ' <button type="button" class="close" data-close-tab'
+    ' onclick="window.close();setTimeout(function(){if(!window.closed){'
+    "var n=document.getElementById('closeNote');if(n)n.hidden=false;}},300)\">"
+    'このタブを閉じる</button>'
+    '<span id="closeNote" class="close-note" hidden>このタブはブラウザの × で閉じてください。'
+    'ツールの画面はそのまま開いています。</span>'
+)
+
+
 # 紙面の上に出す案内。**画面のときだけ**で、紙には出ない
 EDIT_HINT = (
     "点線の欄に <b>サイズ・LOTNO</b> を書き足せます"
@@ -368,6 +384,7 @@ EDIT_HINT = (
     # 刷る前に、この紙がまだ使えるか聞く(`cptPrint`。統合 1.2.49)。仕掛けが無ければそのまま刷る
     ' <button type="button" class="print"'
     ' onclick="window.cptPrint ? window.cptPrint() : window.print()">印刷する</button>'
+    + CLOSE_BUTTON
 )
 
 
@@ -404,7 +421,8 @@ def render(outputs: Iterable[Output], *, title: Optional[str] = None,
 # 履歴から紙面を作り直す (`slip_history`)
 # ------------------------------------------------------------------
 HISTORY_BAR = ('履歴から作り直した紙面です（書き足しはできません）。'
-               ' <button type="button" class="print" onclick="window.print()">印刷する</button>')
+               ' <button type="button" class="print" onclick="window.print()">印刷する</button>'
+               + CLOSE_BUTTON)
 
 
 def _from_history(slip: dict) -> Output:

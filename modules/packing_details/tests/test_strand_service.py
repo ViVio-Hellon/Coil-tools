@@ -10,7 +10,7 @@ import unittest
 
 from modules.packing_details.meisai import config
 from modules.packing_details.meisai.strand_service import (Board, RefusedError, REFUSE_DISCARDED,
-                                   REFUSE_FULL, REFUSE_NO_SLOTS,
+                                   REFUSE_FULL, REFUSE_NO_SLOTS, REFUSE_STACK_SHRINK,
                                    REFUSE_UNKNOWN_KEY, REFUSE_USED,
                                    distribute, key_of, keys_for_jou, parse_key)
 
@@ -179,13 +179,34 @@ class StackTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             board.set_stack_max(0)
 
-    def test_積み条数を変えるとスロットは空になる(self):
-        # VBA `txtTsumiJouSu_Change` は ResetGimmickBUsed してから作り直す
+    def test_積み始めてから積み条数を変えても積んだコイルは残る(self):
+        # VER 0.13.33・現場の求め。VBA `txtTsumiJouSu_Change` は全部外していた(積み直しになった)
         board = _board()
         board.stack("1-1")
+        board.stack("1-2")
+        board.set_stack_max(len(board.slots) + 2)
+        self.assertEqual(board.slots[:2], ["1-1", "1-2"])
+        self.assertTrue(all(s is None for s in board.slots[2:]))
+        self.assertEqual(board.used, {"1-1", "1-2"})
+        board.set_stack_max(3)                       # 上の空きだけ取る
+        self.assertEqual(board.slots, ["1-1", "1-2", None])
+        board.stack("1-3")
+        self.assertTrue(board.is_complete)
+
+    def test_減らすと積んだコイルのスロットが無くなるなら断る(self):
+        board = _board()
+        board.set_stack_max(4)
+        board.stack("1-1")
+        board.stack("1-2")
+        board.stack("1-3")
+        board.unstack(2)                             # 間が空いたまま(詰め直さない)
+        with self.assertRaises(RefusedError) as cm:
+            board.set_stack_max(2)
+        self.assertEqual(cm.exception.reason, REFUSE_STACK_SHRINK)
+        self.assertIn("スロット3: 1-3", cm.exception.message)
+        self.assertEqual(board.slots, ["1-1", None, "1-3", None], "断ったら何も変えない")
         board.set_stack_max(3)
-        self.assertEqual(board.slots, [None, None, None])
-        self.assertEqual(board.used, set())
+        self.assertEqual(board.slots, ["1-1", None, "1-3"])
 
     def test_積み上げ順がそのまま紙の行順(self):
         board = _board()

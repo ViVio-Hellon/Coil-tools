@@ -185,6 +185,9 @@ table.form th { background: #f0f0f0; font-weight: bold; }
   border: 1px solid #1e5aa8; border-radius: 6px; background: #1f63b8; color: #fff;
   cursor: pointer; }
 .printbar button:hover { background: #2470cc; }
+.printbar button.close { background: #fff; color: #1f2937; border-color: #9ca3af; font-weight: normal; }
+.printbar button.close:hover { background: #f3f4f6; }
+.printbar .close-note { color: #b45309; }
 """
 
 # 画面で見たときだけ出る操作案内(印刷はされない)
@@ -312,10 +315,23 @@ _EDIT_SCRIPT = """
 """
 
 
-# 画面の上に出す「印刷する」(紙には出ない)
+#: 「このタブを閉じる」(ペナラベルの印刷用のタブと同じ。統合 1.2.55・現場の指摘: 印刷プレビューに閉じるが無い)。
+#: 閉じられない開き方(ブラウザが許さない)のときは、ブラウザの × で閉じるよう案内する
+_CLOSE_BUTTON = (
+    ' <button type="button" class="close" data-close-tab'
+    ' onclick="window.close();setTimeout(function(){if(!window.closed){'
+    "var n=document.getElementById('closeNote');if(n)n.hidden=false;}},300)\">"
+    'このタブを閉じる</button>'
+    '<span id="closeNote" class="close-note" hidden>このタブはブラウザの × で閉じてください。'
+    'ツールの画面はそのまま開いています。</span>'
+)
+
+
+# 画面の上に出す「印刷する」「このタブを閉じる」(紙には出ない)
 _PRINT_BAR = ('<div class="screen-only printbar">'
               '<button type="button" id="printNow" onclick="window.print()">印刷する</button>'
-              '<span>押すと印刷のダイアログが開きます(Ctrl+P と同じ)。</span></div>')
+              + _CLOSE_BUTTON +
+              '<span>「印刷する」を押すと印刷のダイアログが開きます(Ctrl+P と同じ)。</span></div>')
 
 
 def render_html(report: Report, *, edit_url: str = "", print_button: bool = False) -> str:

@@ -1018,9 +1018,13 @@ function wire() {
   });
 
   // --- 積み条数 ---
-  $("stackMax").addEventListener("change", () => {
-    send("/api/stack-max", { value: $("stackMax").value });
-  });
+  // 積んだコイルは残したまま変えられる(VER 0.13.33)。断られたら(減らすと積んだコイルの
+  // スロットが無くなる)欄をいまの値へ戻す
+  const sendStackMax = async (value) => {
+    const body = await send("/api/stack-max", { value });
+    if (!body) $("stackMax").value = (window.APP.state || {}).stack_max || "";
+  };
+  $("stackMax").addEventListener("change", () => sendStackMax($("stackMax").value));
   // −/＋ でも入れられる(丈数と同じ形)。1〜最大の範囲に収める
   document.querySelectorAll("[data-stack]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1030,7 +1034,7 @@ function wire() {
       const next = Math.min(max, Math.max(1, now + parseInt(button.dataset.stack, 10)));
       if (String(next) === box.value) return;
       box.value = String(next);
-      send("/api/stack-max", { value: box.value });
+      sendStackMax(box.value);
     });
   });
 
