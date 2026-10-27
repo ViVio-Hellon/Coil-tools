@@ -183,6 +183,57 @@ class ScreensTest(unittest.TestCase):
         self.assertIsNone(watch.overdue())
         self.assertFalse(watch.screens()["pena-1"]["leaving"])
 
+    def test_スリープから戻ったら画面の心拍が届くまで終わらない(self):
+        """統合 1.2.56・ほかのツールで起きた不具合: 戻ったあと数え直した 90 秒だけ待っていたので、
+        ブラウザのタブが休止したまま・戻りが遅いと間に合わずに終わっていた(実ブラウザで再現)。"""
+        watch = _watch()
+        watch.beat(hidden=False, client="shell-1")
+        mono = time.monotonic()
+        watch.check_wake(wall=1000.0, mono=mono)
+        watch.check_wake(wall=1000.0 + 3600, mono=mono + 2)
+        self.assertTrue(watch.after_wake)
+        for s in watch._screens.values():          # 戻ってから何分たっても画面が動かない
+            s.seen = time.monotonic() - 3600
+        self.assertIsNone(watch.overdue())
+        watch.beat(hidden=False, client="pena-1")   # どれかの画面の心拍が届いた
+        self.assertFalse(watch.after_wake)
+        self.assertLess(watch.screens()["shell-1"]["since_beat"], 5, "まだ届かない画面も数え直す")
+        self.assertIsNone(watch.overdue())
+        for s in watch._screens.values():
+            s.seen = time.monotonic() - 91
+        self.assertIn("心拍がありません", watch.overdue() or "", "心拍が届いたあとは、いつもどおり")
+
+    def test_スリープから戻ったあとも閉じた合図は効く(self):
+        watch = _watch()
+        watch.beat(hidden=False, client="shell-1")
+        mono = time.monotonic()
+        watch.check_wake(wall=1000.0, mono=mono)
+        watch.check_wake(wall=1000.0 + 3600, mono=mono + 2)
+        watch.leaving("shell-1")
+        watch._screens["shell-1"].leaving_at = time.monotonic() - 9
+        self.assertEqual(watch.overdue(), "画面が閉じられました")
+
+    def test_一度も繋がっていなければスリープの待ちに入らない(self):
+        watch = _watch()
+        mono = time.monotonic()
+        watch.check_wake(wall=1000.0, mono=mono)
+        watch.check_wake(wall=1000.0 + 3600, mono=mono + 2)
+        self.assertFalse(watch.after_wake)
+
+    def test_確認の窓の合図は裏に回ったのと同じに扱う(self):
+        """統合 1.2.56: confirm / alert / prompt のあいだは画面の JavaScript が止まる。画面は
+        出す前に `state: hidden`(reason: dialog)を送る。押さずに何分たっても終わらない。"""
+        self.assertTrue(idle_exit.reset() is None)
+        watch = idle_exit.install(lambda: None, lambda: False, idle_sec=90, grace_sec=8, tick_sec=3600)
+        self.addCleanup(idle_exit.reset)
+        idle_exit.signal(client="shell-1", hidden=False)
+        idle_exit.signal(client="shell-1", hidden=True)       # 窓を出す前の合図
+        watch._screens["shell-1"].seen = time.monotonic() - 3600
+        self.assertIsNone(watch.overdue())
+        idle_exit.signal(client="shell-1", hidden=False)      # 閉じたあと
+        watch._screens["shell-1"].seen = time.monotonic() - 91
+        self.assertIsNotNone(watch.overdue())
+
     def test_名乗りは長さと文字を絞る(self):
         watch = _watch()
         watch.beat(hidden=False, client="pena-<script>" + "x" * 200)

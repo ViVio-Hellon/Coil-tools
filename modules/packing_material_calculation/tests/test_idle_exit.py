@@ -97,7 +97,10 @@ def test_眠っていたら待ち直す(watch, clock):
     clock.now += 2 * 3600                   # PC が2時間スリープ
     watch._notice_suspend()                 # 起きて最初の見張り
     assert watch.overdue() is None
-    clock.now += 91                         # 起きてからも心拍が来なければ
+    clock.now += 3600                       # 起きてから画面が動き出さなくても(タブの休止・戻りの遅れ)
+    assert watch.overdue() is None          # 心拍が届くまでは終わらない(統合 1.2.56。以前は 91 秒で終わった)
+    watch.beat(hidden=False)                # ブラウザが動き出した
+    clock.now += 91                         # そこから心拍が来なければ
     assert watch.overdue() is not None      # そこで初めて終わる
 
 

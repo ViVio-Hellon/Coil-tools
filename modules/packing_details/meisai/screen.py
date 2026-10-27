@@ -78,6 +78,9 @@ log = get_logger("screen")
 # 突然使えなくなる。2回ぶん待つ。
 GRACE_SEC = 50.0
 
+# 時刻は**進むだけの時計**(`time.monotonic()`)で測る(VER 0.13.34)。壁時計は NTP の補正や
+# 手での変更で大きく飛び、進むと持ち主の画面が居ないとみなされて2枚目のタブに取られた
+
 _lock = threading.RLock()
 _holder: Optional[str] = None
 _last_seen: float = 0.0
@@ -95,7 +98,7 @@ class Holder:
 
     @property
     def idle_sec(self) -> float:
-        return max(0.0, time.time() - self.last_seen)
+        return max(0.0, time.monotonic() - self.last_seen)
 
 
 def new_id() -> str:
@@ -117,7 +120,7 @@ def _alive(now: float) -> bool:
 def holder() -> Optional[Holder]:
     """いまの持ち主。居ない(または心拍が途切れた)なら None。"""
     with _lock:
-        if not _alive(time.time()):
+        if not _alive(time.monotonic()):
             return None
         return Holder(_holder or "", _last_seen)
 
@@ -133,7 +136,7 @@ def claim(screen_id: str) -> bool:
     """
     global _holder, _last_seen
     with _lock:
-        now = time.time()
+        now = time.monotonic()
         if _alive(now) and _holder != screen_id:
             return False
         if _holder != screen_id:
@@ -181,7 +184,7 @@ def beat(screen_id: str, *, hidden: Optional[bool] = None) -> bool:
     with _lock:
         if not _holder or _holder != screen_id:
             return False
-        _last_seen = time.time()
+        _last_seen = time.monotonic()
         if hidden is not None:
             _set_hidden(hidden)
         return True
@@ -211,7 +214,7 @@ def note_wake(gap_sec: float = 0.0) -> None:
     global _last_seen
     with _lock:
         if _holder:
-            _last_seen = time.time()
+            _last_seen = time.monotonic()
             log.info("スリープから戻ったので空きの猶予を数え直す(約%.0f秒止まっていた)",
                      gap_sec)
 

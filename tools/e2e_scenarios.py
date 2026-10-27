@@ -25,6 +25,8 @@
    b. 裏に回して放置(ブラウザがタブを凍結したのと同じ ── 裏に回った合図のあと
       ページの JavaScript を止める)
    c. スリープ(サーバのプロセスも止め、ブラウザも止める)
+   c2. スリープから戻ったが、サーバだけ先に動き、画面は 100 秒止まったまま(統合 1.2.56)
+   c3. 確認の窓(confirm)を出したまま 100 秒(統合 1.2.56)
    d. 統合画面を閉じ、帳票の別タブだけを残して放置
    f. 本ツール以外のタブを開き、本ツールのタブが裏で捨てられる → 戻る(読み直し)
    e. 全部閉じて放置 → 自分で終わる → 翌朝と同じく開き直す(残るもの・消えるもの)
@@ -1990,6 +1992,32 @@ def scenario_idle(app: App, ctx, sh: Shell, note: dict, minutes: dict) -> None:
     ok = _hold(app, 20, "c. スリープから戻った直後")
     check("放置c(スリープ): 戻ってもサーバが終わらない", ok, "")
     _after_idle(sh, "放置c(スリープから戻る)")
+    # c2. スリープから戻ったが、サーバだけ先に動き出し、画面は 100 秒止まったまま(統合 1.2.56)。
+    #     以前は戻ってから数え直した 90 秒しか待たず、ブラウザのタブが休止したまま・戻りが遅いと終わった
+    with Frozen(pages, hide=False):
+        os.kill(app.proc.pid, signal.SIGSTOP)
+        try:
+            time.sleep(20)
+        finally:
+            os.kill(app.proc.pid, signal.SIGCONT)
+        ok = _hold(app, 100, "c2. 戻ったがサーバだけ先に動き、画面は止まったまま")
+    check("放置c2(スリープから戻り画面だけ遅れる): 画面が止まっていても終わらない", ok, "")
+    _after_idle(sh, "放置c2(画面が動き出す)")
+    # c3. 確認の窓(confirm)を出したまま 100 秒(統合 1.2.56)。窓のあいだは画面の JavaScript が止まる
+    m = sh.tab("material")
+    material_ready(m)
+    n0 = app.logs().count("(dialog)") + app.logs().count(": dialog ")
+    DIALOG_WAIT["sec"] = 100.0
+    try:
+        m.evaluate("() => setTimeout(() => document.querySelector('#weight').click(), 50)")
+        print("   … c3. 確認の窓を出したまま 100秒", flush=True)
+        sh.page.wait_for_timeout(1000)            # ここで窓が出て、押すまで 100 秒待つ(_on_dialog)
+    finally:
+        DIALOG_WAIT["sec"] = 0.0
+    signalled = (app.logs().count("(dialog)") + app.logs().count(": dialog ")) > n0
+    check("放置c3(確認の窓を出したまま 100 秒): サーバが終わらない", app.alive(),
+          "窓の前の合図あり" if signalled else "窓の前の合図がログに無い")
+    _after_idle(sh, "放置c3(窓を閉じたあと)")
     check("放置a〜c: サーバは同じプロセスのまま(開き直しになっていない)",
           (app.health() or {}).get("pid") == pid, pid)
 

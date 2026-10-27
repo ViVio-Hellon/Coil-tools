@@ -159,6 +159,10 @@
         frame = document.createElement("iframe");
         frame.className = "logdlg__frame";
         frame.title = "ログとエラーの記録";
+        // ログの画面の確認の窓もくるむ(読み込むたびに文書が替わる。統合 1.2.56)
+        frame.addEventListener("load", function () {
+          if (window.cptWrapDialogs) window.cptWrapDialogs(frame.contentWindow);
+        });
         body.appendChild(frame);
       }
       frame.src = "/log?embed=1&t=" + encodeURIComponent(window.SHELL.token) +
@@ -255,6 +259,7 @@
         frame.contentWindow.addEventListener("afterprint", function () {
           if (window.cptPrinted) window.cptPrinted();
         });
+        if (window.cptWrapDialogs) window.cptWrapDialogs(frame.contentWindow);
       }
       catch (err) { /* 触れない文書(起きないはず)はブラウザに任せる */ }
     }
@@ -366,6 +371,32 @@
   window.addEventListener("afterprint", printed);
   window.cptPrinting = printing;
   window.cptPrinted = printed;
+
+  // 確認の窓(confirm / alert / prompt)が出ているあいだも、この画面の JavaScript は止まり
+  // 心拍が途切れる。押さずに 90 秒を超えると、誰も見ていないとみなされて終わっていた
+  // (統合 1.2.56。実ブラウザで再現)。印刷と同じく、出す前に「裏に回った」と同じ合図を送り、
+  // 閉じたら戻す。統合画面・3機能の画面(iframe)・ログの画面の窓をくるむ(同じアプリなので触れる)
+  function wrapDialogs(win) {
+    try {
+      if (!win || win.__cptDialogs) return;
+      win.__cptDialogs = true;
+      ["confirm", "alert", "prompt"].forEach(function (name) {
+        var original = win[name];
+        if (typeof original !== "function") return;
+        win[name] = function () {
+          beacon({ reason: "dialog", state: "hidden" });
+          try { return original.apply(win, arguments); }
+          finally { alive({ reason: "dialog-closed" }); }
+        };
+      });
+    } catch (e) { /* 触れない文書はくるまない */ }
+  }
+  window.cptWrapDialogs = wrapDialogs;
+  wrapDialogs(window);
+  panes.forEach(function (p) {                 // すでに読み込み済みの画面(読み込むたびにも付け直す)
+    var f = p.querySelector("iframe");
+    if (f) wrapDialogs(f.contentWindow);
+  });
   document.addEventListener("freeze", function () { beacon({ reason: "freeze" }); });
   document.addEventListener("resume", function () { resume("resume"); });
   window.addEventListener("focus", function () { resume("focus"); });

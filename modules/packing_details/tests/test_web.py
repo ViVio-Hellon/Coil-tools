@@ -225,7 +225,7 @@ class ScreenTest(unittest.TestCase):
     def test_心拍が途切れれば空く(self):
         """タブが落ちても、誰も入れないままにはしない。"""
         self.assertIsNotNone(screen.holder())
-        screen._last_seen = time.time() - screen.GRACE_SEC - 1
+        screen._last_seen = time.monotonic() - screen.GRACE_SEC - 1
         self.assertIsNone(screen.holder())
         self.assertEqual(self._claim("べつの画面").status_code, 200)
 

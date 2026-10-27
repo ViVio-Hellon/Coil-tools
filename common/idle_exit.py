@@ -48,7 +48,16 @@
    **閉じた合図(`leaving`)は裏でも効く** ── 裏のまま閉じても終わる
 5. **スリープから戻った直後に落とさない。** 止まっていた時間をまとめて
    「心拍なし」と数えると、画面の心拍が届く前に終わってしまう(実測)。
-   見張りの刻みが大きく飛んだら、スリープから戻ったとみなして数え直す
+   見張りの刻みが大きく飛んだら、スリープから戻ったとみなして数え直す。
+   **戻ったあとは、どれかの画面から心拍が1回届くまで「心拍が無い」ことを理由に
+   終わらない**(統合 1.2.56)。以前は数え直した 90 秒だけ待っていたので、ブラウザの
+   タブが休止したまま・戻りが遅いと間に合わずに終わっていた(実ブラウザで再現。
+   ほかのツールでも起きた)。心拍が届いたら、そこから全部の画面を数え直す。
+   閉じた合図(`leaving`)はそのあいだも効く
+7. **確認の窓のあいだも落とさない。** confirm / alert / prompt が出ているあいだは
+   画面の JavaScript が止まり心拍も止まる。画面は出す前に「裏に回った」と同じ合図
+   (`reason: dialog`)を送り、閉じたら戻す(`static/js/shell.js` `tab_alive.js`。
+   統合 1.2.56。印刷の窓は統合 1.2.20 から同じ扱い)
 6. **別のタブの画面を巻き添えにしない。** 3機能とも印刷は別のタブで開く
    (梱包明細の帳票・ペナラベルの印刷ビュー・資材計算のチェックリストと発注票)。
    画面は名乗り(`client`)を付けて心拍を送り、見張りは**画面ごとに**生き死にを
@@ -147,6 +156,9 @@ class IdleWatch:
         # 見張りの前回の刻み(壁時計・単調時計)。飛びを測ってスリープを知る
         self._last_wall: Optional[float] = None
         self._last_mono: Optional[float] = None
+        # スリープから戻って、まだどの画面からも心拍が届いていない(統合 1.2.56)。
+        # このあいだは「心拍が無い」ことを理由に終わらない
+        self._after_wake = False
         self._done = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -209,7 +221,17 @@ class IdleWatch:
                 if client:
                     log.info("画面が開きました: %s(見ている画面 %d 枚)",
                              client, len(self._screens))
-            s.seen = time.monotonic()
+            now = time.monotonic()
+            if self._after_wake:
+                # スリープから戻って最初の心拍。ブラウザが動き出したので、ここから全部の画面を
+                # 数え直す(まだ心拍の届かない画面にも、いつもの待ち時間を与える)
+                self._after_wake = False
+                for other in self._screens.values():
+                    if other.seen is not None:
+                        other.seen = now
+                log.info("スリープから戻って最初の心拍が届きました%s。ここから心拍を待つ時間を数えます",
+                         f"({client})" if client else "")
+            s.seen = now
             if not keep_leaving:
                 s.leaving_at = None
             if hidden is not None and hidden != s.hidden:
@@ -223,6 +245,12 @@ class IdleWatch:
         while len(self._screens) >= MAX_SCREENS:
             oldest = min(self._screens, key=lambda k: self._screens[k].seen or 0.0)
             del self._screens[oldest]
+
+    @property
+    def after_wake(self) -> bool:
+        """スリープから戻って、まだどの画面からも心拍が届いていないか。"""
+        with self._lock:
+            return self._after_wake
 
     @property
     def hidden(self) -> bool:
@@ -337,8 +365,10 @@ class IdleWatch:
                 if s.seen is not None:
                     s.seen = mono
                 s.leaving_at = None
+            # 画面の心拍が1回届くまでは、心拍が無いことを理由に終わらない(統合 1.2.56)
+            self._after_wake = any(s.seen is not None for s in self._screens.values())
         log.info("スリープ(または長い停止)から戻りました(約%.0f秒)。"
-                 "心拍を待つ時間を数え直します", gap)
+                 "画面の心拍が届くまで終了しません", gap)
         if self._on_wake is not None:
             try:
                 self._on_wake(gap)
@@ -360,6 +390,9 @@ class IdleWatch:
         if s.hidden:
             # 裏に回っている。心拍が止まっているのはブラウザの間引きで、
             # 画面は閉じられていない。前に戻る合図を待つ
+            return None
+        if self._after_wake:
+            # スリープから戻って、まだどの画面の心拍も届いていない。ブラウザが動き出すのを待つ
             return None
         if now - s.seen >= self.idle_sec:
             return f"{self.idle_sec:.0f}秒 心拍がありません"

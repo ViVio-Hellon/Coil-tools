@@ -159,7 +159,7 @@ class ScreenBackgroundTest(unittest.TestCase):
         screen.claim("A")
 
     def _age(self, seconds: float) -> None:
-        screen._last_seen = time.time() - seconds
+        screen._last_seen = time.monotonic() - seconds
 
     def test_持ち主の心拍はどれだけ遅れても受ける(self):
         """**締め出さない。** 直す前は、裏から戻った持ち主が
@@ -248,7 +248,7 @@ class AliveEndpointTest(unittest.TestCase):
         """直す前の実測: 空きの猶予を過ぎて戻ると `409 screen_taken`。"""
         _seed(self.conn)
         self._alive(state="hidden")
-        screen._last_seen = time.time() - screen.GRACE_SEC * 10
+        screen._last_seen = time.monotonic() - screen.GRACE_SEC * 10
         self._alive(state="visible", reason="foreground")
         res = self.client.post("/api/lot", json={"lot_no": "L5160Z0"}, headers=HEADERS)
         self.assertEqual(res.status_code, 200, res.get_data(as_text=True))

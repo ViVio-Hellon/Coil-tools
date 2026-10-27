@@ -84,6 +84,18 @@
   // 長くなっても終わらないよう、開く前に「裏に回った」と同じ合図を送る(統合 1.2.20)
   window.addEventListener("beforeprint", function () { signal({ reason: "print", state: "hidden" }); });
   window.addEventListener("afterprint", function () { alive("afterprint"); });
+  // 確認の窓(confirm / alert / prompt)のあいだも JavaScript が止まる。押さずに 90 秒を超えても
+  // 終わらないよう、印刷と同じく出す前に合図を送り、閉じたら戻す(統合 1.2.56)
+  ["confirm", "alert", "prompt"].forEach(function (name) {
+    var original = window[name];
+    if (typeof original !== "function" || window.__cptDialogs) { return; }
+    window[name] = function () {
+      signal({ reason: "dialog", state: "hidden" });
+      try { return original.apply(window, arguments); }
+      finally { alive("dialog-closed"); }
+    };
+  });
+  window.__cptDialogs = true;
   document.addEventListener("freeze", function () { signal({ reason: "freeze" }); });
   document.addEventListener("resume", function () { alive("resume"); });
   window.addEventListener("pagehide", function (e) {
