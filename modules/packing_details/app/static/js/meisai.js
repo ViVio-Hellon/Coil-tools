@@ -682,7 +682,10 @@ function renderHistory(body) {
   if (body.last_error) line(`送れなかった理由: ${body.last_error}`);
   else if (body.last_sent_at) line(`最後に送った: ${body.last_sent_at.slice(0, 16)}`);
   line(`${body.keep_years}年より前（${body.cutoff} より前）は自動で整理します`);
-  const bad = Boolean(body.last_error) || (body.shared_problem && body.shared_count === null);
+  // 整理を見送ったわけ(この PC の時計がずれている など。統合 1.2.62)
+  if (body.purge_note) line(`※ ${body.purge_note}`);
+  const bad = Boolean(body.last_error) || Boolean(body.purge_note)
+    || (body.shared_problem && body.shared_count === null);
   box.className = bad ? "set-share bad" : "set-share";
 }
 

@@ -295,7 +295,7 @@ class SendResult:
 
 
 _send_lock = threading.Lock()
-_status: dict[str, str] = {"last_sent_at": "", "last_try_at": "", "last_error": ""}
+_status: dict[str, str] = {"last_sent_at": "", "last_try_at": "", "last_error": "", "purge_note": ""}
 _local_purged_on: Optional[str] = None
 # 今日もう共有を整理したか。**送るものが無く整理も済んでいれば共有に触らない**
 # (5分ごとに全ラインが共有の鍵を取りに行くのは無駄)
@@ -518,12 +518,66 @@ def _read_shared(read: Callable[[sqlite3.Connection], Any]) -> Any:
     raise AssertionError("unreachable")                 # pragma: no cover
 
 
-def _purge_shared(hconn: sqlite3.Connection, today: str) -> int:
-    """共有を整理する(3年より前)。**1日1回**(`整理記録` に日付を残す)。"""
+#: 共有の整理で一度に消してよい割合と、割合を見ないでよい枚数(統合 1.2.62)。ふだんは毎日1日分(3年の 0.1% ほど)。
+#: これを超えるのは、この PC の時計が進んでいるか、長く整理されていなかったとき。どちらも黙って消さない
+PURGE_MAX_SHARE = 0.10
+PURGE_MIN_ROWS = 50
+#: この PC の時計と共有フォルダの時計のずれを、ここまでは許す
+CLOCK_TOLERANCE = timedelta(days=1)
+
+
+def _shared_clock(folder: Path) -> Optional[datetime]:
+    """共有フォルダの時計(小さなファイルを作って、付いた更新日時を見る)。確かめられなければ None。
+
+    ファイルサーバーが付ける日時なので、PC ごとの時計と比べられる(書き手の PC が日時を付ける作りの
+    共有では、この PC の時計と同じになり、ずれは見つけられない。そのときは消す枚数の上限が守る)。
+    """
+    probe = folder / f".時計確認_{os.getpid()}_{uuid.uuid4().hex[:8]}.tmp"
+    try:
+        probe.write_bytes(b"")
+        try:
+            return datetime.fromtimestamp(probe.stat().st_mtime)
+        finally:
+            try:
+                probe.unlink()
+            except OSError:
+                pass
+    except OSError as exc:
+        log.warning("共有フォルダの時計を確かめられません: %s", exc)
+        return None
+
+
+def _purge_shared(hconn: sqlite3.Connection, today: str, folder: Optional[Path] = None,
+                  *, now: Optional[datetime] = None) -> int:
+    """共有を整理する(3年より前)。**1日1回**(`整理記録` に日付を残す)。
+
+    **消す前に、この PC の時計を確かめる**(統合 1.2.62・現場の指示)。整理する日は出力日時で決めるので、
+    時計が大きく進んだ PC が1台あると、全ラインの履歴を消してしまう。
+    - 共有フォルダの時計と1日より大きくずれていれば消さない(確かめられないときも消さない)
+    - 消す枚数が多すぎる(全体の 1 割かつ 50 枚を超える)ときも消さない
+    見送ったときは整理した日を残さない(次の日にまた確かめる)。理由はログと履歴の画面に出す。
+    """
     row = hconn.execute("SELECT 値 FROM 整理記録 WHERE 項目 = '最後に整理した日'").fetchone()
     if row is not None and row[0] == today:
         return 0
-    limit = cutoff()
+    now = now or datetime.now()
+    if folder is not None:
+        server = _shared_clock(folder)
+        if server is None:
+            return _skip_purge("共有フォルダの時計を確かめられないので、古い履歴の整理を見送りました")
+        gap = abs(server - now)
+        if gap > CLOCK_TOLERANCE:
+            return _skip_purge(
+                f"この PC の時計({now:%Y-%m-%d %H:%M})と共有フォルダの時計({server:%Y-%m-%d %H:%M})が"
+                f"{gap.days}日ほどずれているので、古い履歴の整理を見送りました。この PC の日時を確かめてください")
+    limit = cutoff(now.date())
+    total = hconn.execute("SELECT COUNT(*) FROM 明細履歴").fetchone()[0]
+    doomed = hconn.execute("SELECT COUNT(*) FROM 明細履歴 WHERE 出力日時 < ?", (limit,)).fetchone()[0]
+    if doomed > max(PURGE_MIN_ROWS, total * PURGE_MAX_SHARE):
+        return _skip_purge(
+            f"{limit[:10]} より前の履歴が {doomed}枚(全体 {total}枚の {doomed * 100 // max(total, 1)}%)あり、"
+            "一度に消すには多すぎるので整理を見送りました。この PC の日時を確かめてください")
+    _status["purge_note"] = ""
     old = "SELECT 送信ID FROM 明細履歴 WHERE 出力日時 < ?"
     hconn.execute(f"DELETE FROM 明細履歴_副番 WHERE 送信ID IN ({old})", (limit,))
     count = hconn.execute("DELETE FROM 明細履歴 WHERE 出力日時 < ?", (limit,)).rowcount
@@ -534,8 +588,19 @@ def _purge_shared(hconn: sqlite3.Connection, today: str) -> int:
     return count
 
 
+def _skip_purge(reason: str) -> int:
+    if _status["purge_note"] != reason:
+        log.warning(reason)
+    _status["purge_note"] = reason
+    return 0
+
+
 def _purge_local(conn: sqlite3.Connection, today: str) -> int:
-    """手元を整理する(3年より前)。送れていない古い行も落とす(共有でも整理される)。"""
+    """手元を整理する(3年より前)。**送り終えた行だけ**(共有に残っている)。
+
+    送れていない行は消さない(統合 1.2.62)。以前は送れていない古い行も落としていたので、時計が大きく進んだ PC では
+    まだ共有に無い履歴まで消えた。送れてから、共有の整理(時計を確かめてから)に任せる。
+    """
     global _local_purged_on
     if _local_purged_on == today:
         return 0
@@ -544,12 +609,12 @@ def _purge_local(conn: sqlite3.Connection, today: str) -> int:
         stale = conn.execute("SELECT COUNT(*) FROM 明細履歴 WHERE 出力日時 < ? AND 要送信 = 1",
                              (limit,)).fetchone()[0]
         db.write(conn, "DELETE FROM 明細履歴_副番 WHERE 送信ID IN"
-                       " (SELECT 送信ID FROM 明細履歴 WHERE 出力日時 < ?)", (limit,),
+                       " (SELECT 送信ID FROM 明細履歴 WHERE 出力日時 < ? AND 要送信 = 0)", (limit,),
                  name="手元の履歴の整理")
-        count = db.write(conn, "DELETE FROM 明細履歴 WHERE 出力日時 < ?", (limit,),
+        count = db.write(conn, "DELETE FROM 明細履歴 WHERE 出力日時 < ? AND 要送信 = 0", (limit,),
                          name="手元の履歴の整理")
     if stale:
-        log.warning("%s年より前で送れていなかった履歴を%s枚整理しました",
+        log.warning("%s年より前でまだ送れていない履歴が%s枚あります(送れるまで消しません)",
                     config.HISTORY_KEEP_YEARS, stale)
     _local_purged_on = today
     return count
@@ -597,7 +662,7 @@ def _send(conn: sqlite3.Connection, limit: int) -> SendResult:
             try:
                 hconn.execute("BEGIN IMMEDIATE")
                 _write_rows(hconn, rows, details)
-                result.purged_shared = _purge_shared(hconn, today)
+                result.purged_shared = _purge_shared(hconn, today, folder)
                 hconn.commit()
             except BaseException:
                 hconn.rollback()
@@ -737,6 +802,7 @@ def status(conn: sqlite3.Connection, *, timeout: float = 3.0) -> dict[str, Any]:
         "last_sent_at": _status["last_sent_at"],
         "last_try_at": _status["last_try_at"],
         "last_error": _status["last_error"],
+        "purge_note": _status["purge_note"],
         "shared_path": str(path),
         "keep_years": config.HISTORY_KEEP_YEARS,
         "cutoff": cutoff()[:10],

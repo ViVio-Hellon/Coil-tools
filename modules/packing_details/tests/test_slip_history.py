@@ -14,7 +14,8 @@ import csv
 import sqlite3
 import threading
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta
+from unittest import mock
 from pathlib import Path
 
 from modules.packing_details.meisai import config, db, history_repo, meisai_service, session, shared_settings, slip_history
@@ -330,6 +331,87 @@ class PurgeTest(_Base):
         before = _shared().stat().st_mtime_ns
         self.assertEqual(slip_history.send_pending(self.conn).sent, 0)
         self.assertEqual(_shared().stat().st_mtime_ns, before)
+
+
+class PurgeClockTest(_Base):
+    """共有の整理は、この PC の時計を確かめてから(統合 1.2.62・現場の指示)。
+
+    整理する日は出力日時で決めるので、時計が大きく進んだ PC が1台あると全ラインの履歴を消してしまう。
+    """
+
+    def _fill_shared(self, n_old: int, n_new: int) -> None:
+        for i in range(n_old):
+            _record(self.conn, no=i + 1, when="2000-01-01 10:00:00")
+        for i in range(n_new):
+            _record(self.conn, no=1000 + i)
+        with shared_settings.folder_lock(shared_settings.shared_dir(), slip_history.LOCK_NAME):
+            h = slip_history._open_shared(_shared(), create=True)
+            rows = self.conn.execute(
+                f"SELECT {', '.join(slip_history.HEADER_COLUMNS)} FROM 明細履歴").fetchall()
+            details = self.conn.execute("SELECT * FROM 明細履歴_副番").fetchall()
+            slip_history._write_rows(h, rows, details)
+            h.commit()
+            h.close()
+        slip_history._shared_purged_on = None
+        slip_history._status["purge_note"] = ""
+
+    def _purge(self, *, now=None, clock=None):
+        h = slip_history._open_shared(_shared())
+        try:
+            h.execute("BEGIN IMMEDIATE")
+            with mock.patch.object(slip_history, "_shared_clock",
+                                   return_value=clock if clock is not None else datetime.now()):
+                n = slip_history._purge_shared(h, date.today().isoformat(), shared_settings.shared_dir(),
+                                               now=now)
+            h.commit()
+            return n
+        finally:
+            h.close()
+
+    def test_時計が進んだPCは消さない(self):
+        self._fill_shared(0, 5)
+        future = datetime.now() + timedelta(days=365 * 10)              # 10年進んだ PC
+        self.assertEqual(self._purge(now=future), 0)
+        self.assertEqual(_q(_shared(), "SELECT COUNT(*) FROM 明細履歴"), [(5,)], "全ラインの履歴を消さない")
+        self.assertIn("ずれている", slip_history._status["purge_note"])
+        self.assertEqual(_q(_shared(), "SELECT COUNT(*) FROM 整理記録"), [(0,)], "整理した日を残さない(次の日にまた確かめる)")
+
+    def test_共有の時計を確かめられなければ消さない(self):
+        self._fill_shared(2, 2)
+        h = slip_history._open_shared(_shared())
+        try:
+            with mock.patch.object(slip_history, "_shared_clock", return_value=None):
+                n = slip_history._purge_shared(h, date.today().isoformat(), shared_settings.shared_dir())
+        finally:
+            h.close()
+        self.assertEqual(n, 0)
+        self.assertIn("確かめられない", slip_history._status["purge_note"])
+
+    def test_一度に多すぎる整理はしない(self):
+        """共有の時計と合っていても(書き手の PC が日時を付ける共有など)、1割かつ50枚を超えて消さない。"""
+        self._fill_shared(60, 40)
+        self.assertEqual(self._purge(), 0)
+        self.assertEqual(_q(_shared(), "SELECT COUNT(*) FROM 明細履歴"), [(100,)])
+        self.assertIn("多すぎる", slip_history._status["purge_note"])
+        self.assertEqual(slip_history.status(self.conn)["purge_note"], slip_history._status["purge_note"])
+
+    def test_ふだんの量なら消す(self):
+        self._fill_shared(3, 40)
+        self.assertEqual(self._purge(), 3)
+        self.assertEqual(slip_history._status["purge_note"], "")
+
+    def test_共有フォルダの時計はファイルの日時から(self):
+        got = slip_history._shared_clock(shared_settings.shared_dir())
+        self.assertIsNotNone(got)
+        self.assertLess(abs(got - datetime.now()), timedelta(minutes=5))
+        self.assertEqual([p for p in shared_settings.shared_dir().iterdir() if "時計確認" in p.name], [],
+                         "確かめたファイルを残さない")
+
+    def test_手元は送れていない行を消さない(self):
+        old = _record(self.conn, no=1, when="2000-01-01 10:00:00")    # まだ送っていない
+        slip_history._local_purged_on = None
+        slip_history._purge_local(self.conn, date.today().isoformat())
+        self.assertEqual([r[0] for r in self.conn.execute("SELECT 送信ID FROM 明細履歴")], [old])
 
 
 class ExportTest(_Base):
