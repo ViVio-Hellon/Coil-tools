@@ -57,6 +57,20 @@ class WriteError(RuntimeError):
 execute_with_retry = sqlite_toolkit.execute_with_retry
 fetch_all = sqlite_toolkit.fetch_all
 fetch_one = sqlite_toolkit.fetch_one
+
+
+def fetch_all_strict(conn: sqlite3.Connection, sql: str, params: Any = (), *,
+                     caller_name: str = "SELECT") -> list[sqlite3.Row]:
+    """`fetch_all` と同じだが、**読めなければ `sqlite3.OperationalError`**(統合 1.2.61)。
+
+    `fetch_all` は失敗を None で返す。それを `or []` で「0件」にすると、二重出力の確かめ・ほかの No との
+    重なりの確かめを**黙って素通り**する(別のツールで、読めなかったのを「無い」と取り違えて送り直し、
+    重複を大量に作った事案と同じ形)。有る・無いで出す・消すを決めるところはこちら。
+    """
+    rows = fetch_all(conn, sql, params, caller_name=caller_name)
+    if rows is None:
+        raise sqlite3.OperationalError(f"{caller_name}: 手元のDBを読めませんでした")
+    return rows
 update_record = sqlite_toolkit.update_record
 insert_record = sqlite_toolkit.insert_record
 is_lock_error = sqlite_toolkit.is_lock_error

@@ -314,7 +314,9 @@ def _mark_applied() -> None:
 
 def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     result = Result()
-    current = local_settings.load_all()
+    # 読めないのを「この PC では設定していない」と取り違えて上書きしない(統合 1.2.61)。読めなければ
+    # `Unreadable`(OSError)で止まり、呼ぶ側が「書けませんでした」と出す
+    current = local_settings.load_all(strict=True)
     for key, value in bundle.settings.items():
         if is_set(current.get(key)) and not overwrite:
             result.kept.append(ITEM_LABELS[key])    # すでにある(空は「無い」と同じ)

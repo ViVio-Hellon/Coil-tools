@@ -96,10 +96,12 @@ def _table_of(path: Path) -> tuple[str, list[str]]:
     if hit is not None:
         return hit
     found = ("", [])
-    tables = source_db.list_tables(path)
+    # 読めないのを「表が無い」と取り違えて覚えない(統合 1.2.61。別のツールで、読めなかったのを「無い」と
+    # 取り違えて送り直し、重複を大量に作った事案があった)。読めなければ SourceError を上げ、覚えない
+    tables = source_db.list_tables_strict(path)
     order = sorted(tables, key=lambda t: (t != "仕掛", t))
     for table in order:
-        cols = source_db.columns(path, table)
+        cols = source_db.columns_strict(path, table)
         if ls4_source.COL_LOT in cols:
             found = (table, cols)
             break

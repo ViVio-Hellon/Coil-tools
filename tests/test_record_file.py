@@ -98,6 +98,75 @@ class RecordFileTest(unittest.TestCase):
         kensa = [json.loads(r["詳しい中身"])["kensaNo"] for r in RF.read_csv(path)]
         self.assertEqual(kensa, ["N6X0001", "N6X0002", "N6X0003", "N6X0004"], "順も落とさない")
 
+    def _kensa(self, path):
+        return [json.loads(r["詳しい中身"])["kensaNo"] for r in RF.read_csv(path)]
+
+    def test_追記待ちを消せなくても同じ行を2度書き足さない(self):
+        """統合 1.2.61。以前は本体へ書き足したあと追記待ちを消せない(ウイルス対策・消す権限が無い・Excel で開いている)と
+        「本体が開かれている」と取り違え、今回の行を追記待ちにも足し、記録のたびに同じ行を本体へ書き足していた
+        (別のツールで、読めなかったのを取り違えて送り直し重複を大量に作った事案と同じ形)。"""
+        path = os.path.join(self.dir, "ペナラベル記録_2026-10.csv")
+        real = RF._append_text
+
+        def locked(p, text, header=""):
+            if p == path:
+                raise PermissionError(13, "Permission denied")
+            return real(p, text, header=header)
+
+        with mock.patch.object(RF, "_append_text", side_effect=locked):
+            self._append(_entry("N6X0001"))                     # 追記待ちへ
+            self._append(_entry("N6X0002"))
+        real_remove, real_open = os.remove, open
+
+        def no_remove(p):
+            if p.endswith(RF.CLAIM_SUFFIX) or p.endswith(RF.PENDING_SUFFIX):
+                raise PermissionError(13, "denied")
+            return real_remove(p)
+
+        def no_truncate(p, mode="r", *a, **kw):        # 消せないときに空にするのも断る
+            if "w" in mode and (str(p).endswith(RF.CLAIM_SUFFIX) or str(p).endswith(RF.PENDING_SUFFIX)):
+                raise PermissionError(13, "denied")
+            return real_open(p, mode, *a, **kw)
+
+        with mock.patch.object(RF.os, "remove", side_effect=no_remove), \
+                mock.patch("builtins.open", side_effect=no_truncate):
+            self.assertEqual(self._append(_entry("N6X0003")), "", "本体に書けたら「書けません」と言わない")
+            self.assertEqual(self._append(_entry("N6X0004")), "")
+        self.assertEqual(self._append(_entry("N6X0005")), "")
+        self.assertEqual(self._kensa(path), ["N6X0001", "N6X0002", "N6X0003", "N6X0004", "N6X0005"],
+                         "同じ行が2度入らない")
+
+    def test_本体が途中で書けなくなっても追記待ちを戻す(self):
+        """本体へ書けなかった(PermissionError 以外の OSError も)ときは、引き取った追記待ちを戻し、今回の行も足す。"""
+        path = os.path.join(self.dir, "ペナラベル記録_2026-10.csv")
+        real = RF._append_text
+        state = {"down": True}
+
+        def flaky(p, text, header=""):
+            if p == path and state["down"]:
+                raise OSError(5, "Input/output error")
+            return real(p, text, header=header)
+
+        with mock.patch.object(RF, "_append_text", side_effect=flaky):
+            m1 = self._append(_entry("N6X0001"))
+            m2 = self._append(_entry("N6X0002"))
+        self.assertIn("に書けません", m1)
+        self.assertNotIn("開かれていて", m2)
+        self.assertEqual(self._append(_entry("N6X0003")), "")
+        self.assertEqual(self._kensa(path), ["N6X0001", "N6X0002", "N6X0003"])
+        self.assertFalse(os.path.exists(path + RF.PENDING_SUFFIX))
+        self.assertEqual([n for n in os.listdir(self.dir) if RF.CLAIM_SUFFIX in n], [], "引き取ったファイルを残さない")
+
+    def test_見出しは空のときだけ_存在の確かめに失敗しても途中に書かない(self):
+        path = os.path.join(self.dir, "ペナラベル記録_2026-10.csv")
+        self._append(_entry("N6X0001"))
+        with mock.patch.object(RF.os.path, "exists", return_value=False), \
+                mock.patch.object(RF.os.path, "getsize", side_effect=OSError(5, "io")):
+            self._append(_entry("N6X0002"))
+        with open(path, encoding="utf-8-sig") as f:
+            text = f.read()
+        self.assertEqual(text.count("日時,種類,内容"), 1)
+
     def test_追記待ちにも書けなければ理由を返す(self):
         with mock.patch.object(RF, "_append_text", side_effect=PermissionError(13, "denied")):
             msg = self._append(_entry())

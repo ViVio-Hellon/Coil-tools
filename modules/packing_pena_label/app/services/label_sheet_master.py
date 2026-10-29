@@ -135,7 +135,9 @@ class LabelSheetMaster:
             self._rows = {}
             self.row_count = 0
             self.serving_stale = False
-            self._stamp = stamp
+            # 「無い」と覚えるのは、表が無いと確かめられたときだけ(統合 1.2.61)。読めなかっただけなら覚えず、
+            # 次にまた読む(以前は起動直後の 1 回が読めないと、マスタが変わるまで JSON の型番のままだった)
+            self._stamp = stamp if "no such table" in str(exc).lower() else None
             self._at = now
             return {}
 

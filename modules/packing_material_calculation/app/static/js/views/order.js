@@ -86,6 +86,12 @@ async function build(confirmed) {
   }
 
   render(r.sheets, r.extra_lengths);
+  // 発注履歴を読めなかったときは「重複なし」と黙らない(統合 1.2.61)
+  if (r.history_unchecked) {
+    $('#note').insertAdjacentHTML('afterbegin',
+      `<div class="note note--warn" id="historyUnchecked"><b>${esc(r.history_message || '')}</b>`
+      + '<p>発注の履歴の画面で、同じロットを最近出していないか確かめてから記録してください。</p></div>');
+  }
   toast(`${r.sheets.length} 枚作りました`);
 }
 

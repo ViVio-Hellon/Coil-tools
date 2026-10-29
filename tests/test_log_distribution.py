@@ -243,3 +243,44 @@ class DistFolderTest(_Isolated):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnreadableSettingsTest(_Isolated):
+    """統合 1.2.61。このPCの設定ファイルが**あるのに読めない**ときを「設定が無い」と取り違えない。
+
+    別のツールで、共有が読めなかったのを「表が無い」と取り違えて送り直し、重複を大量に作った事案があった。
+    ここで取り違えると、保存のたびにほかの設定が全部消える・配布設定でこの PC の値を上書きする・
+    ログとエラーの記録を既定の 180 日で消す(長く残す設定の PC で、共有の記録を消してしまう)。
+    """
+
+    def _break(self):
+        local_settings.save(local_settings.KEY_LOG_KEEP_DAYS, 3650)
+        local_settings.save(local_settings.KEY_THEME, "dark")
+        local_settings.path().write_text("{ 書きかけ", encoding="utf-8")   # 壊れた(または読めない)
+
+    def test_読めない設定に保存しない(self):
+        self._break()
+        with self.assertRaises(local_settings.Unreadable):
+            local_settings.save(local_settings.KEY_LOG_DIR, str(self.tmp / "x"))
+        self.assertEqual(local_settings.path().read_text(encoding="utf-8"), "{ 書きかけ", "上書きしない")
+        self.assertEqual(local_settings.load_all(), {}, "読むだけなら既定で動く")
+
+    def test_読めない設定を配布設定で上書きしない(self):
+        self._break()
+        self.write_bundle({"log_keep_days": 30})
+        res = log_distribution.apply_on_start()
+        self.assertFalse(res.ok)
+        self.assertEqual(res.applied, [])
+        self.assertEqual(local_settings.path().read_text(encoding="utf-8"), "{ 書きかけ")
+
+    def test_残す日数が読めなければログもエラーの記録も消さない(self):
+        from common import incidents
+        self._break()
+        with mock.patch.object(os, "listdir", side_effect=AssertionError("消しに行かない")):
+            self.assertEqual(logging_utils.cleanup_old(), [])
+            self.assertEqual(incidents.cleanup_old(), [])
+
+    def test_ファイルが無いのは既定(self):
+        self.assertFalse(local_settings.path().exists())
+        self.assertEqual(local_settings.load_all(strict=True), {})
+        self.assertEqual(local_settings.log_keep_days(strict=True), local_settings.LOG_KEEP_DAYS_DEFAULT)

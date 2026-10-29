@@ -103,14 +103,19 @@ def create_in_source(path) -> bool:
     return True
 
 
-def present(conn: Optional[sqlite3.Connection]) -> bool:
-    """手元の作業DBにこの表があるか(取り込まれているか)。あれば**マスタ優先**。"""
+def present(conn: Optional[sqlite3.Connection], *, strict: bool = False) -> bool:
+    """手元の作業DBにこの表があるか(取り込まれているか)。あれば**マスタ優先**。
+
+    `strict=True` … 読めなければ `sqlite3.Error` を上げる(「無い」と取り違えて表を消さないため。統合 1.2.61)。
+    """
     if conn is None:
         return False
     try:
         row = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (TABLE,)).fetchone()
     except sqlite3.Error:
+        if strict:
+            raise
         return False
     return row is not None
 

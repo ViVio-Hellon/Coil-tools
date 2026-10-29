@@ -288,7 +288,13 @@ def _mark_applied() -> None:
 
 def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     result = Result()
-    current = user_settings.load_all()
+    try:
+        current = user_settings.load_all(strict=True)
+    except user_settings.SettingsUnreadable as exc:
+        # 読めないのを「この端末にはまだ無い」とみなさない(統合 1.2.61。以前は配布設定で全部上書きした)
+        log.warning("この端末の設定を読めないので、配布設定を読みませんでした: %s", exc)
+        return Result(False, f"この端末の設定ファイルを読めないので、配布設定を読みませんでした: {exc}",
+                      REFUSE_FAILED)
     values: dict[str, Any] = {}
     for key, value in bundle.settings.items():
         if key in current and not overwrite:

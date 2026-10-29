@@ -74,6 +74,14 @@ def _parse_day(text: str) -> Optional[date]:
     return None
 
 
+class HistoryUnreadable(Exception):
+    """発注履歴を読めなかった(「重複なし」とは言えない。統合 1.2.61)。"""
+
+
+#: 発注票の画面に出す知らせ(履歴を読めなかったとき)
+UNCHECKED_MESSAGE = "発注の履歴を確かめられませんでした(2週間以内の重複を見ていません)"
+
+
 def find_duplicates(conn: sqlite3.Connection, lots: Iterable[str], *,
                     within_days: int = config.ORDER_HISTORY_WARN_DAYS,
                     today: Optional[date] = None) -> list[Duplicate]:
@@ -81,6 +89,10 @@ def find_duplicates(conn: sqlite3.Connection, lots: Iterable[str], *,
 
     同じロットが何件あっても**1件だけ返す**(いちばん新しいもの)。
     VBA も最初に見つけた1件で確認を出して `Exit Do` していた。
+
+    **履歴を読めなければ `HistoryUnreadable`**(統合 1.2.61)。以前は読めないと「重複なし」になり、
+    確認を出さずに記録へ進めた(別のツールで、読めなかったのを「無い」と取り違えて送り直し、
+    重複を大量に作った事案と同じ形。読めないことを「無い」にしない)。
     """
     today = today or date.today()
     found: list[Duplicate] = []
@@ -95,7 +107,9 @@ def find_duplicates(conn: sqlite3.Connection, lots: Iterable[str], *,
                 conn,
                 "SELECT * FROM 発注履歴 WHERE LotNo LIKE ?"
                 " ORDER BY 登録日時 DESC, id DESC",
-                (f"%{part}%",), caller_name="find_duplicates") or []
+                (f"%{part}%",), caller_name="find_duplicates")
+            if rows is None:
+                raise HistoryUnreadable(f"発注履歴を読めません(LotNo {part})")
             for row in rows:
                 when = _parse_day(row["登録日時"])
                 if when is None:

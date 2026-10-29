@@ -111,10 +111,19 @@ def is_custom(snapshot: Optional[shared_settings.Snapshot] = None) -> bool:
 
 def verify(password: str,
            snapshot: Optional[shared_settings.Snapshot] = None) -> bool:
-    """合っているか。**照合はここでしかしない。**"""
-    stored = _stored(snapshot)
+    """合っているか。**照合はここでしかしない。**
+
+    控えの JSON が**読めない**ときは断る(統合 1.2.61)。読めないのを「一度も変えていない」と取り違えると、
+    既定のパスワードで共有のマスタへ書けてしまう(別のツールで、読めなかったのを「無い」と取り違えて送り直し、
+    重複を大量に作った事案と同じ形)。
+    """
+    snap = snapshot if snapshot is not None else shared_settings.read()
+    stored = _stored(snap)
     if stored is not None:
         return _matches(str(password), stored)
+    if snap.json_problem:
+        log.warning("管理者パスワードの控えを読めないので断りました: %s", snap.json_problem)
+        return False
     # 一度も変えていない端末。`config` の値で通す
     return hmac.compare_digest(str(password).encode("utf-8"),
                                config.ADMIN_PASSWORD.encode("utf-8"))

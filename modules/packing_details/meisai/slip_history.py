@@ -313,13 +313,19 @@ def pending_count(conn: sqlite3.Connection) -> int:
     return int(conn.execute("SELECT COUNT(*) FROM 明細履歴 WHERE 要送信 = 1").fetchone()[0])
 
 
-def _open_shared(path: Path) -> sqlite3.Connection:
-    """共有の履歴を書けるように開く。**無ければ作る**(表もここで作る)。
+def _open_shared(path: Path, *, create: bool = False) -> sqlite3.Connection:
+    """共有の履歴を書けるように開く(表もここで作る)。
+
+    **ファイルを作るのは `create=True` のときだけ**(統合 1.2.61)。以前は素のパスで開いていたので、
+    本物のファイルが一瞬見えない(置き換え中・戻し中)と**空の新しい履歴を作り**、送ったものがそちらへ
+    分かれていた(別のツールで、読めなかったのを「無い」と取り違えて送り直し、重複を大量に作った事案と
+    同じ形)。ふだんは `mode=rw` で開き、無ければ落ちる。
 
     DELETE で置く(WAL だと共有の上では読めない・書けない)。表があっても
     列が足りなければ足す(`_repair_shape`)。
     """
-    conn = sqlite3.connect(str(path), timeout=SHARED_BUSY_SEC)
+    conn = sqlite3.connect(source_db.to_uri(path) + ("?mode=rwc" if create else "?mode=rw"), uri=True,
+                           timeout=SHARED_BUSY_SEC)
     try:
         conn.row_factory = sqlite3.Row
         mode = conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
@@ -438,11 +444,24 @@ _shape_ok: dict[str, tuple[int, int]] = {}
 
 
 def _file_stamp(path: Path) -> Optional[tuple[int, int]]:
+    """(更新時刻, 大きさ)。**無ければ None、確かめられなければ HistoryError**(統合 1.2.61)。
+
+    以前は確かめられないときも None(= 無い)を返し、`ensure_shared` が新しいファイルを作りに行っていた。
+    """
     try:
         st = path.stat()
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError as exc:
+        raise HistoryError(f"共有の履歴を確かめられません: {path} ({exc})") from exc
     return (st.st_mtime_ns, st.st_size)
+
+
+def _absent(folder: Path, path: Path) -> bool:
+    """共有の履歴が**本当に無い**か(フォルダに届いて、ファイルが無い)。確かめられなければ HistoryError。"""
+    if not source_db.folder_reachable(folder):
+        raise HistoryError(f"共有フォルダに届きません: {folder}")
+    return _file_stamp(path) is None
 
 
 def ensure_shared() -> bool:
@@ -468,11 +487,12 @@ def ensure_shared() -> bool:
                 hconn.close()
         except sqlite3.Error:
             pass                    # 開けない・読めない → 下で開き直して確かめる
-    elif not folder.is_dir():
+    elif not source_db.folder_reachable(folder):
         raise HistoryError(f"共有フォルダに届きません: {folder}")
-    created = not path.exists()
     with shared_settings.folder_lock(folder, LOCK_NAME):
-        hconn = _open_shared(path)
+        # 鍵を取ってから、無いかをもう一度確かめる(無いと確かめられたときだけ作る)
+        created = _absent(folder, path)
+        hconn = _open_shared(path, create=created)
         hconn.close()
     log.info("共有の履歴を%sました: %s", "作り" if created else "そろえ", path)
     return True
@@ -572,7 +592,8 @@ def _send(conn: sqlite3.Connection, limit: int) -> SendResult:
                 f"SELECT {', '.join(DETAIL_COLUMNS)} FROM 明細履歴_副番"
                 f" WHERE 送信ID IN ({marks})", ids).fetchall()
         with shared_settings.folder_lock(folder, LOCK_NAME):
-            hconn = _open_shared(folder / config.HISTORY_DB_NAME)
+            target = folder / config.HISTORY_DB_NAME
+            hconn = _open_shared(target, create=_absent(folder, target))
             try:
                 hconn.execute("BEGIN IMMEDIATE")
                 _write_rows(hconn, rows, details)

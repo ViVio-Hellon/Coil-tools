@@ -281,8 +281,11 @@ def lock_path(mode: str) -> Path:
 def write_lock(info: LockInfo) -> Path:
     path = lock_path(info.mode)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(info), ensure_ascii=False, indent=2),
-                    encoding="utf-8")
+    # 別名で書いてから置き換える(統合 1.2.61)。書いている途中を読まれると「壊れている = 無い」と
+    # 取り違えられ、終わるプロセスが新しいほうのロックを消すことがあった
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(asdict(info), ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
     # トークンを含むので、本人だけが読める権限にする。
     # Windows には chmod が効かないが、`%LOCALAPPDATA%` 自体が
     # 利用者ごとのフォルダなので実質同じ扱いになる
@@ -296,15 +299,30 @@ def write_lock(info: LockInfo) -> Path:
 
 def read_lock(mode: str) -> Optional[LockInfo]:
     """壊れていれば `None`。読めないことを理由に起動を止めない。"""
+    return read_lock_state(mode)[1]
+
+
+#: `read_lock_state` の答え
+LOCK_ABSENT = "absent"
+LOCK_OK = "ok"
+LOCK_UNREADABLE = "unreadable"
+
+
+def read_lock_state(mode: str) -> tuple[str, Optional[LockInfo]]:
+    """(状態, ロック)。状態は 無い(`absent`)・読めた(`ok`)・**あるのに読めない**(`unreadable`)。
+
+    統合 1.2.61。「読めない」を「無い」と取り違えない(別のツールで、読めなかったのを「無い」と取り違えて
+    送り直し、重複を大量に作った事案があった)。消す・止まったと言う前はこちらで見る。
+    """
     path = lock_path(mode)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        return LockInfo(**{k: raw[k] for k in LockInfo.__dataclass_fields__ if k in raw})
+        return LOCK_OK, LockInfo(**{k: raw[k] for k in LockInfo.__dataclass_fields__ if k in raw})
     except FileNotFoundError:
-        return None
-    except Exception as exc:                      # noqa: BLE001 - 壊れたロックは無視する
+        return LOCK_ABSENT, None
+    except Exception as exc:                      # noqa: BLE001 - 壊れたロックは起動を止めない
         log.warning("ロックを読めませんでした (%s): %s", path, exc)
-        return None
+        return LOCK_UNREADABLE, None
 
 
 def remove_lock(mode: str, *, pid: Optional[int] = None) -> None:
@@ -316,6 +334,10 @@ def remove_lock(mode: str, *, pid: Optional[int] = None) -> None:
     """
     if pid is not None:
         current = read_lock(mode)
+        if current is None and read_lock_state(mode)[0] == LOCK_UNREADABLE:
+            # 自分のものか確かめられない。消さない(統合 1.2.61)
+            log.info("ロックを読めないので、自分のものか確かめられず残します")
+            return
         if current is not None and int(current.pid) != int(pid):
             log.info("ロックは別のプロセス(pid %s)のものなので残します", current.pid)
             return

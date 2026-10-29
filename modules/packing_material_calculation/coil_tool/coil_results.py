@@ -72,13 +72,21 @@ def missing_columns(path: Path) -> list[str]:
     return ls4_source.missing_required(tables.get("仕掛") or next(iter(tables.values())))
 
 
+class ColumnsMissing(source_db.SourceError):
+    """読めたが、実績の形式の列が無い(読めないのとは違う。統合 1.2.61)。"""
+
+
 def read_rows(path: Path) -> tuple[list[dict], int]:
-    """いまの年月の行(ロットごとに1行)と、ファイルの全行数。要る列が無ければ SourceError。"""
-    tables = {t: source_db.columns(Path(path), t) for t in source_db.list_tables(Path(path))}
+    """いまの年月の行(ロットごとに1行)と、ファイルの全行数。
+
+    読めなければ `SourceError`、**読めて**要る列が無ければ `ColumnsMissing`。
+    表の一覧・列は読めなければ上げる形で読む(統合 1.2.61。以前は読めないと空になり「列がありません」と出た)。
+    """
+    tables = {t: source_db.table_columns(Path(path), t) for t in source_db.table_names(Path(path))}
     picked = ls4_source.choose_table(tables, "仕掛")
     if picked is None:
         best = tables.get("仕掛") or (next(iter(tables.values())) if tables else [])
-        raise source_db.SourceError(
+        raise ColumnsMissing(
             f"{Path(path).name} に実績の形式の列がありません: "
             f"{', '.join(ls4_source.missing_required(best))}")
     rows = source_db.read_table(Path(path), picked)
@@ -108,7 +116,12 @@ def import_results(conn: Any):
         try:
             rows, total = read_rows(path)
         except source_db.SourceError as exc:
-            # 片方が読めなくても、もう片方で埋める(統合 1.2.45。以前は先のファイルが読めないと止めた)
+            # 片方が読めなくても、もう片方で埋める(統合 1.2.45。以前は先のファイルが読めないと止めた)。
+            # **読めなかったファイルの目印は残さない**(統合 1.2.61)。残すと「取り込み済み・変わっていない」と
+            # みなされ、そのファイルが変わるまで読み直さない(別のツールで、読めなかったのを「無い」と
+            # 取り違えて送り直し、重複を大量に作った事案があった。読めないことを「済んだ」にしない)
+            if not isinstance(exc, ColumnsMissing):
+                stamps[index] = ""          # 列が無いのは読めて確かめた結果なので目印を残す(毎回読み直さない)
             errors.append(str(exc))
             notes.append(f"{path.name} を読めません: {exc}")
             continue

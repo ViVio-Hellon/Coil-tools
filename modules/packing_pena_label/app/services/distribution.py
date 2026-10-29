@@ -254,7 +254,12 @@ def export(password: str, keys: List[str], cfg: Config) -> Result:
         return Result(False, "入れる項目を 1 つ以上選んでください。",
                       REFUSE_BAD_INPUT)
 
-    current = load_local_overrides(cfg)
+    try:
+        # 読めないのを「この端末では変えていない」と取り違えて、欠けた配布設定を作らない(統合 1.2.61)
+        current = load_local_overrides(cfg, strict=True)
+    except OSError as exc:
+        return Result(False, "この端末の設定ファイルを読めないので書き出しませんでした: %s" % exc,
+                      REFUSE_FAILED)
     settings = {k: current[k] for k in keys if k in current}
     defaults = [item_label(k) for k in keys if k not in current]
     if not settings:
@@ -341,7 +346,9 @@ def remove(password: str) -> Result:
 # ------------------------------------------------------------------
 def _apply(bundle: Bundle, cfg: Config, *, overwrite: bool) -> Result:
     result = Result()
-    current = load_local_overrides(cfg)
+    # 読めないのを「この端末にはまだ無い」と取り違えて、配布の値で全部上書きしない(統合 1.2.61)。
+    # 読めなければ `LocalConfigUnreadable`(OSError)で止まり、呼ぶ側が「読み込めませんでした」と返す
+    current = load_local_overrides(cfg, strict=True)
     changed = False
     for key, value in bundle.settings.items():
         spec = S.SETTINGS_BY_KEY.get(key)

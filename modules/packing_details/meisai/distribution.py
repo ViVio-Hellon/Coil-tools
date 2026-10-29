@@ -280,7 +280,10 @@ def export(password: str, items: list[str]) -> Result:
     if not items:
         return Result(False, "入れる項目を1つ以上選んでください。", REFUSE_BAD_INPUT)
 
-    current = user_settings.load_all()
+    try:
+        current = user_settings.load_strict()
+    except user_settings.SettingsUnreadable as exc:
+        return Result(False, f"この端末の設定を読めないので書き出しません({exc})。", REFUSE_BAD_INPUT)
     settings = {k: current[k] for k in items if is_set(current.get(k))}
     defaults = [ITEM_LABELS[k] for k in items if not is_set(current.get(k))]
     if not settings:
@@ -403,7 +406,12 @@ def _mark_applied() -> None:
 
 def _apply(bundle: Bundle, *, overwrite: bool) -> Result:
     result = Result()
-    current = user_settings.load_all()
+    try:
+        current = user_settings.load_strict()
+    except user_settings.SettingsUnreadable as exc:
+        # 読めないのを「この端末にはまだ無い」と取り違えて、配布の値で上書きしない(統合 1.2.61)
+        log.warning("この端末の設定を読めないので、配布設定を読み込みません: %s", exc)
+        return Result(False, f"この端末の設定を読めないので、配布設定を読み込みませんでした({exc})")
     for key, value in bundle.settings.items():
         # **空の値は「無い」と同じ**(以前の画面が空のまま保存していた端末でも効かせる)
         if is_set(current.get(key)) and not overwrite:
@@ -422,6 +430,8 @@ def apply_on_start() -> Result:
     if bundle is None:
         return Result(True, "")
     result = _apply(bundle, overwrite=False)
+    if not result.ok:
+        return result
     if result.applied:
         log.info("配布設定を読み込みました: %s（すでにあったので読まなかったもの: %s）",
                  ", ".join(result.applied), ", ".join(result.kept) or "なし")
@@ -438,6 +448,8 @@ def reapply(password: str) -> Result:
     if bundle is None:
         return Result(False, problem or "配布設定が置かれていません。", REFUSE_BAD_INPUT)
     result = _apply(bundle, overwrite=True)
+    if not result.ok:
+        return result
     result.message = (f"配布設定を読み込みました（{len(result.applied)}項目: "
                       f"{'・'.join(result.applied)}）。置き場所を変えたときは、"
                       "「置き場所・取り込み」で取り込み直してください。")

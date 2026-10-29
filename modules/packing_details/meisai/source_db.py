@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import stat as stat_module
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -560,6 +561,31 @@ def list_tables(path: Path) -> list[str]:
         return []
 
 
+def list_tables_strict(path: Path) -> list[str]:
+    """`list_tables` と同じだが、**読めなければ SourceError**(統合 1.2.61。空は「表が無い」と確かめたときだけ)。"""
+    try:
+        with _reading(Path(path)) as conn:
+            with identifiers_as_utf8(conn):
+                rows = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    " AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
+        return [r["name"] for r in rows]
+    except sqlite3.Error as exc:
+        raise SourceError(f"{Path(path).name} の表の一覧を読めません: {exc}") from exc
+
+
+def columns_strict(path: Path, table: str) -> list[str]:
+    """`columns` と同じだが、**読めなければ SourceError**(統合 1.2.61)。"""
+    try:
+        with _reading(Path(path)) as conn:
+            with identifiers_as_utf8(conn):
+                rows = conn.execute(
+                    f"PRAGMA table_info({quote_identifier(table)})").fetchall()
+        return [r["name"] for r in rows]
+    except sqlite3.Error as exc:
+        raise SourceError(f"{Path(path).name} の表 {table} の列を読めません: {exc}") from exc
+
+
 def columns(path: Path, table: str) -> list[str]:
     """テーブルの列名。取り込み前に「その列があるか」を見るのに使う。"""
     try:
@@ -766,6 +792,30 @@ def find(directory: Path, *names: str) -> Optional[Path]:
             except OSError:                      # 共有に届かない
                 return None
     return None
+
+
+def find_strict(directory: Path, *names: str) -> Optional[Path]:
+    """`find` と同じだが、**届かないときは OSError をそのまま上げる**(統合 1.2.61)。
+
+    別のツールで、共有ファイルが読めなかったのを「表が無い」と取り違え、手元の実績を送り直して重複を大量に
+    作った事案があった。`find` は届かないと None(= 無い)を返すので、**無いなら作る・書く**ところではこちら。
+    """
+    directory = Path(directory)
+    for name in names:
+        stem = Path(name).stem
+        for suffix in SUFFIXES:
+            candidate = directory / f"{stem}{suffix}"
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def folder_reachable(directory: Path) -> bool:
+    """そのフォルダに届くか(あって、フォルダである)。届かない・確かめられないなら False。"""
+    try:
+        return stat_module.S_ISDIR(os.stat(Path(directory)).st_mode)
+    except (OSError, ValueError):
+        return False
 
 
 def find_named(directory: Path, name: str) -> Optional[Path]:

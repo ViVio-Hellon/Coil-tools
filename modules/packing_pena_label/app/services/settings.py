@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from common import record_file
 
 from ..config import (LAYER_LABEL, Config, clear_local_overrides,
-                      load_local_overrides, save_local_overrides)
+                      load_local_overrides, save_local_overrides, LocalConfigUnreadable)
 
 #: 資材マスタのファイル名（VBA でハードコードされていたもの）
 ACCDB_NAME = "梱包資材マスタ.accdb"
@@ -489,7 +489,13 @@ def save(values: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
         return {"ok": False, "level": "warn", "errors": errors,
                 "message": "入力を確認してください"}
 
-    current = load_local_overrides(cfg)
+    try:
+        current = load_local_overrides(cfg, strict=True)
+    except LocalConfigUnreadable as exc:
+        # 読めないのを空と取り違えて保存すると、この端末の設定が全部消える(統合 1.2.61)
+        return {"ok": False, "level": "warn", "errors": {},
+                "message": "この端末の設定ファイルを読めないので保存しませんでした。"
+                           "開いているものを閉じてから、もう一度保存してください(%s)" % exc}
     changed: List[str] = []
     restart: List[str] = []
 

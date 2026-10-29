@@ -129,6 +129,13 @@ def stop(mode: str, *, force: bool = False) -> StopResult:
 
     result = StopResult(mode)
     info = launch_guard.read_lock(mode)
+    if info is None and launch_guard.read_lock_state(mode)[0] == launch_guard.LOCK_UNREADABLE:
+        # 読めないのを「起動していない」と取り違えない(統合 1.2.61)
+        result.stopped = False
+        result.method = "none"
+        result.message = ("起動の印(ロック)を読めないので、止まったか確かめられません。"
+                          "しばらくしてもう一度試すか、タスクマネージャーで確かめてください")
+        return result
     if info is None:
         result.stopped = True
         result.method = "none"

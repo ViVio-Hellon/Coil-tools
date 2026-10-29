@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from typing import Any
 
 from . import config
@@ -24,6 +25,43 @@ log = get_logger("user_settings")
 # ファイルを別の要求が読むと、壊れたとみなして空で読み、それを保存して
 # **ほかの設定(置き場所など)を消してしまう。**
 _lock = threading.RLock()
+
+
+class SettingsUnreadable(OSError):
+    """設定ファイルはあるのに読めない(押さえられている・権限が無い・届かない)。"""
+
+
+def load_strict() -> dict[str, Any]:
+    """設定ファイル全体を読む。**無ければ空、あるのに読めなければ `SettingsUnreadable`**(統合 1.2.61)。
+
+    別のツールで、共有ファイルが読めなかったのを「表が無い」と取り違えて手元の実績を送り直し、重複を
+    大量に作った事案があった。ここでも以前は読めないと空とみなし、そのまま保存して**ほかの設定(置き場所
+    など)を全部消していた**。書く前はこちらで読み、読めなければ書かない。
+
+    中身が壊れている(JSON として読めない)ときは、壊れたファイルを「<名前>.壊れていた_日時」へ退けてから
+    空として扱う(消さない。退けたあとは保存できる。退けられなければ `SettingsUnreadable`)。
+    """
+    path = config.USER_CONFIG_PATH
+    with _lock:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return {}
+        except OSError as exc:
+            raise SettingsUnreadable(f"設定ファイルを読めません: {exc}") from exc
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            return data
+        aside = path.with_name(f"{path.name}.壊れていた_{time.strftime('%Y%m%d_%H%M%S')}")
+        try:
+            os.replace(path, aside)
+        except OSError as exc:
+            raise SettingsUnreadable(f"設定ファイルが壊れていて、退けることもできません: {exc}") from exc
+        log.warning("設定ファイルが壊れていたので退けました: %s", aside)
+        return {}
 
 
 def load_all() -> dict[str, Any]:
@@ -62,7 +100,12 @@ def save(key: str, value: Any) -> bool:
     """
     path = config.USER_CONFIG_PATH
     with _lock:
-        data = load_all()
+        try:
+            data = load_strict()
+        except SettingsUnreadable as exc:
+            # 読めないまま書くと、ほかの設定を全部消してしまう(統合 1.2.61)
+            log.warning("設定ファイルを読めないので保存しません(%s): %s", key, exc)
+            return False
         data[key] = value
         tmp = path.with_name(path.name + ".tmp")
         try:

@@ -244,3 +244,47 @@ def test_前の版の手元の表にも枚本数の列を足す(place):
     db.apply_schema(conn)
     cols = {r[1] for r in conn.execute('PRAGMA table_info("コイル実績")')}
     assert "枚本数" in cols
+
+
+def test_1_2_61_読めなかったファイルの目印は残さず次に読み直す(place, tmp_path, monkeypatch):
+    """統合 1.2.61。読めなかったのを「取り込み済み・変わっていない」にしない(別ツールで、読めなかったのを
+    「無い」と取り違えて送り直し、重複を大量に作った事案があった)。列が無いのは確かめた結果なので目印を残す。"""
+    from modules.packing_material_calculation.coil_tool import data_sync, source_db
+    konpo, conn = place
+    second = tmp_path / "lot2"
+    user_settings.save(config.KEY_KONPO_DB_FILE, "実績_LS4")
+    user_settings.save(config.KEY_LOT_DB_DIR_2, str(second))
+    first = _results(konpo / "実績_LS4.sqlite3", [("A000001", f"{_ym()}-05 08:00:00", "508", "200")])
+    _results(second / "実績_LS4.sqlite3", [("A000002", f"{_ym()}-05 08:00:00", "600", "300", "16")])
+    real = source_db.table_names
+
+    def flaky(path):
+        if Path(path) == first:
+            raise source_db.SourceError("写している間に書き換わりました")
+        return real(path)
+    monkeypatch.setattr(source_db, "table_names", flaky)
+    result = coil_results.import_results(conn)
+    assert result.ok and "読めません" in result.note and "列がありません" not in result.note
+    record = data_sync.last_import(conn)[coil_results.TABLE]
+    assert record["元の目印"] == "", "読めなかったファイルの目印は残さない"
+    assert data_sync.check_sources(conn).coil, "次の確かめで読み直す"
+    monkeypatch.setattr(source_db, "table_names", real)
+    assert coil_results.import_results(conn).ok
+    assert coil_results.outer_for(conn, "A000001") == 908.0
+    assert not data_sync.check_sources(conn).coil
+
+
+def test_1_2_61_列が無いファイルは目印を残す(place, tmp_path):
+    from modules.packing_material_calculation.coil_tool import data_sync
+    konpo, conn = place
+    second = tmp_path / "lot2"
+    user_settings.save(config.KEY_KONPO_DB_FILE, "実績_LS4")
+    user_settings.save(config.KEY_LOT_DB_DIR_2, str(second))
+    c = sqlite3.connect(konpo / "実績_LS4.sqlite3")
+    c.execute('CREATE TABLE "仕掛" ("ﾛｯﾄ番号" TEXT)')
+    c.commit()
+    c.close()
+    _results(second / "実績_LS4.sqlite3", [("A000002", f"{_ym()}-05 08:00:00", "600", "300", "16")])
+    assert coil_results.import_results(conn).ok
+    assert data_sync.last_import(conn)[coil_results.TABLE]["元の目印"] != ""
+    assert not data_sync.check_sources(conn).coil

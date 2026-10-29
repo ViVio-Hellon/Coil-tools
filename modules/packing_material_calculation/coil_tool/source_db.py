@@ -366,7 +366,9 @@ def _prepare(conn: sqlite3.Connection) -> sqlite3.Connection:
 
 def _try_uri(resolved: Path, *, read_only: bool) -> sqlite3.Connection:
     """`file:...?mode=ro` で開く。ふだんはこれで通る。"""
-    uri = to_uri(resolved) + ("?mode=ro" if read_only else "")
+    # 書くときも `mode=rw`(統合 1.2.61)。既定(rwc)だと、差し替え中で一瞬消えていたマスタの場所に
+    # **空のファイルを新しく作り**、そこへ表と行を書いてしまう
+    uri = to_uri(resolved) + ("?mode=ro" if read_only else "?mode=rw")
     conn = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000)
     try:
         return _prepare(conn)
@@ -381,6 +383,9 @@ def _try_plain(resolved: Path, *, read_only: bool) -> sqlite3.Connection:
     `mode=ro` の代わりに `query_only` を立てます。取り込み元へ
     書き込まないことは**譲れない**ので、読み取り専用は必ず掛けます。
     """
+    if not read_only and not resolved.exists():
+        # 素のパスの connect は無ければ作る。書くときは作らない(統合 1.2.61。上の `mode=rw` と同じ)
+        raise OSError(f"ファイルが見つかりません: {resolved}")
     conn = sqlite3.connect(str(resolved), timeout=BUSY_TIMEOUT_MS / 1000)
     try:
         if read_only:
@@ -536,8 +541,41 @@ def list_tables(path: Path) -> list[str]:
         return []
 
 
+def table_names(path: Path) -> list[str]:
+    """テーブルの一覧。**読めなければ `SourceError`**(`list_tables` は読めないと空を返す。統合 1.2.61)。"""
+    try:
+        with _reading(Path(path)) as conn:
+            with identifiers_as_utf8(conn):
+                rows = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    " AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
+        return [r["name"] for r in rows]
+    except sqlite3.Error as exc:
+        raise SourceError(f"{Path(path).name} の表の一覧を読めません: {exc}") from exc
+
+
+def table_columns(path: Path, table: str) -> list[str]:
+    """テーブルの列名。**読めなければ `SourceError`**(空の並びは「表が無い」と確かめられたときだけ)。
+
+    統合 1.2.61。別のツールで、共有が読めなかったのを「表が無い」と取り違え、手元の実績を送り直して
+    重複を大量に作った事案があった。`columns()` は読めないと空を返すので、**有る・無いで書くかどうかを
+    決めるところ**(表を作る・手元の表を消す)ではこちらを使う。
+    """
+    try:
+        with _reading(Path(path)) as conn:
+            with identifiers_as_utf8(conn):
+                rows = conn.execute(
+                    f"PRAGMA table_info({quote_identifier(table)})").fetchall()
+        return [r["name"] for r in rows]
+    except sqlite3.Error as exc:
+        raise SourceError(f"{Path(path).name} の表 {table} を確かめられません: {exc}") from exc
+
+
 def columns(path: Path, table: str) -> list[str]:
-    """テーブルの列名。取り込み前に「その列があるか」を見るのに使う。"""
+    """テーブルの列名。取り込み前に「その列があるか」を見るのに使う。
+
+    **読めなくても空を返す**(画面の表示用)。有る・無いで書き込みを決めるときは `table_columns`。
+    """
     try:
         with _reading(Path(path)) as conn:
             with identifiers_as_utf8(conn):

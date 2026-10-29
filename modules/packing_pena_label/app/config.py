@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 #: アプリケーションID（ローカル領域のフォルダ名、多重起動判定、/api/health の識別子）
 APP_ID = "PackingPenaLabel"
 APP_NAME = "梱包ペナ ラベル・風袋計算"
-APP_VERSION = "1.5.53"
+APP_VERSION = "1.5.54"
 #: 版を切った日。画面のバージョン表示に添える。
 #: **中身を直したら必ずここを上げる**。上げ忘れると、
 #: 現場が「新しいファイルに差し替わったか」を画面から判断できない。
@@ -330,24 +330,46 @@ LAYER_LABEL = {
 }
 
 
-def _read_json(path: str) -> Dict[str, Any]:
-    """設定 JSON を読む。壊れていても起動は続ける。"""
+class LocalConfigUnreadable(OSError):
+    """設定ファイルは**あるのに読めない**(使用中・壊れている)。「無い」とは区別する(統合 1.2.61)。
+
+    別のツールで、共有が読めなかったのを「表が無い」と取り違え、手元の実績を送り直して重複を大量に作った
+    事案があった。設定も同じで、読めないのを「空」とみなして保存すると、この端末で決めていた項目が全部
+    消える(配布設定で上書きされる)。書く側はこれを受けたら**書かずに断る**。
+    """
+
+
+def _read_json(path: str, *, strict: bool = False) -> Dict[str, Any]:
+    """設定 JSON を読む。壊れていても起動は続ける。
+
+    無いときは空。あるのに読めないときは、`strict` なら `LocalConfigUnreadable`、そうでなければ空(起動・表示用)。
+    """
     if not path or not os.path.exists(path):
         return {}
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            raise ValueError("中身が設定の形(辞書)ではありません")
+        return data
+    except FileNotFoundError:
+        return {}
     except Exception as exc:
+        if strict:
+            raise LocalConfigUnreadable("設定ファイルを読めません(%s): %s" % (path, exc)) from exc
         print("設定ファイルの読込に失敗しました（無視して続行）: %s / %s"
               % (path, exc), file=sys.stderr)
         return {}
 
 
-def load_local_overrides(cfg: Optional[Config] = None) -> Dict[str, Any]:
-    """端末ごとの上書き設定を読む。"""
+def load_local_overrides(cfg: Optional[Config] = None, *, strict: bool = False) -> Dict[str, Any]:
+    """端末ごとの上書き設定を読む。
+
+    **書く前に読むときは `strict=True`**(統合 1.2.61)。あるのに読めなければ `LocalConfigUnreadable`
+    (読めないのを「空」と取り違えて、その空に足して保存すると、この端末の設定が全部消える)。
+    """
     cfg = cfg or Config()
-    data = _read_json(cfg.local_config_path)
+    data = _read_json(cfg.local_config_path, strict=strict)
     return {k: v for k, v in data.items() if not k.startswith("_")}
 
 
@@ -362,6 +384,9 @@ def save_local_overrides(values: Dict[str, Any],
     cfg = cfg or Config()
     os.makedirs(cfg.local_config_dir, exist_ok=True)
     path = cfg.local_config_path
+    # いまのファイルが**あるのに読めない**なら書かない(統合 1.2.61)。呼ぶ側が読めないのを空と取り違えて
+    # 組み立てた値で上書きすると、この端末で決めていた項目が消える
+    _read_json(path, strict=True)
 
     if os.path.exists(path):
         try:

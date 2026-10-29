@@ -382,13 +382,35 @@ def can_edit(repo) -> bool:
 
 # ---------------------------------------------------------------- 読み
 def _connect(path: str, write: bool = False) -> sqlite3.Connection:
-    if write:
-        conn = sqlite3.connect(path, timeout=15)
-    else:
-        uri = "file:%s?mode=ro" % path.replace("?", "%3f").replace("#", "%23")
-        conn = sqlite3.connect(uri, uri=True, timeout=15)
+    """資材マスタを開く。
+
+    書くときは(統合 1.2.61):
+    - `mode=rw` … **無いファイルを作らない**。素の `connect(path)` は、確かめてから開くまでのあいだに
+      (差し替え中などで)消えていたマスタの場所に空のファイルを作り、そこへ表・行を書いてしまう
+    - 開いたらすぐ `BEGIN IMMEDIATE` … 有る・無いを確かめてから書くまでを1つのまとまりにする
+      (2台が同時に足しても、確かめと番号の割り当てが重ならない。トリガーと「自動記録を開始」の行も一緒に確定する)
+    別のツールで、共有が読めなかったのを「無い」と取り違えて送り直し、重複を大量に作った事案があった。
+    """
+    mode = "rw" if write else "ro"
+    uri = "file:%s?mode=%s" % (path.replace("?", "%3f").replace("#", "%23"), mode)
+    conn = sqlite3.connect(uri, uri=True, timeout=15)
     conn.row_factory = sqlite3.Row
+    if write:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.Error:
+            conn.close()
+            raise
     return conn
+
+
+def _open_for_write(path: str) -> sqlite3.Connection:
+    """書くために開く。開けない(無い・ほかの PC が書いている途中で待ちきれない)ときは断る(統合 1.2.61)。"""
+    try:
+        return _connect(path, write=True)
+    except sqlite3.Error as exc:
+        raise Refused(REFUSE_WRITE_FAILED,
+                      "資材マスタに書けませんでした(見つからない・ほかの PC が書いている途中など): %s" % exc)
 
 
 def _quote(name: str) -> str:
@@ -572,7 +594,7 @@ def save_row(repo, table: str, row_id: Optional[int],
                       "この表は行を増やせません（並びが決まっています）。"
                       "ある行の中身だけ直せます。")
 
-    conn = _connect(path, write=True)
+    conn = _open_for_write(path)
     backup = ""
     try:
         cols = columns(conn, table)
@@ -647,7 +669,7 @@ def delete_row(repo, table: str, row_id: int, who: Optional[Dict[str, str]] = No
         raise Refused(REFUSE_NOT_CREATABLE,
                       "この表は行を消せません（並びが決まっています）。")
     soft = BY_TABLE[table].soft_delete
-    conn = _connect(path, write=True)
+    conn = _open_for_write(path)
     try:
         hit = conn.execute("SELECT * FROM %s WHERE rowid=?"
                            % _quote(table), (int(row_id),)).fetchone()

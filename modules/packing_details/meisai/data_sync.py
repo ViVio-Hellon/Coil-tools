@@ -46,6 +46,10 @@ class SyncError(RuntimeError):
     """取り込みに失敗した。"""
 
 
+class SourceEmpty(SyncError):
+    """実績の形式の元の表が空(手元は前の中身のまま)。"""
+
+
 # ==================================================================
 # 探す
 # ==================================================================
@@ -83,6 +87,46 @@ def find_sources(lot_dir: Optional[Path] = None,
             if path is not None:
                 found[table] = path
     return found
+
+
+def _primary_dir(table: str, lot_dir: Optional[Path] = None,
+                 konpo_dir: Optional[Path] = None) -> Path:
+    """その表の第1パスのフォルダ(仕掛台帳の3つ → 仕掛台帳のフォルダ、LS4LOT → 梱包課共有)。"""
+    if table in config.konpo_db_files():
+        return Path(konpo_dir if konpo_dir is not None else config.konpo_db_dir())
+    return Path(lot_dir if lot_dir is not None else config.lot_db_dir())
+
+
+def _last_source(conn: sqlite3.Connection, table: str) -> Optional[Path]:
+    """前に取り込んだファイル(取り込み記録)。無ければ None。"""
+    try:
+        row = conn.execute("SELECT ファイル FROM 取り込み記録 WHERE テーブル = ?", (table,)).fetchone()
+    except sqlite3.Error:
+        return None
+    return Path(str(row[0])) if row and row[0] else None
+
+
+def held_back(conn: sqlite3.Connection, table: str, path: Path,
+              lot_dir: Optional[Path] = None, konpo_dir: Optional[Path] = None) -> str:
+    """第1パスに**届かない**ので、代わりのファイル(第2パス・アプリのフォルダの写し)で入れ替えないときの理由。
+
+    統合 1.2.61。別のツールで、共有ファイルが読めなかったのを「表が無い」と取り違えて手元の実績を送り直し、
+    重複を大量に作った事案があった。ここでは以前、第1パスのフォルダに一瞬届かないと「ファイルが無い」とみなし、
+    第2パス(実績の形式なら今月の行だけ・割数だけ)やアプリのフォルダの古い写しで**手元の表を総入れ替え**していた。
+
+    見送るのは「前は第1パスから取り込んでいた」かつ「いま第1パスのフォルダに届かない」とき。フォルダに届いて
+    ファイルだけ無いとき、前から代わりのファイルを使っている端末(共有に届かない端末の写し)は、いままでどおり。
+    """
+    primary = _primary_dir(table, lot_dir, konpo_dir)
+    if _same_file(Path(path).parent, primary):
+        return ""
+    last = _last_source(conn, table)
+    if last is None or _same_file(last, path) or not _same_file(last.parent, primary):
+        return ""
+    if source_db.folder_reachable(primary):
+        return ""
+    return (f"{table}: 第1パス({primary})に届かないので、手元は前の中身のままにしました"
+            f"({Path(path).name} で入れ替えていません。届くようになったら取り込み直します)")
 
 
 def find_second_lots() -> dict[str, Path]:
@@ -166,6 +210,10 @@ def read_source(table: str, path: Path) -> tuple[list[dict[str, Any]], list, str
         rows = source_db.read_table(Path(path), picked)
     except source_db.SourceError as exc:
         raise SyncError(str(exc)) from exc
+    if not rows:
+        # 元の表が**空**(変換ツールが書き直している途中・途中で切れたファイル)。今月の行が無いのとは別で、
+        # 手元を空にしない(統合 1.2.61。読めない・空を「今月は無い」と取り違えて消さない)
+        raise SourceEmpty(f"{Path(path).name} の表が空です(書き直し中かもしれません)")
     kept = ls4_source.pick_rows(rows)
     year, month = ls4_source.this_month()
     note = (f"仕掛当工程: {Path(path).name} は実績の形式で読みました"
@@ -268,6 +316,12 @@ def import_table(conn: sqlite3.Connection, table: str, source_path: Path, *,
     created_at = source_created_at(source_path)
     try:
         rows, spec, note = read_source(table, source_path)
+    except SourceEmpty as exc:
+        kept = _local_count(conn, table)
+        result.imported[table] = 0
+        result.notes.append(f"{table}: {exc}。手元は前の中身のまま({kept:,}件)です。入れ替えていません")
+        log.warning("%s: %s(手元は前の中身のまま)", table, exc)
+        return result
     except SyncError as exc:
         log.warning("%s: 読み取り失敗 %s", table, exc)
         result.errors.append(f"{table}: {exc}")
@@ -392,6 +446,11 @@ def import_all(conn: sqlite3.Connection, *,
         if (not force and not needs_import(conn, path)
                 and (extra is None or not needs_import(conn, extra))):
             log.info("%s: 元が変わっていないので飛ばします (%s)", table, path.name)
+            continue
+        why = held_back(conn, table, path, lot_dir, konpo_dir)
+        if why:
+            log.warning(why)
+            result.errors.append(why)
             continue
         import_table(conn, table, path, result=result)
         if extra is not None and table in result.imported:

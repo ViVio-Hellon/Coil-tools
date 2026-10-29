@@ -432,7 +432,15 @@ def read(eid: str) -> Optional[str]:
 def cleanup_old(keep_days: Optional[int] = None, *, today: Optional[date] = None) -> list[str]:
     """残す日数を過ぎた記録を消す。**番号の形のファイルだけ**消す。"""
     from . import local_settings
-    days = keep_days if keep_days is not None else local_settings.log_keep_days()
+    if keep_days is not None:
+        days = keep_days
+    else:
+        try:
+            days = local_settings.log_keep_days(strict=True)
+        except local_settings.Unreadable:
+            # 残す日数を確かめられない。既定の 180 日で消すと、長く残す設定の PC で共有の記録を消してしまう
+            # (統合 1.2.61。読めないのを「設定が無い」と取り違えない)。今回は消さない
+            return []
     limit = (today or date.today()) - timedelta(days=days)
     removed = []
     for target, match in _places():                      # この端末の・このツールの物だけ

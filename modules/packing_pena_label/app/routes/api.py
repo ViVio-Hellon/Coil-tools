@@ -526,11 +526,17 @@ class ApiRoutes:
 
         合言葉が要る(現場の指定)。少なくとも 1 つは出す。
         """
-        from ..config import load_local_overrides, save_local_overrides
+        from ..config import LocalConfigUnreadable, load_local_overrides, save_local_overrides
         deny = self._size_password_gate(body, "出すサイズを変えるの")
         if deny is not None:
             return deny
         self.wf.refresh_sizes()
+        if not self.wf.size_extra.ok:
+            # 足したサイズを読めない(前の行のまま)ときに保存すると、隠していた足したサイズの覚えを
+            # 確かめていない中身で上書きしてしまう(統合 1.2.61)
+            return {"ok": False, "level": "warn",
+                    "message": "足したサイズを読めないので保存しませんでした。しばらくしてからもう一度"
+                               "(%s)" % self.wf.size_extra.last_error}
         known = list(dict.fromkeys(c.base_name for c in self.wf.master.all()))  # 丈1/丈2 で 2 つずつある
         want = body.get("sizes")
         if not isinstance(want, list):
@@ -548,10 +554,15 @@ class ApiRoutes:
         extras = list(dict.fromkeys(c.base_name for c in self.wf.master.all()
                                     if self.wf.master.is_extra(c.ob_idx)))
         hidden = [b for b in extras if b not in want]
-        current = load_local_overrides(self.cfg)
-        current["visible_sizes"] = ordered
-        current["hidden_extra_sizes"] = hidden
-        save_local_overrides(current, self.cfg)
+        try:
+            # 読めないのを空と取り違えて保存すると、この端末の設定が全部消える(統合 1.2.61)
+            current = load_local_overrides(self.cfg, strict=True)
+            current["visible_sizes"] = ordered
+            current["hidden_extra_sizes"] = hidden
+            save_local_overrides(current, self.cfg)
+        except LocalConfigUnreadable as exc:
+            return {"ok": False, "level": "warn",
+                    "message": "この端末の設定ファイルを読めないので保存しませんでした(%s)" % exc}
         before = list(self.cfg.visible_sizes or [])
         self.cfg.visible_sizes = ordered
         self.cfg.hidden_extra_sizes = hidden
@@ -562,7 +573,7 @@ class ApiRoutes:
 
     def _settings_size_add(self, body):
         """新しいサイズを足す(共有の資材マスタに書く。全ライン共通)。合言葉が要る。"""
-        from ..config import load_local_overrides, save_local_overrides
+        from ..config import LocalConfigUnreadable, load_local_overrides, save_local_overrides
         from ..services import master_admin as MA
         from ..services import size_extra as SX
         deny = self._size_password_gate(body, "サイズを足すの")
@@ -586,10 +597,14 @@ class ApiRoutes:
         if not body.get("show", True):
             hidden.append(r["baseName"])
         if hidden != list(self.cfg.hidden_extra_sizes or []):
-            current = load_local_overrides(self.cfg)
-            current["hidden_extra_sizes"] = hidden
-            save_local_overrides(current, self.cfg)
-            self.cfg.hidden_extra_sizes = hidden
+            try:
+                # 読めないのを空と取り違えて保存しない(統合 1.2.61)。サイズは足せているので知らせだけ足す
+                current = load_local_overrides(self.cfg, strict=True)
+                current["hidden_extra_sizes"] = hidden
+                save_local_overrides(current, self.cfg)
+                self.cfg.hidden_extra_sizes = hidden
+            except LocalConfigUnreadable as exc:
+                msg += "\nこの端末の設定ファイルを読めないので、「このPCに出す」は保存できませんでした(%s)" % exc
         if body.get("show", True):
             msg += "\nどのPCの指定サイズの画面にも出ます(出したくないPCは、設定の「サイズ」でチェックを外す)。"
         else:

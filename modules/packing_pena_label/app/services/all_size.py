@@ -76,13 +76,19 @@ class KatabanMaster:
         return {"name": name, "symbol": get("記号"), "kataban": get("型番"), "note": get("備考")}
 
     @classmethod
-    def _load_db(cls, db_path: str) -> List[Dict[str, str]]:
-        """梱包資材マスタ（SQLite）の表「型番」。表が無い・読めないときは空。読取専用で開く。"""
+    def _load_db(cls, db_path: str, strict: bool = False) -> List[Dict[str, str]]:
+        """梱包資材マスタ（SQLite）の表「型番」。表が無いときは空。読取専用で開く。
+
+        読めないとき: `strict` なら `sqlite3.Error` を上げる(読み直しで同梱の CSV へ黙って戻さない。
+        統合 1.2.61)。そうでなければ空(起動時は CSV で続ける)。
+        """
         import sqlite3
         uri = "file:%s?mode=ro" % db_path.replace("?", "%3f").replace("#", "%23")
         try:
             conn = sqlite3.connect(uri, uri=True, timeout=10)
         except sqlite3.Error as exc:
+            if strict:
+                raise
             log.warning("型番マスタ: DB を開けません、CSV を読みます: %s", exc)
             return []
         try:
@@ -93,6 +99,8 @@ class KatabanMaster:
             cur = conn.execute('SELECT * FROM "%s" ORDER BY rowid' % KATABAN_TABLE)
             rows = [cls._row(dict(r)) for r in cur.fetchall()]
         except sqlite3.Error as exc:
+            if strict:
+                raise
             log.warning("型番マスタ: DB の表「%s」を読めません、CSV を読みます: %s",
                         KATABAN_TABLE, exc)
             return []
@@ -101,9 +109,12 @@ class KatabanMaster:
         return [r for r in rows if r]
 
     @classmethod
-    def load(cls, csv_path: str, db_path: str = "") -> "KatabanMaster":
+    def load(cls, csv_path: str, db_path: str = "", strict: bool = False) -> "KatabanMaster":
+        """`strict`(読み直し)… DB を設定しているのに見えない・読めないときは例外(同梱の CSV へ黙って戻さない)。"""
+        if db_path and strict and not os.path.exists(db_path):
+            raise FileNotFoundError("梱包資材マスタが見えません: %s" % db_path)
         if db_path and os.path.exists(db_path):
-            rows = cls._load_db(db_path)
+            rows = cls._load_db(db_path, strict=strict)
             if rows:
                 return cls(rows, source=db_path, kind="sqlite")
         if csv_path and os.path.exists(csv_path):
@@ -301,9 +312,12 @@ class AllSizeService:
         self._paths = (csv_path, db_path)
         self._stamp = self._stamp_of(csv_path, db_path)
         try:
-            new = KatabanMaster.load(csv_path, db_path)
+            # DB が読めないのを「無い」と取り違えて同梱の CSV へ戻さない(統合 1.2.61。別のツールで、
+            # 読めなかったのを「無い」と取り違えて送り直し、重複を大量に作った事案があった)
+            new = KatabanMaster.load(csv_path, db_path, strict=True)
         except Exception as exc:
             log.warning("型番マスタを読み直せません（従来の内容を維持）: %s", exc)
+            self._stamp = None                  # 次にまた読み直す
             return False
         if not new.rows:
             log.warning("型番マスタが空です（従来の内容を維持）: DB=%s CSV=%s",

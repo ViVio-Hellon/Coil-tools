@@ -206,6 +206,8 @@ class BuildResult:
     reason: str = ""
     # 定尺に無くて書き足した長さ。画面に出して倉庫へ伝える
     extra_lengths: list[str] = field(default_factory=list)
+    # 発注履歴を読めず、2週間以内の重複を確かめていない(統合 1.2.61)
+    history_unchecked: bool = False
 
 
 def _sizes_in(entries: list[Aggregated]) -> list[str]:
@@ -312,7 +314,12 @@ def build(conn: sqlite3.Connection, *, worker: str,
 
     if check_history:
         lots = [r.LotNo for s in result.sheets for r in s.rows if r.LotNo]
-        result.duplicates = order_history.find_duplicates(conn, lots)
+        try:
+            result.duplicates = order_history.find_duplicates(conn, lots)
+        except order_history.HistoryUnreadable as exc:
+            # 読めなかったのを「重複なし」にしない。票は出すが、確かめていないことを画面に出す(統合 1.2.61)
+            log.warning("発注履歴を確かめられませんでした: %s", exc)
+            result.history_unchecked = True
 
     result.ok = True
     return result

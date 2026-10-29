@@ -302,3 +302,42 @@ def test_画面に面がある(client):
     # パスワード欄は面の中に置かない(いちばん上の認証を使う)
     panel = html[html.index('id="panel-distribution"'):html.index("/panel-distribution")]
     assert 'type="password"' not in panel
+
+
+# ==================================================================
+# 統合 1.2.61: 設定ファイルを読めないのを「無い」にしない
+# (別のツールで、読めなかったのを「無い」と取り違えて送り直し、重複を大量に作った事案があった)
+# ==================================================================
+def test_1_2_61_設定ファイルを読めなければ保存して消さない(terminals):
+    terminals[1].use()
+    user_settings.save_many({config.KEY_MASTER_DB_DIR: r"\\srv\マスタ"})
+    path = config.USER_CONFIG_PATH
+    before = path.read_text(encoding="utf-8")
+    path.write_text(before[:-5], encoding="utf-8")            # 書きかけ(壊れている)に見立てる
+    broken = path.read_text(encoding="utf-8")
+    assert user_settings.load_all() == {}                      # 表示用は今までどおり空で続ける
+    with pytest.raises(user_settings.SettingsUnreadable):
+        user_settings.load_all(strict=True)
+    assert user_settings.save_many({config.KEY_WORKER: "高村敏幸"}) is False
+    assert user_settings.clear(config.KEY_MASTER_DB_DIR) is False
+    assert path.read_text(encoding="utf-8") == broken, "読めないファイルを上書きしない"
+
+
+def test_1_2_61_設定ファイルが無いときは今までどおり保存する(terminals):
+    terminals[1].use()
+    assert not config.USER_CONFIG_PATH.exists()
+    assert user_settings.load_all(strict=True) == {}
+    assert user_settings.save_many({config.KEY_WORKER: "高村敏幸"}) is True
+
+
+def test_1_2_61_設定ファイルを読めなければ配布設定で上書きしない(terminals):
+    source, dest = terminals
+    configure(source)
+    assert export().ok
+    dest.use()
+    user_settings.save_many({config.KEY_MASTER_DB_DIR: r"\\自分の\マスタ"})
+    path = config.USER_CONFIG_PATH
+    path.write_text("{ 壊れている", encoding="utf-8")
+    result = distribution.apply_on_start()
+    assert not result.ok and not result.applied
+    assert path.read_text(encoding="utf-8") == "{ 壊れている"

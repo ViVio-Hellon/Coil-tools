@@ -305,7 +305,7 @@ class PurgeTest(_Base):
         # 先に古いのも共有へ入れておく(整理の前の形)
         slip_history._shared_purged_on = None
         with shared_settings.folder_lock(shared_settings.shared_dir(), slip_history.LOCK_NAME):
-            h = slip_history._open_shared(_shared())
+            h = slip_history._open_shared(_shared(), create=True)   # 試験の用意(作る)
             rows = self.conn.execute(
                 f"SELECT {', '.join(slip_history.HEADER_COLUMNS)} FROM 明細履歴").fetchall()
             details = self.conn.execute("SELECT * FROM 明細履歴_副番").fetchall()

@@ -360,10 +360,14 @@ class SizeMaster:
             self._by_ob = {}
             self._extra_obs = set()
             self._base_labels = {}
-            if json_path and os.path.exists(json_path):
+            if json_path:
+                if not os.path.exists(json_path):
+                    # 設定したファイルが見えない(共有に届かない・差し替え中)。同梱の定義へ黙って戻さない
+                    # (統合 1.2.61。戻すと、選んでいたサイズが外れ、違う型番で刷ることがある)。今の内容のまま
+                    raise FileNotFoundError("サイズ構成マスタが見えません: %s" % json_path)
                 self._load_json(json_path)
             else:
-                self._load_builtin()
+                self._load_builtin()            # 設定していないときだけ同梱の定義
             # 足したサイズを足し直し、ラベル台紙一覧の上書きも掛け直す(apply_extra の中で)
             self.apply_extra(self._extra_rows)
             return True

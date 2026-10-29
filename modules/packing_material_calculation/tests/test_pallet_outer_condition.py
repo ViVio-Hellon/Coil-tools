@@ -558,3 +558,131 @@ def test_7_札の出し分け(sandbox):
     assert special_rules.program_rule_notes(IZUMI, outer_table=True) == []
     assert special_rules.program_rule_notes("1C1188", outer_table=True)
     assert special_rules.program_rule_notes("1C1258", size="外径指定", outer_table=True)
+
+
+# ==================================================================
+# 統合 1.2.61: 「読めない」と「無い」を取り違えない
+# 別のツールで、共有が読めなかったのを「表が無い」と取り違え、手元の実績を送り直して重複を
+# 大量に作った事案があった。表の有る無しで書く(作る・手元を消す・記録する)ところを確かめる
+# ==================================================================
+def _spy(monkeypatch):
+    """作る・手元を消す・取り込みの記録、が呼ばれたかを数える。"""
+    from modules.packing_material_calculation.coil_tool import source_db  # noqa: F401
+    calls = {"create": 0, "drop": 0, "record": []}
+
+    def create(path):
+        calls["create"] += 1
+        return True
+    real_drop, real_record = outer_condition.drop_local, data_sync._record_import
+
+    def drop(conn):
+        calls["drop"] += 1
+        return real_drop(conn)
+
+    def record(conn, table, *a, **k):
+        calls["record"].append(table)
+        return real_record(conn, table, *a, **k)
+    monkeypatch.setattr(data_sync, "_create_optional", create)
+    monkeypatch.setattr(outer_condition, "drop_local", drop)
+    monkeypatch.setattr(data_sync, "_record_import", record)
+    return calls
+
+
+def test_1_2_61_表の有る無しを読めなければ作らず消さず記録もしない(sandbox, monkeypatch):
+    from modules.packing_material_calculation.coil_tool import source_db
+    path = make_source(sandbox)
+    with db.connect() as c:
+        db.apply_schema(c)
+        make_local_table(c)                                    # 前に取り込んだ手元の表
+        calls = _spy(monkeypatch)
+
+        def unreadable(p, table):
+            raise source_db.SourceError("写している間に書き換わりました")
+        monkeypatch.setattr(source_db, "table_columns", unreadable)
+        got = data_sync._import_optional(c, TABLE, path)
+        assert not got.ok and "読めません" in got.error
+        assert calls == {"create": 0, "drop": 0, "record": []}
+        assert outer_condition.present(c), "手元の表は残る(プログラムの規則へ黙って戻らない)"
+
+
+def test_1_2_61_もうあると断られたあと読めなければ誤りにして消さない(sandbox, monkeypatch):
+    from modules.packing_material_calculation.coil_tool import source_db
+    path = make_source(sandbox)
+    with db.connect() as c:
+        db.apply_schema(c)
+        make_local_table(c)
+        calls = _spy(monkeypatch)
+        monkeypatch.setattr(data_sync, "_create_optional", lambda p: False)   # ほかの PC が先に作っていた
+        answers = iter([[], source_db.SourceError("瞬断")])
+
+        def flaky(p, table):
+            got = next(answers)
+            if isinstance(got, Exception):
+                raise got
+            return got
+        monkeypatch.setattr(source_db, "table_columns", flaky)
+        got = data_sync._import_optional(c, TABLE, path)
+        assert not got.ok and "読めません" in got.error
+        assert calls["drop"] == 0 and calls["record"] == []
+        assert outer_condition.present(c)
+
+
+def test_1_2_61_もうあると断られたのに見えなければ誤りにする(sandbox, monkeypatch):
+    from modules.packing_material_calculation.coil_tool import source_db
+    path = make_source(sandbox)
+    with db.connect() as c:
+        db.apply_schema(c)
+        make_local_table(c)
+        calls = _spy(monkeypatch)
+        monkeypatch.setattr(data_sync, "_create_optional", lambda p: False)
+        monkeypatch.setattr(source_db, "table_columns", lambda p, t: [])
+        got = data_sync._import_optional(c, TABLE, path)
+        assert not got.ok and "もうある" in got.error
+        assert calls["drop"] == 0 and calls["record"] == []
+
+
+def test_1_2_61_梱包資材マスタの名前でないファイルには作らない(sandbox, monkeypatch):
+    """マスタが一瞬見えないあいだに同じフォルダの別の sqlite を拾っても、そこへ表と行を書かない。"""
+    import shutil
+    path = make_source(sandbox)
+    other = path.with_name("梱包資材マスタ_old.sqlite3")
+    shutil.copy(path, other)
+    with db.connect() as c:
+        db.apply_schema(c)
+        calls = _spy(monkeypatch)
+        got = data_sync._import_optional(c, TABLE, other)
+        assert calls["create"] == 0
+        assert got.ok and "ではないので作りません" in got.note
+        assert TABLE not in [r[0] for r in sqlite3.connect(other).execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")]
+
+
+def test_1_2_61_書くときに消えていたファイルを新しく作らない(tmp_path):
+    from pathlib import Path
+    from modules.packing_material_calculation.coil_tool import source_db
+    gone = Path(tmp_path) / "梱包資材マスタ.sqlite3"
+    with pytest.raises((sqlite3.Error, OSError)):
+        source_db._try_uri(gone, read_only=False)
+    assert not gone.exists()
+    with pytest.raises(OSError):
+        source_db._try_plain(gone, read_only=False)
+    assert not gone.exists()
+
+
+def test_1_2_61_手元の表の有る無しを読めなければ_strict_は上げる():
+    c = sqlite3.connect(":memory:")
+    c.close()
+    assert outer_condition.present(c) is False
+    with pytest.raises(sqlite3.Error):
+        outer_condition.present(c, strict=True)
+
+
+def test_1_2_61_table_columns_は読めなければ上げる_表が無ければ空(sandbox):
+    from modules.packing_material_calculation.coil_tool import source_db
+    path = make_source(sandbox)
+    assert source_db.table_columns(path, "まだ無い表") == []
+    broken = path.with_name("broken.sqlite3")
+    broken.write_bytes(b"not a database" * 100)
+    with pytest.raises(source_db.SourceError):
+        source_db.table_columns(broken, TABLE)
+    assert source_db.columns(broken, TABLE) == []              # 表示用は今までどおり空

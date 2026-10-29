@@ -21,11 +21,20 @@ from .logging_utils import get_logger
 log = get_logger("user_settings")
 
 
-def load_all() -> dict[str, Any]:
+class SettingsUnreadable(Exception):
+    """設定ファイルはあるのに読めない・壊れている(「無い」とは違う。統合 1.2.61)。"""
+
+
+def load_all(*, strict: bool = False) -> dict[str, Any]:
     """設定ファイル全体を読む。壊れていても例外にせず空扱いにする。
 
     壊れたファイルで起動そのものを止めない。既定値で動いて、
     画面に「読めなかった」と出すほうが原因を追いやすい。
+
+    `strict=True` … **ファイルが無いときだけ**空。あるのに読めない・壊れているなら `SettingsUnreadable`。
+    書き込む前(保存・配布設定の読み込み)はこちらで読む(統合 1.2.61。以前は読めないと空とみなし、
+    その上に1項目だけ足して書いたので、置き場所などの設定が全部消えた。別のツールで、読めなかったのを
+    「無い」と取り違えて送り直し、重複を大量に作った事案と同じ形)。
     """
     path = config.USER_CONFIG_PATH
     if not path.exists():
@@ -33,9 +42,15 @@ def load_all() -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
+        if strict:
+            raise SettingsUnreadable(f"設定ファイルを読めません: {path}({exc})") from exc
         log.warning("設定ファイルを読めませんでした(既定値で続行): %s", exc)
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        if strict:
+            raise SettingsUnreadable(f"設定ファイルの形が違います: {path}")
+        return {}
+    return data
 
 
 def get(key: str, default: Any = None) -> Any:
@@ -54,8 +69,14 @@ def save_many(values: dict[str, Any]) -> bool:
     設定画面は複数の欄を1回の「保存」で受けるので、1つずつ書くと
     途中で失敗したときに**半分だけ変わった**状態が残る。まとめて
     1回書けばそれが起きない。
+
+    **今の設定を読めなければ書かない**(False。統合 1.2.61。読めないのを空とみなして上書きしない)。
     """
-    data = load_all()
+    try:
+        data = load_all(strict=True)
+    except SettingsUnreadable as exc:
+        log.warning("設定ファイルを読めないので保存しませんでした(上書きして消さないため): %s", exc)
+        return False
     data.update(values)
     try:
         config.USER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -69,8 +90,12 @@ def save_many(values: dict[str, Any]) -> bool:
 
 
 def clear(key: str) -> bool:
-    """設定を消して既定値へ戻す。"""
-    data = load_all()
+    """設定を消して既定値へ戻す。今の設定を読めなければ書かない(False。統合 1.2.61)。"""
+    try:
+        data = load_all(strict=True)
+    except SettingsUnreadable as exc:
+        log.warning("設定ファイルを読めないので戻しませんでした(上書きして消さないため): %s", exc)
+        return False
     if key not in data:
         return True
     data.pop(key)

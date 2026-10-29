@@ -304,8 +304,15 @@ def _read_master(folder: Path) -> Master:
     `ID` の列に型が無い(Access から持ってきた表)ので、SQL で `= 1` と
     比べると '1' と 1 が別物になる。読んでから比べる。
     """
-    path = source_db.find(folder, config.MASTER_DB_NAME)
+    try:
+        path = source_db.find_strict(folder, config.MASTER_DB_NAME)
+    except OSError as exc:
+        # 届かないのを「マスタが無い」と取り違えない(統合 1.2.61。別のツールで、読めなかったのを「無い」と
+        # 取り違えて送り直し、重複を大量に作った事案があった)。無いとみなすと JSON にだけ書き、あとで黙って戻る
+        return Master(problem=f"梱包資材マスタのフォルダに届きません: {exc}")
     if path is None:
+        if not source_db.folder_reachable(folder):
+            return Master(problem=f"梱包資材マスタのフォルダに届きません: {folder}")
         return Master()
     q = source_db.quote_identifier
     try:
@@ -499,12 +506,29 @@ _mirror_done: Optional[tuple[str, str]] = None
 _mirror_thread: Optional[threading.Thread] = None
 
 
+def _json_was_seen(folder: Path, jfolder: Path) -> bool:
+    """この置き場所の控えの JSON を、前は読めていたか(写しに JSON だけの値が残っているか)。
+
+    統合 1.2.61。控えの JSON が一瞬見えない(置き換え中・届かない)のを「まだ誰も作っていない」と取り違えて、
+    空から作り直すと管理者パスワードなどが消える。前は有ったのに見えないときは書かない。
+    """
+    cached = user_settings.get(CACHE_KEY)
+    if not (isinstance(cached, dict) and cached.get("path") == _place_key(folder, jfolder)):
+        return False
+    values = cached.get("values")
+    return isinstance(values, dict) and bool(values.get(config.KEY_ADMIN_PASSWORD))
+
+
 def _sync_mirror(folder: Path, value: str) -> None:
     """控えのJSON(`folder` は控えのフォルダ)を、マスタの値に合わせる。"""
     try:
         with _locked(folder):
             path = folder / FILE_NAME
-            current = _read_json(path) or {}
+            current = _read_json(path)
+            if current is None and _json_was_seen(shared_dir(), folder):
+                log.warning("控えのJSONが見えないので、作り直さずに待ちます: %s", path)
+                return
+            current = current or {}
             if current.get("qa_mark") == value:
                 return
             _write_json(folder, {**current, "qa_mark": value, "format": FORMAT,
@@ -558,7 +582,9 @@ def read(*, timeout: float = READ_TIMEOUT_SEC) -> Snapshot:
     _note_master(found["master"])
     now = _now()
     values = _compose(found)
-    _store_cache(key, values, now)
+    if not found["json_problem"]:
+        # 控えの JSON を読めなかった回の値(管理者パスワードなどが抜けている)で写しを上書きしない(統合 1.2.61)
+        _store_cache(key, values, now)
     _mirror_later(jfolder, found)
     return Snapshot(values, "shared", folder, "", now, found["master"],
                     found["json_problem"], jfolder)
@@ -752,7 +778,11 @@ def update(changes: dict[str, Any]) -> Written:
                 _write_master(master, str(changes["qa_mark"]))
                 to_master = True
         try:
-            current = _read_json(jfolder / FILE_NAME) or {}
+            current = _read_json(jfolder / FILE_NAME)
+            if current is None and _json_was_seen(folder, jfolder):
+                raise SharedError(f"控えのJSON({jfolder / FILE_NAME})が見えません。前は有ったので、"
+                                  "置き換え中か届いていません。しばらくしてからもう一度変えてください")
+            current = current or {}
             data = {**current, **changes, "format": FORMAT,
                     "updated_at": _now(), "updated_by": _who()}
             _write_json(jfolder, data)

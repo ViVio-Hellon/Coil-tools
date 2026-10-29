@@ -44,6 +44,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import os
+import sqlite3
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -490,30 +491,44 @@ def _import_optional(conn: Any, table: str, path: Path) -> TableResult:
     共有で表が作られたときに「変わった」と気づけない(`check_sources`)。
     """
     stamp = source_stamp(path)                  # 読む前に取る(統合 1.2.49)
+    # **「読めない」と「無い」を取り違えない**(統合 1.2.61)。別のツールで、共有が読めなかったのを
+    # 「表が無い」と取り違えて手元の実績を送り直し、重複を大量に作った事案があった。表が有るか無いかは
+    # 1回の読み(`table_columns`)で確かめ、読めなければここで止める(作らない・手元を消さない・記録しない)
     try:
-        # 共有が読めるかを先に確かめる。読めないのに「表が無い」と取り違えて手元の表を消さない
-        source_db.read_query(path, "SELECT 1 FROM sqlite_master LIMIT 1")
+        available = set(source_db.table_columns(path, table))
     except source_db.SourceError as exc:
         return TableResult(table=table, ok=False, source=str(path),
                            error=f"取り込み元を読めません: {exc}")
-    available = set(source_db.columns(path, table))
     created_note = ""
     why = ""
     if not available and table == outer_condition.TABLE:
-        try:
-            made = _create_optional(path)
-        except source_db.SourceError as exc:
-            why = str(exc)
-            log.warning("取り込み元に %s を作れませんでした(プログラムの規則で決めます): %s", table, exc)
+        if Path(path).name.casefold() != config.MATERIAL_DB_NAME.casefold():
+            # 梱包資材マスタの名前のファイルでないときは作らない(統合 1.2.61。マスタが一瞬見えないあいだに
+            # 同じフォルダの別の sqlite を拾っていたら、そのファイルへ表と行を書いてしまう)
+            why = f"{Path(path).name} は {config.MATERIAL_DB_NAME} ではないので作りません"
         else:
-            forget_copies([path])                       # 作った表が見えるよう、写しを捨てて読み直す
-            stamp = source_stamp(path)
-            available = set(source_db.columns(path, table))
-            if made:
-                created_note = OPTIONAL_CREATED_NOTE.format(rows=len(outer_condition.SEED_ROWS))
-                log.info("取り込み元に無かったので %s を作りました: %s", table, path)
-            if not available:                           # 作ったのに見えない(写しが古い等)
-                why = "作ったあとの表が見えません"
+            try:
+                made = _create_optional(path)
+            except source_db.SourceError as exc:
+                why = str(exc)
+                log.warning("取り込み元に %s を作れませんでした(プログラムの規則で決めます): %s", table, exc)
+            else:
+                forget_copies([path])                       # 作った表が見えるよう、写しを捨てて読み直す
+                stamp = source_stamp(path)
+                try:
+                    available = set(source_db.table_columns(path, table))
+                except source_db.SourceError as exc:
+                    # 作った(またはほかの PC が作っていた)はずの表を読めない。無いとは決めない
+                    return TableResult(table=table, ok=False, source=str(path),
+                                       error=f"取り込み元を読めません: {exc}")
+                if made:
+                    created_note = OPTIONAL_CREATED_NOTE.format(rows=len(outer_condition.SEED_ROWS))
+                    log.info("取り込み元に無かったので %s を作りました: %s", table, path)
+                if not available:
+                    # 「もうある」と断られたのに見えない。どちらが本当か分からないので何もしない
+                    return TableResult(table=table, ok=False, source=str(path),
+                                       error="取り込み元に表を作ろうとしたら「もうある」と断られましたが、"
+                                             "読むと見えません。しばらくして取り込み直してください")
     if not available:
         try:
             if table == outer_condition.TABLE:
@@ -521,6 +536,9 @@ def _import_optional(conn: Any, table: str, path: Path) -> TableResult:
         except Exception as exc:  # noqa: BLE001 - 理由を残して次へ
             return TableResult(table=table, ok=False, source=str(path),
                                error=f"手元のDBへ書けませんでした: {exc}")
+        # ここに来るのは**読めて、表が無いと確かめた**ときだけ(読めなければ上で止めている)。目印は残す
+        # (残さないと帯を開くたび・計算Start のたびに「共有が変わった」になり、読み取り専用の共有へ
+        # 毎回作りに行く)。作り直すのは「いま取り込む」か、共有が変わったとき
         _record_import(conn, table, path, 0, stamp)
         return TableResult(table=table, ok=True, rows=0, source=str(path),
                            note=OPTIONAL_ABSENT_NOTE.format(why=why or "理由不明"))
@@ -529,7 +547,10 @@ def _import_optional(conn: Any, table: str, path: Path) -> TableResult:
         # 作る前に断る。空の表を作ってしまうと「表はあるが行が無い」= マスタの値のまま、に化ける
         return TableResult(table=table, ok=False, source=str(path),
                            error="取り込み元に列がありません: " + ", ".join(missing))
-    existed = outer_condition.present(conn)
+    try:
+        existed = outer_condition.present(conn, strict=True)
+    except sqlite3.Error:
+        existed = True          # 手元に有ったか分からない。分からないときは消さない(統合 1.2.61)
     outer_condition.ensure_local(conn)
     result = _import_table(conn, dest_table=table, source_path=path, source_table=table)
     if not result.ok and not existed:

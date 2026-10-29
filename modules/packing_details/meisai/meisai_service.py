@@ -509,9 +509,9 @@ def save_hand_edits(conn: sqlite3.Connection, lot_no: str,
 
 def list_outputs(conn: sqlite3.Connection, lot_no: str) -> list[Output]:
     """そのロットの出力一覧 (VBA `RefreshSheetList`)。No順。"""
-    rows = db.fetch_all(conn,
-                        "SELECT * FROM 明細出力 WHERE ロット番号 = ? ORDER BY No",
-                        (lot_no,), caller_name="meisai_service.list_outputs") or []
+    rows = db.fetch_all_strict(conn,
+                               "SELECT * FROM 明細出力 WHERE ロット番号 = ? ORDER BY No",
+                               (lot_no,), caller_name="meisai_service.list_outputs")
     return [_to_output(r) for r in rows]
 
 

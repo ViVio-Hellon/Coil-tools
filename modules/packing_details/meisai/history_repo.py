@@ -45,9 +45,9 @@ def fuban_key(lot_no: str, strand_key: str) -> str:
 
 def is_duplicate(conn: sqlite3.Connection, key: str) -> bool:
     """その副番はもう出力済みか (VBA `IsDuplicate`)。"""
-    row = db.fetch_one(conn, "SELECT 1 FROM 副番履歴 WHERE 副番キー = ? LIMIT 1",
-                       (key,), caller_name="history_repo.is_duplicate")
-    return row is not None
+    rows = db.fetch_all_strict(conn, "SELECT 1 FROM 副番履歴 WHERE 副番キー = ? LIMIT 1",
+                               (key,), caller_name="history_repo.is_duplicate")
+    return bool(rows)
 
 
 def duplicates(conn: sqlite3.Connection, lot_no: str,
@@ -62,9 +62,9 @@ def duplicates(conn: sqlite3.Connection, lot_no: str,
         return []
     keys = [fuban_key(lot_no, k) for k in strand_keys]
     marks = ", ".join("?" for _ in keys)
-    rows = db.fetch_all(conn,
-                        f"SELECT 副番キー FROM 副番履歴 WHERE 副番キー IN ({marks})",
-                        tuple(keys), caller_name="history_repo.duplicates") or []
+    rows = db.fetch_all_strict(conn,
+                               f"SELECT 副番キー FROM 副番履歴 WHERE 副番キー IN ({marks})",
+                               tuple(keys), caller_name="history_repo.duplicates")
     found = {r["副番キー"] for r in rows}
     return [k for k, full in zip(strand_keys, keys) if full in found]
 

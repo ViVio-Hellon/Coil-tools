@@ -650,3 +650,44 @@ def test_LOTで分けるは画面で選んで覚えておく(client, sandbox):
     assert client.post("/api/order/build", json={"LOTで分ける": False}).get_json()["sheets"][0]["ロット"] == ""
     html = client.get("/order").data.decode()
     assert 'id="byLot"' in html and "LOTで分ける" in html
+
+
+# ==================================================================
+# 統合 1.2.61: 発注履歴を読めないのを「重複なし」にしない
+# (別のツールで、読めなかったのを「無い」と取り違えて送り直し、重複を大量に作った事案があった)
+# ==================================================================
+def test_1_2_61_発注履歴を読めなければ重複なしと言わない(conn, monkeypatch):
+    from modules.packing_material_calculation.coil_tool import db as coil_db
+    _lot(conn, "B000002", 2)
+    real = coil_db.fetch_all
+    monkeypatch.setattr(coil_db, "fetch_all",
+                        lambda c, sql, *a, **k: None if "発注履歴" in sql else real(c, sql, *a, **k))
+    with pytest.raises(order_history.HistoryUnreadable):
+        order_history.find_duplicates(conn, ["B000002"])
+    r = order_sheet_service.build(conn, worker="高村")
+    assert r.ok and r.history_unchecked and r.duplicates == []
+    # 確かめを飛ばして作り直すときは読まないので、知らせも出さない
+    again = order_sheet_service.build(conn, worker="高村", check_history=False)
+    assert again.ok and not again.history_unchecked
+
+
+def test_1_2_61_発注票の画面に確かめていないことを出す(client, sandbox, monkeypatch):
+    from modules.packing_material_calculation.coil_tool import order_history as oh
+    from modules.packing_material_calculation.tests._web import seed
+    seed(sandbox)
+    client.post("/api/settings", json={"worker": _fixture_worker()})
+    r = client.post("/api/calc/lot", json={"LOT": "A123456"})
+    client.post("/api/calc/order", json={"受注番号": r.get_json()["candidates"][0]})
+    client.post("/api/calc/input", json={"検入数": "10"})
+    assert client.post("/api/calc/run", json={}).get_json()["ok"]
+    assert client.post("/api/checklist/add", json={}).get_json()["ok"]
+
+    def unreadable(*a, **k):
+        raise oh.HistoryUnreadable("読めません")
+    monkeypatch.setattr(oh, "find_duplicates", unreadable)
+    body = client.post("/api/order/build", json={}).get_json()
+    assert body["ok"] and body["history_unchecked"] is True
+    assert body["history_message"] == "発注の履歴を確かめられませんでした(2週間以内の重複を見ていません)"
+    from pathlib import Path
+    js = (Path(__file__).resolve().parents[1] / "app/static/js/views/order.js").read_text(encoding="utf-8")
+    assert "r.history_unchecked" in js and "history_message" in js

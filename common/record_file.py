@@ -25,6 +25,7 @@ import datetime
 import io
 import json
 import os
+import time
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 FORMAT_CSV = "csv"
@@ -132,41 +133,98 @@ def _csv_text(rows: Iterable[Iterable[str]]) -> str:
 
 # ------------------------------------------------------------------ 書く
 def _append_text(path: str, text: str, *, header: str = "") -> None:
-    """足す。新しいファイル(空)なら先に header を書く。"""
-    new = not os.path.exists(path) or os.path.getsize(path) == 0
+    """足す。ファイルが空なら先に header を書く。
+
+    空かどうかは**開いたあとの位置**で見る(統合 1.2.61)。以前は `os.path.exists` で見ていて、共有で一瞬
+    確かめられないと「無い」とみなし、ファイルの途中に見出しをもう一度書くことがあった。
+    """
     with open(path, "a", encoding="utf-8", newline="") as f:
-        if new and header:
+        if header and f.tell() == 0:
             f.write(header)
         f.write(text)
 
 
-def _write_one(path: str, text: str, header: str) -> str:
-    """本体へ足す(前に書けなかった「追記待ち」があれば先に書き足して消す)。
+#: 追記待ちを書き足すあいだの名前(「<名前>.追記待ち.<番号>.処理中」)。この名前のファイルは二度と書き足さない
+CLAIM_SUFFIX = ".処理中"
 
-    本体が押さえられて書けなければ「追記待ち」へ足す。戻り値は知らせる文(書けたら空)。
+
+def _read_text(path: str) -> str:
+    with open(path, encoding="utf-8", newline="") as f:
+        return f.read()
+
+
+def _claim_pending(pending: str) -> Tuple[Optional[str], str]:
+    """追記待ちを**名前を変えて引き取る**。戻り値は (引き取ったファイル, 中身)。無い・引き取れないなら (None, "")。
+
+    統合 1.2.61。以前は追記待ちを読んで本体へ書き足してから消していた。消せない(ウイルス対策・バックアップ・
+    Excel で開いている・消す権限が無い)と追記待ちが残り、**記録のたびに同じ行が本体へ何度も書き足された**
+    (別のツールで、読めなかったのを取り違えて送り直し、重複を大量に作った事案と同じ形)。
+    いまは書き足す前に「…処理中」へ名前を変える。本体へ書けたら、その名前のファイルは二度と書き足さない
+    (消せなくても重ならない)。本体へ書けなければ追記待ちへ戻す。
+    """
+    if not os.path.exists(pending):
+        return None, ""
+    claimed = f"{pending}.{os.getpid()}.{time.time_ns()}{CLAIM_SUFFIX}"
+    try:
+        os.replace(pending, claimed)
+    except OSError:
+        return None, ""                 # 引き取れなければ今回は混ぜない(次に書けたときに書き足す)
+    try:
+        return claimed, _read_text(claimed)
+    except OSError:
+        _give_back(claimed, pending)
+        return None, ""
+
+
+def _give_back(claimed: str, pending: str) -> bool:
+    """引き取った追記待ちを戻す(本体へ書けなかったとき)。戻せたら True。"""
+    try:
+        if not os.path.exists(pending):
+            os.replace(claimed, pending)
+            return True
+        # 引き取ったあとに新しい追記待ちができていた。後ろへ足してから消す(古い順を保つため前へ)
+        old, new = _read_text(claimed), _read_text(pending)
+        tmp = pending + CLAIM_SUFFIX + ".戻し"
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(old + new)
+        os.replace(tmp, pending)
+        os.remove(claimed)
+        return True
+    except OSError:
+        return False
+
+
+def _write_one(path: str, text: str, header: str) -> str:
+    """本体へ足す(前に書けなかった「追記待ち」があれば先に書き足す)。
+
+    本体に書けなければ「追記待ち」へ足す。戻り値は知らせる文(書けたら空)。
+    **本体に書けたあとは、追記待ちへ足さない・「書けません」と言わない**(統合 1.2.61。以前は追記待ちを消せない
+    ことを「本体が開かれている」と取り違え、今回の行を追記待ちにも足して、次に 2 重に書いていた)。
     """
     pending = path + PENDING_SUFFIX
+    claimed, waiting = _claim_pending(pending)
     try:
-        waiting = ""
-        if os.path.exists(pending):
-            with open(pending, encoding="utf-8", newline="") as f:
-                waiting = f.read()
         _append_text(path, waiting + text, header=header)
-        if waiting:
-            try:
-                os.remove(pending)
-            except OSError:
-                # 消せなくても次に 2 重に書かないよう、空にしておく
-                open(pending, "w", encoding="utf-8").close()
-        return ""
-    except PermissionError as exc:
+    except OSError as exc:
+        kept = "" if claimed is None or _give_back(claimed, pending) else (
+            f"。前に書けなかった分は {os.path.basename(claimed)} に残っています")
         try:
             _append_text(pending, text)
         except OSError as exc2:
-            return f"{path} に書けません({exc2.strerror or exc2})"
-        return (f"{os.path.basename(path)} が開かれていて書けません(Excel などで開いているときは閉じてください)。"
-                f"いまは {os.path.basename(pending)} に足しておき、閉じたあと次の記録で書き足します"
-                f"({exc.strerror or exc})")
+            return f"{path} に書けません({exc2.strerror or exc2}){kept}"
+        if isinstance(exc, PermissionError):
+            head = (f"{os.path.basename(path)} が開かれていて書けません(Excel などで開いているときは閉じてください)。"
+                    f"いまは {os.path.basename(pending)} に足しておき、閉じたあと次の記録で書き足します")
+        else:
+            head = (f"{os.path.basename(path)} に書けません。いまは {os.path.basename(pending)} に足しておき、"
+                    "次の記録で書き足します")
+        return f"{head}({getattr(exc, 'strerror', None) or exc}){kept}"
+    if claimed is not None:
+        try:
+            os.remove(claimed)
+        except OSError:
+            pass                        # 名前が「…処理中」なので、残っても二度と書き足さない
+    return ""
 
 
 def append(folder: str, prefix: str, entry: Mapping[str, Any], fmt: Any, *,

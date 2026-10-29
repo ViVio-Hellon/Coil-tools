@@ -63,6 +63,8 @@ class SizeExtra:
     def __init__(self, refresh_sec: float = DEFAULT_REFRESH_SEC):
         self.refresh_sec = float(refresh_sec)
         self.last_error = ""
+        #: いま持っている行が「確かめた中身」か。最後に読めなかった(前の行のまま)なら False(統合 1.2.61)
+        self.ok = True
         self._rows: List[dict] = []
         self._stamp: Optional[Tuple[str, float, int]] = None
         self._at = 0.0
@@ -75,10 +77,24 @@ class SizeExtra:
         return [dict(r) for r in self._rows]
 
     def load(self, db_path: str, force: bool = False) -> List[dict]:
+        """足したサイズ。**読めないときは前に読めた行のまま**(統合 1.2.61)。
+
+        以前は読めない(共有に届かない・使用中・壊れている)と「無い」とみなして空にし、その印まで覚えた。
+        すると資材マスタが次に変わるまで足したサイズが消え、選んでいた足したサイズの選択・現状値も外れ、
+        その間に「出すサイズ」を保存すると、この PC で隠していた足したサイズの覚えも空で上書きされた。
+        別のツールで、読めなかったのを「無い」と取り違えて送り直し、重複を大量に作った事案と同じ形。
+        いまは「表が無い」(no such table)・資材マスタを設定していないときだけ空にする。読めないときは
+        前の行のまま、印は覚えず次にまた読む(`ok` が False)。
+        """
         path = str(db_path or "")
-        if not path or not os.path.exists(path):
-            self._rows, self._stamp = [], None
+        if not path:
+            self._rows, self._stamp, self.ok, self.last_error = [], None, True, ""
             return []
+        if not os.path.exists(path):
+            # 共有に届かないのか、本当に無いのか分からない。前の行のまま、次にまた見る
+            self._stamp, self.ok = None, False
+            self.last_error = "資材マスタが見えません: %s" % path
+            return self.rows()
         now = time.monotonic()
         if not force and self._stamp is not None and (now - self._at) < self.refresh_sec:
             return self.rows()
@@ -90,13 +106,21 @@ class SizeExtra:
         if not force and stamp is not None and stamp == self._stamp:
             self._at = now
             return self.rows()
-        self._rows = read_rows(path)
-        self._stamp, self._at = stamp, now
+        try:
+            self._rows = read_rows(path, strict=True)
+        except sqlite3.Error as exc:
+            log.info("%s を読めません(前に読めた %d 件のまま): %s", TABLE_NAME, len(self._rows), exc)
+            self._stamp, self.ok, self.last_error = None, False, "%s を読めません: %s" % (TABLE_NAME, exc)
+            return self.rows()
+        self._stamp, self._at, self.ok, self.last_error = stamp, now, True, ""
         return self.rows()
 
 
-def read_rows(path: str) -> List[dict]:
-    """表の行。表が無い・読めないときは空(今までどおり動く)。"""
+def read_rows(path: str, strict: bool = False) -> List[dict]:
+    """表の行。表が無いときは空(今までどおり動く)。
+
+    読めない(表が無い以外の失敗)ときは、`strict` なら `sqlite3.Error` を上げ、そうでなければ空。
+    """
     out: List[dict] = []
     try:
         conn = MA._connect(path)
@@ -111,8 +135,12 @@ def read_rows(path: str) -> List[dict]:
         finally:
             conn.close()
     except sqlite3.Error as exc:
-        if "no such table" not in str(exc):
-            log.info("%s を読めません(足したサイズは出ません): %s", TABLE_NAME, exc)
+        if "no such table" in str(exc):
+            return []
+        if strict:
+            raise
+        log.info("%s を読めません(足したサイズは出ません): %s", TABLE_NAME, exc)
+        return []
     return out
 
 
@@ -190,7 +218,7 @@ def add(repo, master, thickness, width, kataban, symbol="", note="", who=None) -
                          "同じ寸法のサイズがもうあります: %s\n"
                          "画面に出ていないだけなら、表示のチェックを入れてください。" % have[_dims(name)])
 
-    conn = MA._connect(path, write=True)
+    conn = MA._open_for_write(path)
     try:
         conn.execute(
             'CREATE TABLE IF NOT EXISTS "%s" ("管理番号" INTEGER, "サイズ名" TEXT, "巾" REAL, '

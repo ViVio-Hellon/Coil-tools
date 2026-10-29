@@ -124,6 +124,9 @@ def build():
         sheets=[_sheet_view(s) for s in result.sheets],
         extra_lengths=result.extra_lengths,
         by_lot=by_lot,
+        # 発注履歴を読めず、重複を確かめていない(統合 1.2.61)。画面が知らせる
+        history_unchecked=result.history_unchecked,
+        history_message=order_history.UNCHECKED_MESSAGE if result.history_unchecked else "",
         duplicates=[{
             "LotNo": d.LotNo, "処理日": d.処理日, "担当者": d.担当者,
             "サイズ": d.サイズ, "数量": d.数量, "日数表示": d.日数表示,

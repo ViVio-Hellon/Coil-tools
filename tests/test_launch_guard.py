@@ -126,3 +126,37 @@ def test_モードが違えば同時に通れる(local):
     """
     from common import modes
     assert launch_guard.gate_path(modes.MAIN).name.startswith(modes.MAIN)
+
+
+# ==================================================================
+# 読めないロックを「無い」と取り違えない(統合 1.2.61)
+# ==================================================================
+def test_読めないロックは自分のものか確かめられないので消さない(local):
+    """別のツールで、読めなかったのを「無い」と取り違えて送り直し重複を大量に作った事案があった。
+    ロックでも、読めない(書きかけ・壊れ)のを「無い」とみなして消すと、新しいほうのロックを消してしまう。"""
+    path = launch_guard.lock_path("main")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{ 書きかけ", encoding="utf-8")
+    assert launch_guard.read_lock_state("main")[0] == launch_guard.LOCK_UNREADABLE
+    launch_guard.remove_lock("main", pid=os.getpid())
+    assert path.exists(), "自分のものか確かめられないロックは消さない"
+
+
+def test_読めないロックで止まったとは言わない(local):
+    import process_manager
+    path = launch_guard.lock_path("main")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{ 書きかけ", encoding="utf-8")
+    res = process_manager.stop("main")
+    assert res.stopped is False and "読めない" in res.message
+
+
+def test_ロックは別名で書いてから置き換える(local, monkeypatch):
+    seen = []
+    real = os.replace
+    monkeypatch.setattr(launch_guard.os, "replace", lambda a, b: (seen.append((str(a), str(b))), real(a, b)))
+    info = launch_guard.LockInfo(**{k: (os.getpid() if k == "pid" else 0 if k == "port" else "main")
+                                    for k in launch_guard.LockInfo.__dataclass_fields__})
+    launch_guard.write_lock(info)
+    assert seen and seen[0][1] == str(launch_guard.lock_path(info.mode))
+    assert launch_guard.read_lock_state(info.mode)[0] == launch_guard.LOCK_OK
