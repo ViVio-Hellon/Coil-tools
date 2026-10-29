@@ -9,10 +9,11 @@
 
 - **検査番号**: 梱包明細が読む4ファイルのうち `ﾛｯﾄ番号` の列を持つもの ── 仕掛ロット(SIKALOT)→ 仕掛引当(SIKAHIKI)
   → 仕掛当工程(LS4LOT)の順に、それぞれ第1パス → 第2パス。**LS4LOT には検査番号の列が無い**(現場の確認・統合 1.2.58)
-  ので、仕掛台帳の側を先に見る。仕掛受注は受注番号の表なので見ない
+  ので、仕掛台帳の側を先に見る。仕掛受注は受注番号の表なので見ない。列名は SIKALOT・SIKAHIKI とも「検査番号」
+  (統合 1.2.59 で実ファイルで確かめた)。SIKALOT は大半の行が「0000000000」なので、番号の入っている行から取る
 - **コイル外径**: 仕掛当工程(第1パスの梱包課共有 LS4LOT → 第2パス)の `BOX実績_ｺｲﾙ内径`・`BOX実績_ｺｲﾙ肉厚`。
   以前(統合 1.2.29〜1.2.56)は**ファイルの名前**で形式を決め、名前が LS4LOT のままなら内径・肉厚の列を
-  読まなかった。列があれば名前に関わらず外径を出す
+  読まなかった。列があれば名前に関わらず外径を出す。実際の LS4LOT には内径・肉厚の列が無く、第2パスの実績_LS4 から出る
 
 - 表は `ﾛｯﾄ番号` の列を持つもの(`仕掛` という表があればそれを先に見る)
 - 同じロットが何行もあれば、`BOX実績_作業開始_日付` がいちばん新しい行(その列が無ければ最後の行)
@@ -108,19 +109,27 @@ def _table_of(path: Path) -> tuple[str, list[str]]:
     return found
 
 
-def _row_in(path: Path, lot: str) -> tuple[Optional[dict], list[str]]:
-    """そのファイルの、そのロットの行(いちばん新しいもの)と、表の列。"""
+def _rows_in(path: Path, lot: str) -> tuple[list[dict], list[str]]:
+    """そのファイルの、そのロットの行(古い順。いちばん新しいものが最後)と、表の列。"""
     table, cols = _table_of(path)
     if not table:
-        return None, []
+        return [], []
     rows = source_db.read_query(
         path, f"SELECT * FROM {source_db.quote_identifier(table)} "
               f"WHERE TRIM({source_db.quote_identifier(ls4_source.COL_LOT)}) = ?", (lot,))
-    if not rows:
-        return None, cols
     if ls4_source.COL_START in cols:
         rows.sort(key=lambda r: str(r.get(ls4_source.COL_START) or ""))
-    return rows[-1], cols
+    return rows, cols
+
+
+def kensa_value(value: Any) -> str:
+    """検査番号として使える値(大文字)。空・**0 だけ**(「0000000000」= まだ番号が無い)なら ""。
+
+    実データ(2026-10 の SIKALOT)は 11,450 行のうち 9,754 行が「0000000000」。同じロットの何行かのうち、
+    番号が入っているのは1行だけだった。
+    """
+    text = _text(value).upper()
+    return "" if not text or set(text) == {"0"} else text
 
 
 def _text(value: Any) -> str:
@@ -159,11 +168,11 @@ def lookup(lot: str, *, kensa: bool = True) -> dict:
         key = os.path.normcase(os.path.abspath(path))
         if key not in rows:
             try:
-                rows[key] = _row_in(path, lot)
+                rows[key] = _rows_in(path, lot)
             except Exception as exc:   # noqa: BLE001 - 次のファイルへ
                 log.warning("仕掛のファイルを読めません: %s", path, exc_info=True)
                 problems.append(f"{path.name} を読めません({exc})")
-                rows[key] = (None, [])
+                rows[key] = ([], [])
         return rows[key]
 
     # 検査番号: 仕掛ロット → 仕掛引当 → 仕掛当工程(それぞれ第1パス → 第2パス)
@@ -172,8 +181,8 @@ def lookup(lot: str, *, kensa: bool = True) -> dict:
             if any(_same(path, p) for p in seen):
                 continue
             seen.append(path)
-            row, cols = row_of(path)
-            if row is None:
+            found_rows, cols = row_of(path)
+            if not found_rows:
                 continue
             if not out["found"]:
                 out.update(found=True, file=str(path))
@@ -183,9 +192,10 @@ def lookup(lot: str, *, kensa: bool = True) -> dict:
                 looked.append(path.name)
                 hints += [c for c in cols if "検" in _norm(c) and c not in hints]
                 continue
-            value = _text(row.get(col)).upper()
-            if value:
-                out.update(kensa=value, kensa_file=str(path))
+            # 番号の入っている行のうち、いちばん新しいもの(「0000000000」の行は飛ばす)
+            values = [v for v in (kensa_value(r.get(col)) for r in found_rows) if v]
+            if values:
+                out.update(kensa=values[-1], kensa_file=str(path))
                 break
             empty = True
         if out["kensa"]:
@@ -194,15 +204,16 @@ def lookup(lot: str, *, kensa: bool = True) -> dict:
     # コイル外径: 仕掛当工程(第1パス → 第2パス)
     outer_files = sources(OUTER_TABLE)
     for path in outer_files:
-        row, _cols = row_of(path)
-        if row is None:
+        found_rows, _cols = row_of(path)
+        if not found_rows:
             continue
         if not out["found"]:
             out.update(found=True)
-        outer = ls4_source.outer_diameter(row)
-        if outer is not None:
-            out.update(outer=outer, inner=row.get(ls4_source.COL_INNER),
-                       thick=row.get(ls4_source.COL_THICK), file=str(path))
+        # 内径・肉厚の入っている行のうち、いちばん新しいもの
+        hit = next((r for r in reversed(found_rows) if ls4_source.outer_diameter(r) is not None), None)
+        if hit is not None:
+            out.update(outer=ls4_source.outer_diameter(hit), inner=hit.get(ls4_source.COL_INNER),
+                       thick=hit.get(ls4_source.COL_THICK), file=str(path))
             break
 
     if not out["found"]:
@@ -220,7 +231,7 @@ def lookup(lot: str, *, kensa: bool = True) -> dict:
                 text += f"。名前に「検」を含む列: {'・'.join(str(h) for h in hints[:8])}"
             out["notes"].append(text)
         else:
-            out["notes"].append(f"ロット {lot} の行の検査番号が空です")
+            out["notes"].append(f"ロット {lot} の検査番号はまだ入っていません(空か 0000000000)")
     if out["outer"] is None:
         out["notes"].append(f"ロット {lot} の内径・肉厚が入っていないので、コイル外径を出せません")
     return out

@@ -118,6 +118,40 @@ class LotLookupTest(unittest.TestCase):
         self.assertEqual((r2["found"], r2["kensa"], r2["outer"]), (True, "H670129", None))
         self.assertTrue(any("コイル外径を出せません" in n for n in r2["notes"]))
 
+    def test_0000000000の行は飛ばして番号のある行から引く(self):
+        """実データ(SIKALOT)は同じロットが何行もあり、番号が入っているのは1行だけ。ほかは「0000000000」。
+        SIKALOT に番号が無ければ SIKAHIKI(こちらは全行に番号がある)から。"""
+        lot_dir = self.root / "lot"
+        lot_dir.mkdir()
+        sikalot = _file(lot_dir / "SIKALOT.sqlite3", ("ﾛｯﾄ番号", "BOX番号", "検査番号", "BOX実績_作業開始_日付"),
+                        [("N6280L0", "8", "K6X1502", "2026-09-01"),
+                         ("N6280L0", "9", "0000000000", "2026-10-01"),       # 新しい行は番号なし
+                         ("L3283B0", "1", "0000000000", ""),
+                         ("N836E50", "1", "0000000000", ""), ("N836E50", "2", "", "")])
+        sikahiki = _file(lot_dir / "SIKAHIKI.sqlite3", ("ﾛｯﾄ番号", "引当番号", "検査番号"),
+                         [("L3283B0", "1", "N840822")])
+        ls4 = _file(self.root / "LS4LOT.sqlite3", ("ﾛｯﾄ番号", "当工程設計_縦割数"), [("N6280L0", "2")])
+        self._use(ls4, 仕掛ロット=[sikalot], 仕掛引当=[sikahiki])
+        self.assertEqual(lot_lookup.lookup("N6280L0")["kensa"], "K6X1502")
+        r = lot_lookup.lookup("L3283B0")
+        self.assertEqual((r["kensa"], Path(r["kensa_file"]).name), ("N840822", "SIKAHIKI.sqlite3"))
+        r = lot_lookup.lookup("N836E50")
+        self.assertEqual(r["kensa"], "")
+        self.assertTrue(any("まだ入っていません" in n for n in r["notes"]), r["notes"])
+        self.assertEqual(lot_lookup.kensa_value(" 0000000000 "), "")
+        self.assertEqual(lot_lookup.kensa_value("n6x1050"), "N6X1050")
+
+    def test_外径は内径と肉厚の入っている行のうち新しいもの(self):
+        """実データの LS4LOT には内径・肉厚の列が無い。第2パス(実績の形式)の行から出す。"""
+        ls4 = _file(self.root / "LS4LOT.sqlite3", ("ﾛｯﾄ番号", "当工程設計_縦割数"), [("L7150Y0", "2")])
+        second_dir = self.root / "second"
+        second_dir.mkdir()
+        res = _file(second_dir / "実績_LS4.sqlite3", ("ﾛｯﾄ番号", "BOX実績_作業開始_日付", "BOX実績_ｺｲﾙ内径", "BOX実績_ｺｲﾙ肉厚"),
+                    [("L7150Y0", "2026-10-01", "508", "233"), ("L7150Y0", "2026-10-02", "", "")], table="実績")
+        self._use(ls4, res)
+        r = lot_lookup.lookup("L7150Y0", kensa=False)
+        self.assertEqual((r["outer"], r["file"]), (974.0, str(res)))
+
     def test_どのファイルにも検査番号の列が無ければ見たファイルと検の付く列を添える(self):
         lot_dir = self.root / "lot"
         lot_dir.mkdir()
