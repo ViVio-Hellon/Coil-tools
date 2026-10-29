@@ -32,8 +32,10 @@ class LotLookupTest(unittest.TestCase):
         lot_lookup.forget()
         self.addCleanup(lot_lookup.forget)
 
-    def _use(self, *files: Path):
-        p = mock.patch.object(lot_lookup, "sources", lambda: list(files))
+    def _use(self, *files: Path, **tables):
+        """files は仕掛当工程(LS4LOT)のファイル。ほかの表は tables={"仕掛ロット": [...]} で渡す。"""
+        by_table = {"仕掛当工程": list(files), **tables}
+        p = mock.patch.object(lot_lookup, "sources", lambda table="仕掛当工程": list(by_table.get(table, [])))
         p.start()
         self.addCleanup(p.stop)
 
@@ -74,7 +76,8 @@ class LotLookupTest(unittest.TestCase):
         r = lot_lookup.lookup("A000001")
         self.assertEqual(r["kensa"], "N6X0001", "第1パスの検査番号を残す")
         self.assertEqual(r["outer"], 708.0, "外径は第2パスから")
-        self.assertEqual(r["file"], str(first))
+        self.assertEqual(r["kensa_file"], str(first))
+        self.assertEqual(r["file"], str(second), "外径を出したファイル")
 
     def test_検査番号の列が無ければ列を添えて知らせる(self):
         self._use(_file(self.root / "LS4LOT.sqlite3", ("ﾛｯﾄ番号", "品名", "BOX実績_ｺｲﾙ内径", "BOX実績_ｺｲﾙ肉厚"),
@@ -83,7 +86,7 @@ class LotLookupTest(unittest.TestCase):
         self.assertTrue(r["found"])
         self.assertEqual(r["kensa"], "")
         self.assertEqual(r["outer"], 708.0)
-        self.assertTrue(any("検査番号の列が見つかりません" in n and "品名" in n for n in r["notes"]))
+        self.assertTrue(any("検査番号の列が見つかりません" in n and "LS4LOT.sqlite3" in n for n in r["notes"]))
 
     def test_内径と肉厚が無ければ外径を出せないと知らせる(self):
         self._use(_file(self.root / "LS4LOT.sqlite3", ("ﾛｯﾄ番号", "検査番号"), [("A000001", "N6X0001")]))
@@ -91,11 +94,48 @@ class LotLookupTest(unittest.TestCase):
         self.assertEqual((r["kensa"], r["outer"]), ("N6X0001", None))
         self.assertTrue(any("コイル外径を出せません" in n for n in r["notes"]))
 
+    def test_LS4LOTに検査番号が無ければ仕掛ロットから引く(self):
+        """現場の確認: LS4LOT には検査番号の列が無い(統合 1.2.58)。検査番号は仕掛台帳(SIKALOT)の同じロットの行から、
+        外径は LS4LOT の内径・肉厚から。"""
+        lot_dir = self.root / "lot"
+        lot_dir.mkdir()
+        sikalot = _file(lot_dir / "SIKALOT.sqlite3", ("ﾛｯﾄ番号", "用途名", "検査番号"),
+                        [("A000001", "X", "N6X0945"), ("A000002", "Y", "H670129")])
+        sikahiki = _file(lot_dir / "SIKAHIKI.sqlite3", ("ﾛｯﾄ番号", "受注番号"), [("A000001", "O1")])
+        ls4 = _file(self.root / "LS4LOT.sqlite3", ("ﾛｯﾄ番号", "当工程設計_縦割数", "BOX実績_ｺｲﾙ内径", "BOX実績_ｺｲﾙ肉厚"),
+                    [("A000001", "2", "508", "296")])
+        self._use(ls4, 仕掛ロット=[sikalot], 仕掛引当=[sikahiki])
+        r = lot_lookup.lookup("A000001")
+        self.assertEqual((r["kensa"], r["outer"]), ("N6X0945", 1100.0))
+        self.assertEqual(r["kensa_file"], str(sikalot))
+        self.assertEqual(r["file"], str(ls4))
+        self.assertEqual(r["notes"], [])
+        # 外径だけ(資材計算)なら仕掛ロットは読まない
+        only = lot_lookup.lookup("A000001", kensa=False)
+        self.assertEqual((only["kensa"], only["outer"], only["notes"]), ("", 1100.0, []))
+        # LS4LOT に行が無くても、仕掛ロットにあれば検査番号は引ける(外径は出せないと知らせる)
+        r2 = lot_lookup.lookup("A000002")
+        self.assertEqual((r2["found"], r2["kensa"], r2["outer"]), (True, "H670129", None))
+        self.assertTrue(any("コイル外径を出せません" in n for n in r2["notes"]))
+
+    def test_どのファイルにも検査番号の列が無ければ見たファイルと検の付く列を添える(self):
+        lot_dir = self.root / "lot"
+        lot_dir.mkdir()
+        sikalot = _file(lot_dir / "SIKALOT.sqlite3", ("ﾛｯﾄ番号", "検査区分"), [("A000001", "1")])
+        ls4 = _file(self.root / "LS4LOT.sqlite3", ("ﾛｯﾄ番号",), [("A000001",)])
+        self._use(ls4, 仕掛ロット=[sikalot])
+        note = lot_lookup.lookup("A000001")["notes"][0]
+        self.assertIn("SIKALOT.sqlite3・LS4LOT.sqlite3", note)
+        self.assertIn("名前に「検」を含む列: 検査区分", note)
+
     def test_検査番号の列は名前で探す(self):
         self.assertEqual(lot_lookup.kensa_column(["ﾛｯﾄ番号", "検査番号"]), "検査番号")
         self.assertEqual(lot_lookup.kensa_column(["ﾛｯﾄ番号", "新検査番号"]), "新検査番号")
         self.assertEqual(lot_lookup.kensa_column(["ﾛｯﾄ番号", "新検番"]), "新検番")
         self.assertIsNone(lot_lookup.kensa_column(["ﾛｯﾄ番号", "品名"]))
+        self.assertEqual(lot_lookup.kensa_column(["ﾛｯﾄ番号", "検査ＮＯ"]), "検査ＮＯ")    # 全角
+        self.assertEqual(lot_lookup.kensa_column(["ﾛｯﾄ番号", "検査No"]), "検査No")
+        self.assertEqual(lot_lookup.kensa_column(["ﾛｯﾄ番号", "ｹﾝｻ番号"]), "ｹﾝｻ番号")      # 半角カナ
 
     def test_ﾛｯﾄ番号の列を持つ表を選ぶ(self):
         path = self.root / "LS4LOT.sqlite3"

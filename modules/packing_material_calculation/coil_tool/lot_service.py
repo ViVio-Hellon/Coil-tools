@@ -181,13 +181,14 @@ def load_into(conn: sqlite3.Connection, state: CalcState, order_no: str) -> bool
 def _computed_outer(conn: sqlite3.Connection, lot: str) -> tuple:
     """(計算したコイル外径 または None, どこから/なぜ出せないか)。
 
-    1. 梱包明細が読む仕掛(LS4LOT。`modules/packing_details/meisai/lot_lookup.py`)のそのロットの行の内径・肉厚
+    1. 梱包明細が読む仕掛(第1パスの梱包課共有の仕掛フォルダの LS4LOT → 第2パスの「LS4LOT の代わり」。
+       `modules/packing_details/meisai/lot_lookup.py`)のそのロットの行の内径・肉厚
     2. 資材計算に取り込んだコイル実績(実績の形式のファイル。`coil_results.outer_for`)
     """
     why = ""
     try:
         from modules.packing_details.meisai import lot_lookup
-        hit = lot_lookup.lookup(lot)
+        hit = lot_lookup.lookup(lot, kensa=False)
     except Exception as exc:                            # noqa: BLE001 - 引けなくても計算は止めない
         hit = {"found": False, "reason": f"仕掛を読めません: {exc}"}
     if hit.get("outer") is not None:

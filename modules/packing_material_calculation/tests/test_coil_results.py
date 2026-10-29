@@ -174,7 +174,7 @@ def test_外径MAXがあっても仕掛の内径と肉厚から計算する_名�
     c.commit()
     c.close()
     lot_lookup.forget()
-    monkeypatch.setattr(lot_lookup, "sources", lambda: [ls4])
+    monkeypatch.setattr(lot_lookup, "sources", lambda table="仕掛当工程": [ls4] if table == "仕掛当工程" else [])
     _konpo, conn = place
     assert coil_results.wanted() is False                  # 資材計算の設定は LS4LOT のまま
     monkeypatch.setattr(lot_service, "expand_order",

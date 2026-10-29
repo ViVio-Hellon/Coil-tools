@@ -1,26 +1,32 @@
-"""ロット番号から、仕掛(LS4LOT)の同じ行の検査番号・コイル外径を引く(統合 1.2.57・現場の指示)
+"""ロット番号から、検査番号(仕掛ロットなど)とコイル外径(LS4LOT)を引く(統合 1.2.57・1.2.58・現場の指示)
 
 現場の指示:
 - ペナラベルに LOTNO の入力欄を足す。LOTNO を探すデータは**コイル梱包明細打ち出しシステム**を参照する。
   ﾛｯﾄ番号がヒットしたら、**同じ行の検査番号**を新検番に入れる。そのとき外径計算も行う
 - 資材計算のコイル外径は、データにあっても計算する(データが無ければ常に計算する)
 
-そこで、梱包明細が読む仕掛のファイル(第1パスの梱包課共有 LS4LOT → 第2パス)を**列で**読む。
-以前(統合 1.2.29〜1.2.56)は**ファイルの名前**で形式を決め、名前が LS4LOT のままなら内径・肉厚の列を
-読まなかった。ファイルに `BOX実績_ｺｲﾙ内径`・`BOX実績_ｺｲﾙ肉厚` の列があれば、名前に関わらず外径を出す。
+そこで、梱包明細が読むファイルを**列で**読む。
+
+- **検査番号**: 梱包明細が読む4ファイルのうち `ﾛｯﾄ番号` の列を持つもの ── 仕掛ロット(SIKALOT)→ 仕掛引当(SIKAHIKI)
+  → 仕掛当工程(LS4LOT)の順に、それぞれ第1パス → 第2パス。**LS4LOT には検査番号の列が無い**(現場の確認・統合 1.2.58)
+  ので、仕掛台帳の側を先に見る。仕掛受注は受注番号の表なので見ない
+- **コイル外径**: 仕掛当工程(第1パスの梱包課共有 LS4LOT → 第2パス)の `BOX実績_ｺｲﾙ内径`・`BOX実績_ｺｲﾙ肉厚`。
+  以前(統合 1.2.29〜1.2.56)は**ファイルの名前**で形式を決め、名前が LS4LOT のままなら内径・肉厚の列を
+  読まなかった。列があれば名前に関わらず外径を出す
 
 - 表は `ﾛｯﾄ番号` の列を持つもの(`仕掛` という表があればそれを先に見る)
 - 同じロットが何行もあれば、`BOX実績_作業開始_日付` がいちばん新しい行(その列が無ければ最後の行)
-- 検査番号の列は名前で探す(`検査番号` → 名前に「検査番号」を含む列 → 「検番」を含む列)。列が見つからなければ
-  そう知らせる(どんな列があったかも添える)
+- 検査番号の列は名前で探す。半角・全角をそろえてから(NFKC)、`検査番号`・`検査NO` → 名前に「検査番号」「検査NO」
+  「検番」「ケンサ」を含む列。どのファイルにも見つからなければそう知らせ、名前に「検」を含む列があれば添える
 - 外径 = 内径 + 2 × 肉厚(`common/ls4_source.outer_diameter`。どちらも 0 より大きいときだけ)
-- 第1パスの行に検査番号・外径が無ければ、第2パスの同じロットの行で**空の項目だけ**埋める(統合 1.2.45 と同じ考え)
+- 第1パスの行に外径が無ければ、第2パスの同じロットの行で埋める(統合 1.2.45 と同じ考え)
 - 共有のファイルは手元へ写してから読む(`source_db` が写す)。ファイルの更新日時と大きさが同じあいだは覚えておく
 """
 from __future__ import annotations
 
 import os
 import threading
+import unicodedata
 from pathlib import Path
 from typing import Any, Optional
 
@@ -31,25 +37,34 @@ from .logging_utils import get_logger
 
 log = get_logger("lot_lookup")
 
-#: 検査番号の列の名前(この順で探す)
-KENSA_EXACT = ("検査番号", "検査NO", "検査No", "検査ＮＯ")
-KENSA_PARTS = ("検査番号", "検番")
+#: 検査番号の列の名前(NFKC でそろえ、英字は大文字にしてから比べる。この順で探す)
+KENSA_EXACT = ("検査番号", "検査NO")
+KENSA_PARTS = ("検査番号", "検査NO", "検番", "ケンサ")
+
+#: 検査番号を探す表(梱包明細の手元の表名。この順)。仕掛受注は受注番号の表なので入れない
+KENSA_TABLES = ("仕掛ロット", "仕掛引当", "仕掛当工程")
+#: コイル外径(内径・肉厚)を探す表
+OUTER_TABLE = "仕掛当工程"
 
 _lock = threading.Lock()
 #: (ファイル, 更新日時 ns, 大きさ) → (表, 列)
 _tables: dict[tuple, tuple[str, list[str]]] = {}
 
 
-def sources() -> list[Path]:
-    """読むファイル(第1パス → 第2パス)。梱包明細の「仕掛当工程」(LS4LOT)と同じもの。"""
+def sources(table: str = OUTER_TABLE) -> list[Path]:
+    """その表のファイル(第1パス → 第2パス)。梱包明細が取り込みで読むものと同じ。"""
     out: list[Path] = []
-    first = data_sync.find_sources().get("仕掛当工程")
+    first = data_sync.find_sources().get(table)
     if first is not None:
         out.append(Path(first))
-    second = data_sync.find_second_lots().get("仕掛当工程")
+    second = data_sync.find_second_lots().get(table)
     if second is not None and all(not _same(second, p) for p in out):
         out.append(Path(second))
     return out
+
+
+def _norm(name: Any) -> str:
+    return unicodedata.normalize("NFKC", str(name)).upper()
 
 
 def _same(a: Path, b: Path) -> bool:
@@ -58,13 +73,15 @@ def _same(a: Path, b: Path) -> bool:
 
 def kensa_column(columns: list[str]) -> Optional[str]:
     """検査番号の列の名前。無ければ None。"""
-    for name in KENSA_EXACT:
-        if name in columns:
-            return name
+    normed = [(_norm(c), c) for c in columns]
+    for want in KENSA_EXACT:
+        for n, c in normed:
+            if n == want:
+                return c
     for part in KENSA_PARTS:
-        for name in columns:
-            if part in str(name):
-                return name
+        for n, c in normed:
+            if part in n:
+                return c
     return None
 
 
@@ -110,62 +127,98 @@ def _text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
-def lookup(lot: str) -> dict:
+def lookup(lot: str, *, kensa: bool = True) -> dict:
     """ロット番号の行から、検査番号とコイル外径を引く。
 
+    `kensa=False` … 外径だけ(資材計算)。検査番号のファイル(仕掛ロット・仕掛引当)は読まない。
+
     戻り値:
-        found    そのロットの行があったか
+        found    どれかのファイルにそのロットの行があったか
         kensa    検査番号(無ければ "")
+        kensa_file  検査番号を見つけたファイル
         outer    コイル外径(内径 + 2 × 肉厚。出せなければ None)
         inner / thick  内径・肉厚(元の値)
-        file     行を見つけたファイル
+        file     外径の行を見つけたファイル(無ければ最初に行を見つけたファイル)
         notes    知らせる文の並び(検査番号の列が無い・外径を出せない など)
         reason   見つからないときの理由
     """
     lot = _text(lot).upper()
-    out: dict[str, Any] = {"found": False, "lot": lot, "kensa": "", "outer": None,
+    out: dict[str, Any] = {"found": False, "lot": lot, "kensa": "", "kensa_file": "", "outer": None,
                            "inner": None, "thick": None, "file": "", "notes": [], "reason": ""}
     if not lot:
         out["reason"] = "LOTNO が空です"
         return out
-    files = sources()
-    if not files:
-        out["reason"] = (f"仕掛のファイル({config.konpo_db_files().get('仕掛当工程', 'LS4LOT.sqlite3')})"
-                         "が見つかりません。梱包明細の設定(置き場所・取り込み)を確かめてください")
-        return out
     problems: list[str] = []
-    kensa_missing_cols: list[str] = []
-    for path in files:
-        try:
-            row, cols = _row_in(path, lot)
-        except (source_db.SourceError, OSError, Exception) as exc:   # noqa: BLE001 - 次のファイルへ
-            log.warning("仕掛のファイルを読めません: %s", path, exc_info=True)
-            problems.append(f"{path.name} を読めません({exc})")
-            continue
+    seen: list[Path] = []
+    looked: list[str] = []          # 検査番号の列が無かったファイル
+    empty = False                   # 検査番号の列はあったが、そのロットの行では空だった
+    hints: list[str] = []           # 名前に「検」を含む列(どれが検査番号かを聞くため)
+    rows: dict[str, tuple[Optional[dict], list[str]]] = {}
+
+    def row_of(path: Path):
+        key = os.path.normcase(os.path.abspath(path))
+        if key not in rows:
+            try:
+                rows[key] = _row_in(path, lot)
+            except Exception as exc:   # noqa: BLE001 - 次のファイルへ
+                log.warning("仕掛のファイルを読めません: %s", path, exc_info=True)
+                problems.append(f"{path.name} を読めません({exc})")
+                rows[key] = (None, [])
+        return rows[key]
+
+    # 検査番号: 仕掛ロット → 仕掛引当 → 仕掛当工程(それぞれ第1パス → 第2パス)
+    for table in (KENSA_TABLES if kensa else ()):
+        for path in sources(table):
+            if any(_same(path, p) for p in seen):
+                continue
+            seen.append(path)
+            row, cols = row_of(path)
+            if row is None:
+                continue
+            if not out["found"]:
+                out.update(found=True, file=str(path))
+            col = kensa_column(cols)
+            if col is None:
+                log.info("検査番号の列がありません: %s(列: %s)", path.name, "・".join(map(str, cols)))
+                looked.append(path.name)
+                hints += [c for c in cols if "検" in _norm(c) and c not in hints]
+                continue
+            value = _text(row.get(col)).upper()
+            if value:
+                out.update(kensa=value, kensa_file=str(path))
+                break
+            empty = True
+        if out["kensa"]:
+            break
+
+    # コイル外径: 仕掛当工程(第1パス → 第2パス)
+    outer_files = sources(OUTER_TABLE)
+    for path in outer_files:
+        row, _cols = row_of(path)
         if row is None:
             continue
         if not out["found"]:
-            out.update(found=True, file=str(path))
-        if not out["kensa"]:
-            col = kensa_column(cols)
-            if col is None:
-                kensa_missing_cols = cols
-            else:
-                out["kensa"] = _text(row.get(col)).upper()
-        if out["outer"] is None:
-            outer = ls4_source.outer_diameter(row)
-            if outer is not None:
-                out.update(outer=outer, inner=row.get(ls4_source.COL_INNER),
-                           thick=row.get(ls4_source.COL_THICK))
-        if out["kensa"] and out["outer"] is not None:
+            out.update(found=True)
+        outer = ls4_source.outer_diameter(row)
+        if outer is not None:
+            out.update(outer=outer, inner=row.get(ls4_source.COL_INNER),
+                       thick=row.get(ls4_source.COL_THICK), file=str(path))
             break
+
     if not out["found"]:
-        out["reason"] = "・".join(problems) or f"仕掛のファイルにロット {lot} がありません"
+        if not seen and not outer_files:
+            out["reason"] = ("梱包明細の取り込み元(仕掛ロット・仕掛引当・"
+                             f"{config.konpo_db_files().get('仕掛当工程', 'LS4LOT.sqlite3')})"
+                             "が見つかりません。梱包明細の設定(置き場所・取り込み)を確かめてください")
+        else:
+            out["reason"] = "・".join(problems) or f"梱包明細の取り込み元にロット {lot} がありません"
         return out
-    if not out["kensa"]:
-        if kensa_missing_cols:
-            shown = "・".join(str(c) for c in kensa_missing_cols[:12])
-            out["notes"].append(f"検査番号の列が見つかりません(列: {shown}…)")
+    if kensa and not out["kensa"]:
+        if not empty:
+            text = f"検査番号の列が見つかりません(見たファイル: {'・'.join(looked) or 'なし'})"
+            if hints:
+                text += f"。名前に「検」を含む列: {'・'.join(str(h) for h in hints[:8])}"
+            out["notes"].append(text)
         else:
             out["notes"].append(f"ロット {lot} の行の検査番号が空です")
     if out["outer"] is None:

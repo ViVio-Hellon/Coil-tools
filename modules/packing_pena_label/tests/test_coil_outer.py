@@ -184,7 +184,8 @@ def _ls4lot_file(rows, *, kensa_col="検査番号", name="LS4LOT.sqlite3"):
 class LotNoTest(WorkflowTestBase):
     """LOTNO から新検番とチップボール(統合 1.2.57・現場の指示)。
 
-    LOTNO を探すデータは梱包明細が読む仕掛(LS4LOT)。ﾛｯﾄ番号がヒットしたら同じ行の検査番号を新検番に入れ、
+    LOTNO を探すデータは梱包明細が読むファイル(ここでは1つのファイルで代用。検査番号を仕掛ロットから・外径を LS4LOT から
+    引く形は梱包明細の tests/test_lot_lookup.py)。ﾛｯﾄ番号がヒットしたら検査番号を新検番に入れ、
     そのとき外径も計算してチップボールを選ぶ。ファイルの名前が LS4LOT のままでも、列があれば外径を出す。
     """
 
