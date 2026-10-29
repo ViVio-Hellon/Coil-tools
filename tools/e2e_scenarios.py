@@ -929,20 +929,30 @@ def scenario_alternate(app: App, ctx, sh: Shell, note: dict) -> None:
     d = sh.tab("details")
     # 台帳の読み込みが遅く、ロットが開く前に重量を打った(前のロットの画面のまま)。
     # その重量は、開いたロットに入れずに断る(統合 1.2.26。以前は前のロットの丈2の重量が入った)
+    # 前のロットが積み上げを始めていれば、前の画面の重量の欄は止まっていて打てない(梱包明細 VER 0.13.35)。
+    # そのときは「開く前は打てない・開いたロットの重量は空」を確かめる(前の画面の値が入らないことは同じ)
     old_lot = details_lot(d)
+    old_locked = d.is_disabled("#weight1")
     undo = details_slow_lot(d, 1.5)
     try:
         d.fill("#lotNo", "")
         d.type("#lotNo", "A123456", delay=20)
-        details_weights(d, 300, 302)
+        if old_locked:
+            still = d.is_disabled("#weight1")
+        else:
+            details_weights(d, 300, 302)
         opened = wait_until(lambda: details_lot(d) == "A123456", 10)
         d.wait_for_timeout(800)
     finally:
         undo()
     late = d.evaluate("(window.APP.state.weights || []).map(String)")
-    check("交互: ロットが開く前に打った重量は、開いたロットに入れず知らせる",
-          opened and all(w in ("", "0") for w in late) and "変わったので" in text(d, "#notice"),
-          (old_lot, late, text(d, "#notice")[:60]))
+    if old_locked:
+        check("交互: ロットが開く前の画面(積み始めたロット)では重量を打てず、開いたロットの重量は空",
+              still and opened and all(w in ("", "0") for w in late), (old_lot, still, late))
+    else:
+        check("交互: ロットが開く前に打った重量は、開いたロットに入れず知らせる",
+              opened and all(w in ("", "0") for w in late) and "変わったので" in text(d, "#notice"),
+              (old_lot, late, text(d, "#notice")[:60]))
     ok = details_open_lot(d, "A123456")
     details_weights(d, 300, 302)
     check("交互: 梱包明細を途中まで(別のロット・重量)", ok and "横割6" in text(d, "#warisu"), text(d, "#warisu"))
