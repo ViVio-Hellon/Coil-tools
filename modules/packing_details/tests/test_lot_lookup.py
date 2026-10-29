@@ -152,6 +152,20 @@ class LotLookupTest(unittest.TestCase):
         r = lot_lookup.lookup("L7150Y0", kensa=False)
         self.assertEqual((r["outer"], r["file"]), (974.0, str(res)))
 
+    def test_外径は第2パスを先に見る(self):
+        """統合 1.2.60・現場の指示「外径は初めから第2パスで見に行ってよい」。両方にあれば第2パスの値。"""
+        first = _file(self.root / "LS4LOT.sqlite3", ("ﾛｯﾄ番号", "BOX実績_ｺｲﾙ内径", "BOX実績_ｺｲﾙ肉厚"),
+                      [("A000001", "508", "100"), ("A000002", "508", "150")])
+        second_dir = self.root / "second"
+        second_dir.mkdir()
+        second = _file(second_dir / "実績_LS4.sqlite3", ("ﾛｯﾄ番号", "BOX実績_ｺｲﾙ内径", "BOX実績_ｺｲﾙ肉厚"),
+                       [("A000001", "508", "200")], table="実績")
+        self._use(first, second)
+        r = lot_lookup.lookup("A000001", kensa=False)
+        self.assertEqual((r["outer"], r["file"]), (908.0, str(second)))
+        r = lot_lookup.lookup("A000002", kensa=False)          # 第2パスに無ければ第1パス
+        self.assertEqual((r["outer"], r["file"]), (808.0, str(first)))
+
     def test_どのファイルにも検査番号の列が無ければ見たファイルと検の付く列を添える(self):
         lot_dir = self.root / "lot"
         lot_dir.mkdir()
