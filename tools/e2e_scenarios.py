@@ -182,10 +182,13 @@ def make_sources(home: Path) -> None:
               "コイル内径_目標": "508", "営業納期": "04/01"}], created_at=stamp)
     _source(konpo / "LS4LOT.sqlite3",
             ("ﾛｯﾄ番号", "当工程設計_設備名", "当工程設計_横割数", "当工程設計_縦割数",
-             "当工程設計_枚本数", "製造板厚", "製造板幅", "製造板丈"),
+             "当工程設計_枚本数", "製造板厚", "製造板幅", "製造板丈",
+             # ペナラベルの LOTNO・資材計算のコイル外径が読む列(統合 1.2.57)。外径 508 + 2 × 296 = 1100
+             "検査番号", "BOX実績_ｺｲﾙ内径", "BOX実績_ｺｲﾙ肉厚"),
             [{"ﾛｯﾄ番号": "L5160Z0", "当工程設計_設備名": "LS4", "当工程設計_横割数": "12",
               "当工程設計_縦割数": "2", "当工程設計_枚本数": "24", "製造板厚": "1.985",
-              "製造板幅": "104.0", "製造板丈": "0.0"},
+              "製造板幅": "104.0", "製造板丈": "0.0",
+              "検査番号": "N6X0945", "BOX実績_ｺｲﾙ内径": "508", "BOX実績_ｺｲﾙ肉厚": "296"},
              {"ﾛｯﾄ番号": "A123456", "当工程設計_設備名": "LS4", "当工程設計_横割数": "6",
               "当工程設計_縦割数": "2", "当工程設計_枚本数": "12", "製造板厚": "1.985",
               "製造板幅": "104.0", "製造板丈": "0.0"}], declare=False)
@@ -427,6 +430,27 @@ def details_weights(fr, w1, w2):
     fr.wait_for_timeout(400)
 
 
+def details_weights_quick_switch(ctx, sh, d):
+    """重量を入れてすぐ別のツールへ → 戻る(送ったはずの重量が残っている)。積み上げを始める前に行う
+    (始めたら重量は変えられない。梱包明細 VER 0.13.35)。"""
+    page = sh.page
+    undo = _delay(ctx, "**/api/weights", 0.8)
+    try:
+        w1 = text(d, "#weight1")
+        new_w = "251" if w1 != "251" else "252"
+        d.fill("#weight1", new_w)
+        page.click("#tab-pena")          # 欄を離れる(送信) → すぐ切り替える
+        page.wait_for_timeout(200)
+        page.click("#tab-details")
+        page.wait_for_timeout(2000)
+        saved = d.evaluate("(window.APP.state.weights || [])[0]")
+        check("すぐ切替: 梱包明細で重量を入れてすぐ切り替えても、入れた重量が残る(画面とサーバ)",
+              text(d, "#weight1") == new_w and str(saved).rstrip("0").rstrip(".") == new_w,
+              {"画面": text(d, "#weight1"), "サーバ": saved})
+    finally:
+        undo()
+
+
 def details_weights_late_reply(ctx, fr):
     """丈1を送った返事が、丈2へ移ったあとに届いても、丈2に打つ数字を失わない(統合 1.2.26)。
 
@@ -460,7 +484,9 @@ def details_slots(fr):
 def details_stack_and_output(fr, keys, resize=False):
     """積んで出力する。`resize` なら積みかけで積み条数(積み本数)を増やして戻し、積んだものが残るか見る
     (梱包明細 VER 0.13.33・現場の求め。VBA は積み条数を変えると全部外れて積み直しになった)。"""
-    fr.click("#btnStrands")
+    # 積み上げを始めたロットでは「条番号表示」は押せない(梱包明細 VER 0.13.35)。条番号はもう出ている
+    if fr.evaluate("!document.querySelector('#btnStrands').disabled"):
+        fr.click("#btnStrands")
     if not wait_until(lambda: visible(fr, "#strandCard"), 8):
         return "条番号が出ない: " + text(fr, "#notice")
     fr.fill("#stackMax", str(len(keys)))
@@ -653,8 +679,16 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
           text(fr, "#warisu"))
     details_weights(fr, 250, 248)
     details_weights_late_reply(ctx, fr)
+    details_weights_quick_switch(ctx, sh, fr)
+    fr = sh.tab("details")
     err = details_stack_and_output(fr, ["1-12", "1-11", "2-12", "2-11"], resize=True)
     check("梱包明細: 重量 → 条番号表示 → 積み → 出力", not err, err or text(fr, "#notice"))
+    check("梱包明細: 積み始めたら「条番号表示」・重量の欄・丈数の±は押せない(0.13.35)",
+          fr.evaluate("""() => document.querySelector('#btnStrands').disabled
+              && [...document.querySelectorAll('#weights input, #weights button')].every(e => e.disabled)
+              && [...document.querySelectorAll('#weights input')].length > 0"""),
+          fr.evaluate("[document.querySelector('#btnStrands').disabled, "
+                      "[...document.querySelectorAll('#weights input, #weights button')].map(e => e.disabled)]"))
     with ctx.expect_page() as info:
         fr.click("#btnPrint")
     report = info.value
@@ -689,6 +723,19 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
     check("ペナラベル: 小ラベルの印刷ビューが別タブで開く",
           "/pena/labels/print" in labels.url and labels.locator("section.sheet").count() >= 1, labels.url)
     labels.close()
+    # LOTNO から検査番号と外径(統合 1.2.57)。梱包明細と同じ仕掛(LS4LOT)の同じ行
+    fr.fill("#lotNo", "l5160z0")
+    fr.press("#lotNo", "Enter")
+    check("ペナラベル: LOTNO で同じ行の検査番号が新検番に入る(1.5.52)",
+          wait_until(lambda: fr.input_value("#kensaNo") == "N6X0945", 8),
+          (fr.input_value("#kensaNo"), text(fr, "#toast .toast-body")))
+    check("ペナラベル: LOTNO の外径(1100mm)でチップボールを選ぶ(1.5.52)",
+          "1100" in text(fr, "#tipNote") and fr.is_checked('input[name=tip][value="TIP1000"]'), text(fr, "#tipNote"))
+    # 新検番が変わったので、印刷は「入力が変わっています」で止まる(古い値のラベルを出さない)。
+    # あとの印刷の試験のために、元の検査番号で反映・計算し直しておく
+    fr.fill("#lotNo", "")
+    check("ペナラベル: LOTNO のあと元の検査番号で計算し直せる",
+          pena_weights(fr) and not pena_tare(fr), text(fr, "#toast .toast-body"))
     # 全サイズ(同じ iframe の中で開く)
     fr.goto(app.base + "/pena/all-size")
     fr.wait_for_load_state()
@@ -774,6 +821,12 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
     material_ready(fr)
     fr.click("#build")
     check("資材計算: 発注票を作る", material_toast(fr, "枚作りました"), text(fr, "#toast") or text(fr, "#note"))
+    # LOTで分ける(0.2.35)。切り替えるとその場で作り直し、見出しにロットが出る。戻してから先へ
+    fr.check("#byLot")
+    check("資材計算: 発注票の「LOTで分ける」で見出しにロットが出る(0.2.35)",
+          wait_until(lambda: "LOT A123456" in text(fr, "#sheets"), 8), text(fr, "#sheets")[:80])
+    fr.uncheck("#byLot")
+    wait_until(lambda: "LOT A123456" not in text(fr, "#sheets") and "30×40" in text(fr, "#sheets"), 8)
     with ctx.expect_page() as info:
         fr.click("a#print")
     rep = info.value
@@ -1445,23 +1498,16 @@ def scenario_rapid(app: App, ctx, sh: Shell, note: dict) -> None:
                   text(m, "#r-台数") == want[ins], {"台数": text(m, "#r-台数"), "検入数": text(m, "#ins")})
     finally:
         undo()
-    # 梱包明細: 重量を入れてすぐ別のツールへ → 戻る(送ったはずの重量が残っている)
+    # 梱包明細: 重量を入れてすぐ切り替える試験は、積み上げを始める前(scenario_flow)で行う。
+    # ここでは積み上げを始めたロットなので、切り替えて戻っても重量の欄は止まったまま(梱包明細 VER 0.13.35)
     d = sh.tab("details")
-    undo = _delay(ctx, "**/api/weights", 0.8)
-    try:
-        w1 = text(d, "#weight1")
-        new_w = "251" if w1 != "251" else "252"
-        d.fill("#weight1", new_w)
-        page.click("#tab-pena")          # 欄を離れる(送信) → すぐ切り替える
-        page.wait_for_timeout(200)
-        page.click("#tab-details")
-        page.wait_for_timeout(2000)
-        saved = d.evaluate("(window.APP.state.weights || [])[0]")
-        check("すぐ切替: 梱包明細で重量を入れてすぐ切り替えても、入れた重量が残る(画面とサーバ)",
-              text(d, "#weight1") == new_w and str(saved).rstrip("0").rstrip(".") == new_w,
-              {"画面": text(d, "#weight1"), "サーバ": saved})
-    finally:
-        undo()
+    page.click("#tab-pena")
+    page.wait_for_timeout(200)
+    page.click("#tab-details")
+    page.wait_for_timeout(1000)
+    check("すぐ切替: 積み始めた梱包明細は、切り替えて戻っても重量を打てない(0.13.35)",
+          d.is_disabled("#weight1") and d.is_disabled("#btnStrands"),
+          {"重量": d.is_disabled("#weight1"), "条番号表示": d.is_disabled("#btnStrands")})
     check("入れてすぐ計算: 断り・接続なしが出ていない", sh.ready(10), sh.trouble())
 
     # ---- D. 印刷の画面が開いているあいだ(ブラウザ版): 心拍が止まっても終わらない ----

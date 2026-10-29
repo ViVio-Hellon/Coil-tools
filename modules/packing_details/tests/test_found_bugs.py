@@ -73,11 +73,13 @@ class ZenKoteiBypassTest(_Base):
         res = _post(self.client, "/api/edit-output", {"no": 1})
         self.assertEqual(res.status_code, 200, res.get_json())
 
-    def test_配分が変わらない再表示は_積み上げを始めても通す(self):
+    def test_積み上げを始めたら配分が変わらない再表示も断る(self):
+        """VER 0.13.35・現場の指示: 丈数の −/＋ が押せなくても条番号表示が押せていた。"""
         self._out(("1-12", "2-12"))
         res = _post(self.client, "/api/strands", {"confirm": True})
-        self.assertEqual(res.status_code, 200)
-        self.assertEqual(_coil_states(res.get_json()["state"])["1-12"], "used")
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"]["code"], "strands_locked")
+        self.assertEqual(_coil_states(self._state())["1-12"], "used")
 
 
 class EditGuardTest(_Base):
@@ -123,11 +125,13 @@ class GuardMatrixTest(_Base):
         "stack_max": ("/api/stack-max", {"value": "2"}),
         "discard": ("/api/discard", {"key": "1-1"}),
         "reverse": ("/api/reverse", {}),
+        "weights": ("/api/weights", {"weights": ["300", "301"]}),
     }
     EXPECTED = {
         "normal": set(),
-        "started": {"zen_kotei", "jou_su"},
-        "editing": {"zen_kotei", "jou_su", "strands", "lot", "clear_lot", "edit_output"},
+        # 積み上げを始めたら、条番号表示・重量も断る(VER 0.13.35・現場の指示)
+        "started": {"zen_kotei", "jou_su", "strands", "weights"},
+        "editing": {"zen_kotei", "jou_su", "strands", "lot", "clear_lot", "edit_output", "weights"},
     }
 
     def _prepare(self, kind):
@@ -153,13 +157,15 @@ class GuardMatrixTest(_Base):
                     else:
                         self.assertNotEqual(res.status_code, 409, (path, res.get_json()))
 
-    def test_修正中の重量の打ち直しは_戻したことを知らせる(self):
+    def test_修正中は重量を打ち直せない(self):
+        """VER 0.13.35・現場の指示: 積み上げを始めたら重量は変えられない(修正中も)。"""
         self._out(("1-12", "2-12"))
         _post(self.client, "/api/edit-output", {"no": 1})
-        _post(self.client, "/api/weights", {"weights": ["300", "301"]})
+        res = _post(self.client, "/api/weights", {"weights": ["300", "301"]})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"]["code"], "weights_locked")
         body = _post(self.client, "/api/output", {"confirm": True}).get_json()
-        self.assertIn("重量は修正に入る前の値に戻しました", body["message"])
-        self.assertEqual(meisai_service.find_output(self.conn, "L5160Z0", 1).weights, [300, 301])
+        self.assertEqual(meisai_service.find_output(self.conn, "L5160Z0", 1).weights, [250, 248])
         self.assertEqual(body["state"]["weights"], [250, 248])
 
     def test_修正中のロット切替は_了解があれば修正をやめて開く(self):

@@ -379,10 +379,12 @@ class Workflow:
                           {"state": state.to_dict(), "written": []})
 
         state.kensa_no = ken
-        # 検査番号(= ロット番号)のコイル外径から、近いチップボールを選ぶ(統合 1.2.35・現場の指示)。
-        # 資材計算の仕掛パスが実績の形式のときだけ(`services/coil_outer.py`)
+        # コイル外径から、近いチップボールを選ぶ(統合 1.2.35・現場の指示)。LOTNO で引いた検査番号なら
+        # その LOTNO で外径を引く(統合 1.2.57)。LOTNO を入れていなければ、いままでどおり検査番号を
+        # ロット番号として引く(`services/coil_outer.py`)
+        key = state.lot_no if state.lot_no and state.lot_kensa == ken else ken
         try:
-            tip, note = coil_outer.choose(ken, state.tip)
+            tip, note = coil_outer.choose(key, state.tip)
         except Exception:                               # noqa: BLE001 - 選べなくても反映は止めない
             log.warning("コイル外径からチップボールを選べませんでした", exc_info=True)
             tip, note = None, ""
@@ -397,6 +399,48 @@ class Workflow:
             message += "\n" + note
         return Result(True, message, "info",
                       {"state": state.to_dict(), "written": written})
+
+    def lookup_lot(self, state: FormState, lot: str) -> Result:
+        """LOTNO から新検番とチップボールを決める(統合 1.2.57・現場の指示)。
+
+        梱包明細が読む仕掛(LS4LOT)で ﾛｯﾄ番号を探し、**同じ行の検査番号**を新検番に入れる。
+        そのとき同じ行の内径・肉厚からコイル外径を出し、いちばん近いチップボールを選ぶ。
+        重量反映はまだしない(重量を入れてから「重量反映」)。
+        """
+        lot = V.filter_alnum_upper(lot or "")
+        if not lot:
+            return Result(False, "LOTNO を入れてください", "warn", {"state": state.to_dict()})
+        hit = coil_outer.lookup_lot(lot)
+        if hit.get("off"):
+            return Result(False, "LOTNO を引く部品がありません(統合版でないとき)", "warn",
+                          {"state": state.to_dict()})
+        if not hit.get("found"):
+            return Result(False, f"LOTNO {lot} が見つかりません({hit.get('reason')})", "warn",
+                          {"state": state.to_dict()})
+        state.lot_no = lot
+        lines = []
+        if hit.get("kensa"):
+            state.kensa_no = hit["kensa"]
+            state.lot_kensa = hit["kensa"]
+            lines.append(f"LOTNO {lot} の検査番号 {hit['kensa']} を新検番に入れました")
+        else:
+            state.lot_kensa = ""
+        try:
+            tip, note = coil_outer.choose(lot, state.tip)
+        except Exception:                               # noqa: BLE001 - 選べなくても止めない
+            log.warning("コイル外径からチップボールを選べませんでした", exc_info=True)
+            tip, note = None, ""
+        if tip:
+            state.tip = tip
+        state.tip_note = note
+        lines += list(hit.get("notes") or [])
+        if note:
+            lines.append(note)
+        self.save_state(state)
+        level = "info" if hit.get("kensa") else "warn"
+        return Result(True, "\n".join(lines) or f"LOTNO {lot} を見つけました", level,
+                      {"state": state.to_dict(), "kensa": hit.get("kensa", ""),
+                       "outer": hit.get("outer")})
 
     def _write_label_sheet(self, ob_idx: int, ken: str, wt: str,
                            take_type: int) -> dict:

@@ -32,6 +32,16 @@
 
     <div class="card">
       <h2>1条重量</h2>
+      <!-- LOTNO から新検番とチップボール(統合 1.2.57・現場の指示)。梱包明細が読む仕掛(LS4LOT)で探す -->
+      <div class="lotrow">
+        <label>LOTNO
+          <input type="text" id="lotNo" name="lotNo" value="{{lotNo}}"
+                 data-max="10" inputmode="latin" data-filter="alnum" autocomplete="off"
+                 placeholder="例: L6241W0">
+        </label>
+        <button type="button" class="btn" data-act="lotLookup">検査番号を引く</button>
+      </div>
+      <p class="hint">LOTNO を入れて Enter(または「検査番号を引く」)。同じ行の検査番号を新検番に入れ、コイル外径からチップボールを選びます。</p>
       <div class="inputs-3">
         <label>新検番
           <input type="text" id="kensaNo" name="kensaNo" value="{{kensaNo}}"

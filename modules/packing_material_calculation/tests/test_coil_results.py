@@ -155,10 +155,38 @@ def test_受注を選ぶと実績の外径を入れる_無ければ外径MAX(pla
     state = CalcState(LOT="A000001")
     assert lot_service.load_into(conn, state, "O1")
     assert state.外径 == "909.00"
-    assert any("実績から" in m for m in state.messages)
+    assert any("実績から計算しました" in m for m in state.messages)
     other = CalcState(LOT="Z999999")
     assert lot_service.load_into(conn, other, "O1")
     assert other.外径 == "1000.00"
+
+
+def test_外径MAXがあっても仕掛の内径と肉厚から計算する_名前がLS4LOTでも(place, monkeypatch, tmp_path):
+    """資材計算 0.2.35・現場の指示「コイル外径はデータにあっても計算する(データが無ければ常に計算)」。
+    梱包明細が読む仕掛(LS4LOT)の同じロットの行に内径・肉厚があれば、名前が LS4LOT のままでも計算する。"""
+    from modules.packing_details.meisai import lot_lookup
+    ls4 = tmp_path / "share" / "LS4LOT.sqlite3"
+    ls4.parent.mkdir()
+    c = sqlite3.connect(ls4)
+    c.execute('CREATE TABLE "仕掛" ("ﾛｯﾄ番号" TEXT, "検査番号" TEXT, "BOX実績_ｺｲﾙ内径" REAL, "BOX実績_ｺｲﾙ肉厚" REAL)')
+    c.execute('INSERT INTO "仕掛" VALUES (?, ?, ?, ?)', ("A000002", "N6X0945", 508, 251.5))
+    c.execute('INSERT INTO "仕掛" VALUES (?, ?, ?, ?)', ("A000003", "N6X0946", None, None))
+    c.commit()
+    c.close()
+    lot_lookup.forget()
+    monkeypatch.setattr(lot_lookup, "sources", lambda: [ls4])
+    _konpo, conn = place
+    assert coil_results.wanted() is False                  # 資材計算の設定は LS4LOT のまま
+    monkeypatch.setattr(lot_service, "expand_order",
+                        lambda c, o: OrderInfo(受注番号=o, コイル外径_MAX="1000.00"))
+    state = CalcState(LOT="A000002")
+    assert lot_service.load_into(conn, state, "O1")
+    assert state.外径 == "1011.00"                         # 508 + 2 × 251.5。外径MAX 1000 ではない
+    assert any("仕掛(LS4LOT)の内径・肉厚から計算しました" in m for m in state.messages)
+    other = CalcState(LOT="A000003")                       # 内径・肉厚が空 → 外径MAX と理由
+    assert lot_service.load_into(conn, other, "O1")
+    assert other.外径 == "1000.00"
+    assert any("計算できないので受注の外径MAX" in m for m in other.messages)
 
 
 def test_取り込みの結果に出る_実績の列が無ければ断る(place):

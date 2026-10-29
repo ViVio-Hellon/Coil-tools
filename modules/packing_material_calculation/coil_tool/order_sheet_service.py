@@ -22,6 +22,16 @@
 VBA は原紙に 700〜1150 の8種を直に書いていた。マスタ管理で新しい長さを足しても発注票に
 出るように、表「リプラサイズ」の リプラ長さ を小さい順に並べて行にする(行の数も表に合わせる)。
 表が空のときだけ、設定(`stock_lengths`)か原紙の8種を使う。
+
+【LOTで分ける】(資材計算 0.2.35・現場の依頼)
+ふだんは同じ角サイズ・同じ長さを1行にまとめるので、1行に2つのロットが並ぶことがある
+(例: 900 「L6241W0 L7160C0」 60本)。それだと**ロットごとの本数が票から分からない**。
+「LOTで分ける」にすると、**チェックリストの行に戻って**ロットごとに本数を数え直し、
+ロットごとに票を起こす(1ロット = 1ページ。同じロットにリプラと LVS、角サイズが2つ
+あればそのぶん増える)。
+
+    800 L6241W0 20本 / 900 L6241W0 30本 / 1150 L7160C0 20本
+      → L6241W0 の票(800 20本・900 30本)と L7160C0 の票(1150 20本)
 """
 from __future__ import annotations
 
@@ -180,6 +190,8 @@ class OrderSheet:
     提出日付: str = ""
     依頼者: str = ""
     rows: list[SheetRow] = field(default_factory=list)
+    # 「LOTで分ける」で作ったときの、その票のロット(まとめて作ったときは空)
+    ロット: str = ""
 
     @property
     def has_content(self) -> bool:
@@ -245,13 +257,25 @@ def _build_sheet(entries: list[Aggregated], *, kind: str, size: str,
     return sheet, extra, ""
 
 
+def lots_in(details: Iterable[Detail]) -> list[str]:
+    """発注票になる明細のロットを、チェックリストに出てきた順のまま重複なしで。"""
+    seen: list[str] = []
+    for d in details:
+        if d.種類 in KINDS and (d.長さ or d.本数) and d.LotNo not in seen:
+            seen.append(d.LotNo)
+    return seen
+
+
 def build(conn: sqlite3.Connection, *, worker: str,
-          check_history: bool = True) -> BuildResult:
+          check_history: bool = True, by_lot: bool = False) -> BuildResult:
     """チェックリストから発注票を起こす。
 
     **履歴の重複はここで返すだけ**で、止めはしない。続けるかどうかは
     人が決める(VBA も「このまま重複して発注しますか？」と聞いていた)。
     続けるときは `check_history=False` で呼び直す。
+
+    `by_lot=True`(「LOTで分ける」)… ロットごとに票を起こす。本数はチェックリストの
+    そのロットの行だけで数え直す(まとめた行からは割り振れないので)。
     """
     rows = checklist_service.load_all(conn)
     if not rows:
@@ -261,19 +285,27 @@ def build(conn: sqlite3.Connection, *, worker: str,
     day = checklist_service.today_label()
     lengths = stock_lengths(conn)
 
+    groups: list[tuple[str, list[Detail]]]
+    if by_lot:
+        groups = [(lot, [d for d in details if d.LotNo == lot]) for lot in lots_in(details)]
+    else:
+        groups = [("", details)]
+
     result = BuildResult()
-    for kind in KINDS:
-        entries = aggregate(details, kind)
-        if not entries:
-            continue
-        for size in _sizes_in(entries):
-            sheet, extra, reason = _build_sheet(
-                entries, kind=kind, size=size, worker=worker, day=day, lengths=lengths)
-            if reason:
-                return BuildResult(ok=False, reason=reason, extra_lengths=extra)
-            if sheet is not None and (sheet.has_content or size == "80×80"):
-                result.sheets.append(sheet)
-                result.extra_lengths.extend(extra)
+    for lot, mine in groups:
+        for kind in KINDS:
+            entries = aggregate(mine, kind)
+            if not entries:
+                continue
+            for size in _sizes_in(entries):
+                sheet, extra, reason = _build_sheet(
+                    entries, kind=kind, size=size, worker=worker, day=day, lengths=lengths)
+                if reason:
+                    return BuildResult(ok=False, reason=reason, extra_lengths=extra)
+                if sheet is not None and (sheet.has_content or size == "80×80"):
+                    sheet.ロット = lot if by_lot else ""
+                    result.sheets.append(sheet)
+                    result.extra_lengths.extend(n for n in extra if n not in result.extra_lengths)
 
     if not result.sheets:
         return BuildResult(ok=False, reason=REASON_EMPTY)

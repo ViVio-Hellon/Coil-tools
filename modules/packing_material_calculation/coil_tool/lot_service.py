@@ -147,17 +147,21 @@ def load_into(conn: sqlite3.Connection, state: CalcState, order_no: str) -> bool
     if info is None:
         return False
     state.order = info
-    # コイル実績(実績の形式のファイル)に外径があれば、それを既定値にする(統合 1.2.29・現場の指示)。
-    #     外径 = BOX実績_ｺｲﾙ内径 + 2 × BOX実績_ｺｲﾙ肉厚
-    # 無ければいままでどおり受注の外径 MAX(`coil_tool/coil_results.py`)
-    outer = coil_results.outer_for(conn, state.LOT)
+    # コイル外径は**計算する**(外径 = BOX実績_ｺｲﾙ内径 + 2 × BOX実績_ｺｲﾙ肉厚)。受注の外径MAX があっても
+    # 計算できれば計算した値を入れる(資材計算 0.2.35・現場の指示「データにあっても計算する。データが
+    # 無ければ常に計算」)。先に梱包明細が読む仕掛(LS4LOT。**名前に関わらず列で読む**)、次に実績の形式の
+    # ファイル(統合 1.2.29)。どちらでも出せなければ、いままでどおり受注の外径 MAX
+    outer, where = _computed_outer(conn, state.LOT)
     if outer is not None:
         state.外径 = vba.fmt(outer, 2)
-        state.note(f"コイル外径は実績から出しました(内径 + 2 × 肉厚 = {state.外径}mm)。"
+        state.note(f"コイル外径は{where}から計算しました(内径 + 2 × 肉厚 = {state.外径}mm)。"
                    "違うときは打ち直してください")
     elif info.コイル外径_MAX != OrderInfo.NO_DATA:
         state.外径 = info.コイル外径_MAX
-        if coil_results.wanted():
+        if where:
+            state.note(f"コイル外径を計算できないので受注の外径MAXを入れました({where})。"
+                       "違うときは打ち直してください")
+        elif coil_results.wanted():
             # 実績を読む設定なのに、このロットが実績に無い。**黙って外径MAXにしない**(統合 1.2.49・現場の指摘)。
             # 実績は取り込んだ時点の写しなので、いつの写しかも添える
             state.note(f"実績に無いので受注の外径MAXを入れました(実績の取り込み: {_results_imported_at(conn)})。"
@@ -172,6 +176,28 @@ def load_into(conn: sqlite3.Connection, state: CalcState, order_no: str) -> bool
         state.検入数 = str(count)
         state.note(f"検入数は実績から入れました({count}本)。違うときは打ち直してください")
     return True
+
+
+def _computed_outer(conn: sqlite3.Connection, lot: str) -> tuple:
+    """(計算したコイル外径 または None, どこから/なぜ出せないか)。
+
+    1. 梱包明細が読む仕掛(LS4LOT。`modules/packing_details/meisai/lot_lookup.py`)のそのロットの行の内径・肉厚
+    2. 資材計算に取り込んだコイル実績(実績の形式のファイル。`coil_results.outer_for`)
+    """
+    why = ""
+    try:
+        from modules.packing_details.meisai import lot_lookup
+        hit = lot_lookup.lookup(lot)
+    except Exception as exc:                            # noqa: BLE001 - 引けなくても計算は止めない
+        hit = {"found": False, "reason": f"仕掛を読めません: {exc}"}
+    if hit.get("outer") is not None:
+        return hit["outer"], "仕掛(LS4LOT)の内径・肉厚"
+    if hit.get("found"):
+        why = "仕掛(LS4LOT)の行に内径・肉厚がありません"
+    outer = coil_results.outer_for(conn, lot)
+    if outer is not None:
+        return outer, "実績"
+    return None, why
 
 
 def _results_imported_at(conn: sqlite3.Connection) -> str:

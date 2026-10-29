@@ -99,6 +99,7 @@ class ApiRoutes:
             "/api/select-size": self._select_size,
             "/api/select-checkbox": self._select_checkbox,
             "/api/apply-weight": self._apply_weight,
+            "/api/lot-lookup": self._lot_lookup,
             "/api/calc-tare": self._calc_tare,
             "/api/progress": self._progress,
             # 印刷の画面を開いた(刷った)記録。印刷用の別タブから届く(入力画面でなくてよい)
@@ -139,7 +140,7 @@ class ApiRoutes:
 
     #: 作業状態を書き換えるAPI。入力画面を持っていない画面からは受け付けない。
     _STATE_WRITING = frozenset({
-        "/api/select-size", "/api/select-checkbox", "/api/apply-weight",
+        "/api/select-size", "/api/select-checkbox", "/api/apply-weight", "/api/lot-lookup",
         "/api/calc-tare", "/api/calc-list", "/api/clear",
         "/api/all-size/prepare", "/api/all-size/submit",
         "/api/settings/save", "/api/settings/reset", "/api/label/align",
@@ -386,6 +387,10 @@ class ApiRoutes:
     # ------------------------------------------------------------ 操作
     def _apply_weight(self, body):
         return self.wf.apply_weight(self._state_from(body)).to_dict()
+
+    def _lot_lookup(self, body):
+        """LOTNO から新検番・チップボール(統合 1.2.57)。"""
+        return self.wf.lookup_lot(self._state_from(body), str(body.get("lotNo") or "")).to_dict()
 
     def _calc_tare(self, body):
         return self.wf.calc_tare(self._state_from(body)).to_dict()

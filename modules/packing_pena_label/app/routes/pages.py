@@ -320,6 +320,7 @@ class PageRoutes:
             "lblSize1": esc(state.lbl_size1), "lblWeight1": esc(state.lbl_weight1),
             "lblSize2": esc(state.lbl_size2), "lblWeight2": esc(state.lbl_weight2),
             "kensaNo": esc(state.kensa_no),
+            "lotNo": esc(state.lot_no),
             "weight1": esc(state.weight1), "weight2": esc(state.weight2),
             "tip1000": "checked" if state.tip == "TIP1000" else "",
             "tip950": "checked" if state.tip == "TIP950" else "",

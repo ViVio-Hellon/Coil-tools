@@ -575,3 +575,78 @@ def test_依頼者の長い名前も枠に収める():
     assert reports.name_style("高村") == ""
     assert "9.0pt" in reports.name_style("高村 敏幸")
     assert "4.5" not in reports.name_style("長い名前の担当者さん") and "font-size:5" in reports.name_style("長い名前の担当者さんです")
+
+
+# ==================================================================
+# LOTで分ける(資材計算 0.2.35・現場の依頼)
+# ==================================================================
+def _rows(*items):
+    """チェックリストの行(LotNo, 長さ, 本数)。リプラ 30×40。"""
+    return [{"LotNo": lot, "コイル間": "リプラ", "リプラサイズ": "30×40",
+             "リプラ長さ": length, "リプラ本数": count} for lot, length, count in items]
+
+
+def _qty(sheet) -> dict:
+    return {r.長さ: (r.LotNo, int(r.数量)) for r in sheet.rows if r.数量}
+
+
+def test_LOTで分けるとロットごとに票を起こす(conn, monkeypatch):
+    """例1: 800 L6241W0 20本・900 L6241W0 30本・1150 L7160C0 20本 → ロットごとに1ページ。"""
+    monkeypatch.setattr(checklist_service, "load_all", lambda c: _rows(
+        ("L6241W0", "800\n900", "20\n30"), ("L7160C0", "1150", "20")))
+    one = order_sheet_service.build(conn, worker="高村", check_history=False)
+    assert len(one.sheets) == 1 and one.sheets[0].ロット == ""
+    r = order_sheet_service.build(conn, worker="高村", check_history=False, by_lot=True)
+    assert r.ok, r.reason
+    assert [s.ロット for s in r.sheets] == ["L6241W0", "L7160C0"]
+    assert _qty(r.sheets[0]) == {"800": ("L6241W0", 20), "900": ("L6241W0", 30)}
+    assert _qty(r.sheets[1]) == {"1150": ("L7160C0", 20)}
+
+
+def test_LOTで分けるとまとめた行の本数をチェックリストから数え直す(conn, monkeypatch):
+    """例2: まとめると 900 「L6241W0 L7160C0」 60本。どちらが何本かは票から分からないので、
+    チェックリストの行へ戻ってロットごとに数え直す。"""
+    monkeypatch.setattr(checklist_service, "load_all", lambda c: _rows(
+        ("L6241W0", "900", "25"), ("L7160C0", "900", "35")))
+    one = order_sheet_service.build(conn, worker="高村", check_history=False)
+    assert _qty(one.sheets[0]) == {"900": ("L6241W0 L7160C0", 60)}
+    r = order_sheet_service.build(conn, worker="高村", check_history=False, by_lot=True)
+    assert [s.ロット for s in r.sheets] == ["L6241W0", "L7160C0"]
+    assert [_qty(s) for s in r.sheets] == [{"900": ("L6241W0", 25)}, {"900": ("L7160C0", 35)}]
+    assert sum(n for s in r.sheets for _, n in _qty(s).values()) == 60
+    # 履歴にもロットごとに残る(1行にロットが2つ並ばない)
+    assert order_sheet_service.commit(conn, r.sheets, worker="高村") == 2
+    lots = [h["LotNo"] for h in order_history.recent(conn)]
+    assert sorted(lots) == ["L6241W0", "L7160C0"]
+
+
+def test_LOTで分けても紙は票ごとに1ページ(conn, monkeypatch):
+    from modules.packing_material_calculation.coil_tool import reports
+    monkeypatch.setattr(checklist_service, "load_all", lambda c: _rows(
+        ("L6241W0", "900", "25"), ("L7160C0", "900", "35"), ("L7160C1", "1150", "4")))
+    r = order_sheet_service.build(conn, worker="高村", check_history=False, by_lot=True)
+    rep = reports.build_order_sheet_report(r.sheets)
+    assert len(r.sheets) == 3 and len(rep.sheets) == 3
+
+
+def test_LOTで分けるは画面で選んで覚えておく(client, sandbox):
+    from modules.packing_material_calculation.tests._web import seed
+    seed(sandbox)
+    client.post("/api/settings", json={"worker": _fixture_worker()})
+    assert client.get("/api/order").get_json()["by_lot"] is False
+    for lot in ("A123456",):
+        r = client.post("/api/calc/lot", json={"LOT": lot})
+        client.post("/api/calc/order", json={"受注番号": r.get_json()["candidates"][0]})
+        client.post("/api/calc/input", json={"検入数": "10"})
+        assert client.post("/api/calc/run", json={}).get_json()["ok"]
+        assert client.post("/api/checklist/add", json={}).get_json()["ok"]
+    built = client.post("/api/order/build", json={"LOTで分ける": True}).get_json()
+    assert built["ok"] and built["by_lot"] is True
+    assert all(s["ロット"] == "A123456" for s in built["sheets"])
+    again = client.get("/api/order").get_json()
+    assert again["by_lot"] is True and again["sheets"][0]["ロット"] == "A123456"
+    # 送らなければ前に選んだほう
+    assert client.post("/api/order/build", json={}).get_json()["by_lot"] is True
+    assert client.post("/api/order/build", json={"LOTで分ける": False}).get_json()["sheets"][0]["ロット"] == ""
+    html = client.get("/order").data.decode()
+    assert 'id="byLot"' in html and "LOTで分ける" in html

@@ -88,15 +88,54 @@ def _find_sources(coil_results) -> list:
     return files
 
 
+def _details():
+    """梱包明細のロット引き(`meisai/lot_lookup.py`)。無ければ None(統合版でないとき)。"""
+    try:
+        from modules.packing_details.meisai import lot_lookup
+    except Exception:                                   # noqa: BLE001 - 単体のペナラベルでは無い
+        return None
+    return lot_lookup
+
+
+def lookup_lot(lot: str) -> dict:
+    """LOTNO から、梱包明細が読む仕掛(LS4LOT)の同じ行の検査番号とコイル外径(統合 1.2.57・現場の指示)。
+
+    梱包明細の部品が無ければ ``{"found": False, "off": True}``。
+    """
+    parts = _details()
+    if parts is None:
+        return {"found": False, "off": True, "notes": [], "kensa": "", "outer": None}
+    try:
+        return parts.lookup(lot)
+    except Exception as exc:                            # noqa: BLE001 - 引けなくても画面は止めない
+        log.warning("LOTNO を引けませんでした", exc_info=True)
+        return {"found": False, "reason": f"仕掛のファイルを読めません: {exc}", "notes": [],
+                "kensa": "", "outer": None}
+
+
 def lookup(lot: str) -> dict:
     """そのロットのコイル外径。
 
+    先に梱包明細が読む仕掛(LS4LOT。**名前に関わらず列で読む**。統合 1.2.57)を見て、外径が出せなければ
+    資材計算の設定(実績の形式のファイル)を見る。
     戻り値: ``{"found": bool, "outer": float|None, "inner": .., "thick": .., "file": ..,
-    "reason": 見つからない・読めないときの理由}``。設定が無ければ ``{"found": False, "off": True}``。
+    "reason": 見つからない・読めないときの理由}``。どちらの部品も無ければ ``{"found": False, "off": True}``。
+
+    以前(1.2.35〜1.2.56)は資材計算の仕掛パスの名前が LS4LOT 以外のときだけ読み、LS4LOT のままなら
+    **何も言わずに**選ばなかった(現場の指摘「外径計算してチップボールを選んでいない」)。
     """
     lot = str(lot or "").strip()
-    if not lot or not enabled():
+    if not lot:
         return {"found": False, "off": True}
+    first = lookup_lot(lot)
+    if first.get("outer") is not None:
+        return {"found": True, "outer": first["outer"], "inner": first.get("inner"),
+                "thick": first.get("thick"), "file": first.get("file", "")}
+    if not enabled():
+        if first.get("off"):
+            return {"found": False, "off": True}
+        reason = first.get("reason") or "・".join(first.get("notes") or []) or "外径を出せません"
+        return {"found": False, "reason": reason}
     coil_results, ls4_source = _material()
     reasons = []
     try:
@@ -141,7 +180,7 @@ def tip_label(tip: str) -> str:
 
 
 def choose(lot: str, current_tip: str) -> Tuple[Optional[str], str]:
-    """検査番号(ロット)から近いチップボールを選ぶ。
+    """ロット番号から近いチップボールを選ぶ(LOTNO を入れていなければ検査番号をロット番号として)。
 
     戻り値: (選んだチップボール(変えないなら None), 知らせる文(出さないなら ""))。
     """

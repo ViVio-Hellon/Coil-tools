@@ -515,26 +515,25 @@ class ScreenWeightsTest(unittest.TestCase):
         self._refused(res, "丈1の重量が未入力です。")
         self._nothing_written()
 
-    def test_書き直した重量で出る(self):
+    def test_積み上げを始めたら書き直した重量では出さない(self):
+        """VER 0.13.35・現場の指示「積み上げが始まったら丈数と重量の変更はできなくしろ」。"""
+        res = _post(self.client, "/api/output", {"confirm": True, "weights": ["260", "２５８"]})
+        self.assertEqual(res.status_code, 409, res.get_json())
+        self.assertEqual(res.get_json()["error"]["code"], "weights_locked")
+        self._nothing_written()
+        # 同じ値(全角でも)なら出せる ── 出力のたびに欄の値を添えて来るため
         body = _post(self.client, "/api/output",
-                     {"confirm": True, "weights": ["260", "２５８"]}).get_json()   # 全角も読む
+                     {"confirm": True, "weights": ["250", "２４８"]}).get_json()
         self.assertTrue(body["ok"], body)
-        self.assertEqual(body["state"]["weights"], [260, 258])
-        self.assertEqual(meisai_service.find_output(self.conn, "L5160Z0", 1).weights,
-                         [260, 258])
-        html = self._paper()
-        self.assertIn("260.0Kg", html)
-        self.assertIn("258.0Kg", html)
-        self.assertNotIn("250.0Kg", html)
-        self.assertEqual(history_repo.load_snapshot(self.conn, "L5160Z0").weights, [260, 258])
+        self.assertIn("250.0Kg", self._paper())
 
     def test_止めたあと入れ直せば出せる(self):
         _post(self.client, "/api/output", {"confirm": True, "weights": ["", "248"]})
         body = _post(self.client, "/api/output",
-                     {"confirm": True, "weights": ["251", "248"]}).get_json()
+                     {"confirm": True, "weights": ["250", "248"]}).get_json()
         self.assertTrue(body["ok"], body)
         self.assertEqual(body["seq_no"], 1)
-        self.assertIn("251.0Kg", self._paper())
+        self.assertIn("250.0Kg", self._paper())
 
     def test_重量を添えない要求はサーバの値で出す(self):
         """古い画面(重量を添えない)は以前と同じ。"""
@@ -554,10 +553,12 @@ class ScreenWeightsTest(unittest.TestCase):
                      {"confirm": True, "weights": ["", "248"]})
         self._refused(body, "丈1の重量が未入力です。")
         self.assertEqual(len(meisai_service.list_outputs(self.conn, "L5160Z0")), 1)
+        res = _post(self.client, "/api/output", {"confirm": True, "weights": ["270", "248"]})
+        self.assertEqual(res.status_code, 409)                 # 積み上げを始めたら重量は変えない
         body = _post(self.client, "/api/output",
-                     {"confirm": True, "weights": ["270", "248"]}).get_json()
+                     {"confirm": True, "weights": ["250", "248"]}).get_json()
         self.assertTrue(body["ok"], body)
-        self.assertIn("270.0Kg", self._paper(2))
+        self.assertIn("250.0Kg", self._paper(2))
 
     def test_修正して出力も欄の値で読み直す(self):
         _post(self.client, "/api/output", {"confirm": True})
@@ -565,10 +566,12 @@ class ScreenWeightsTest(unittest.TestCase):
         res = _post(self.client, "/api/output", {"confirm": True, "weights": ["", "248"]})
         self._refused(res, "丈1の重量が未入力です。")
         self.assertEqual(session.current().edit_no, 1)       # 修正中のまま
+        res = _post(self.client, "/api/output", {"confirm": True, "weights": ["255", "248"]})
+        self.assertEqual(res.status_code, 409)                 # 修正中も重量は変えない(VER 0.13.35)
         body = _post(self.client, "/api/output",
-                     {"confirm": True, "weights": ["255", "248"]}).get_json()
+                     {"confirm": True, "weights": ["250", "248"]}).get_json()
         self.assertTrue(body["ok"], body)
-        self.assertIn("255.0Kg", self._paper())
+        self.assertIn("250.0Kg", self._paper())
 
     def test_ほかのロットの画面からの出力は重量ごと断る(self):
         res = self.client.post("/api/output",
@@ -914,9 +917,14 @@ class EditOutputWebTest(unittest.TestCase):
         self.assertIsNone(body["state"]["edit"])
 
     def test_条番号を再表示しても出力済みのコイルは使用済みのまま(self):
-        """No1〜No3 のコイルを No4 へまた積めないように(VER 0.13.23)。"""
-        body = _post(self.client, "/api/strands", {}).get_json()
-        states = _coil_states(body["state"])
+        """No1〜No3 のコイルを No4 へまた積めないように(VER 0.13.23)。
+        VER 0.13.35 から、積み上げを始めたロットでは条番号表示そのものを断る。"""
+        res = _post(self.client, "/api/strands", {})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["error"]["code"], "strands_locked")
+        # 反転を2回(元に戻す)して、いまの盤面を読む
+        _post(self.client, "/api/reverse", {})
+        states = _coil_states(_post(self.client, "/api/reverse", {}).get_json()["state"])
         for key in ("1-10", "2-8", "1-9", "2-7", "1-8", "2-6"):
             self.assertEqual(states[key], "used", key)
         self.assertEqual(states["1-1"], "available")

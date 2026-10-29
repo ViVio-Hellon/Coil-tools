@@ -14,7 +14,7 @@ function sheetHtml(s) {
       <td>${r['長さ'] || r['数量'] ? '本' : ''}</td>
     </tr>`).join('');
   return `<section class="sec">
-    <h2>${esc(s['種類'])} ${esc(s['角サイズ'])}</h2>
+    <h2>${s['ロット'] ? `LOT ${esc(s['ロット'])} — ` : ''}${esc(s['種類'])} ${esc(s['角サイズ'])}</h2>
     <p class="setrow__d">提出日付 ${esc(s['提出日付'])} ／ 依頼者 ${esc(s['依頼者'])}</p>
     <div class="wrap"><table class="grid-table">
       <thead><tr><th>長さ</th><th>LotNo</th><th>数量</th><th></th></tr></thead>
@@ -53,7 +53,7 @@ function render(sheets, extra, committedCount = 0) {
 async function build(confirmed) {
   $('#note').innerHTML = '';
   showCommitted(0);
-  const r = await call('/api/order/build', { 確認済み: !!confirmed });
+  const r = await call('/api/order/build', { 確認済み: !!confirmed, LOTで分ける: $('#byLot').checked });
 
   if (!r.ok) {
     $('#note').innerHTML =
@@ -90,6 +90,12 @@ async function build(confirmed) {
 }
 
 $('#build').addEventListener('click', () => build(false));
+
+// LOTで分ける(資材計算 0.2.35)。票を出しているあいだに切り替えたら、その場で作り直す
+// (記録済みの票は作り直さない。作り直すときは「発注票を作る」)
+$('#byLot').addEventListener('change', () => {
+  if (!$('#commit').hidden && !committed) build(false);
+});
 
 $('#commit').addEventListener('click', async () => {
   if (!confirm('この内容を発注済みとして記録します。よろしいですか？')) return;
@@ -150,6 +156,7 @@ $('#historyLot').addEventListener('input', drawHistory);
 async function start() {
   loadHistory();
   const r = await call('/api/order');
+  if (r.ok) $('#byLot').checked = !!r.by_lot;
   if (r.ok && r.sheets.length) {
     // 開き直したとき: このタブで「記録していない」と覚えていれば訊く。覚えていなければ、
     // 前に記録したかは分からないので訊かない(読み直しのたびに訊かない)

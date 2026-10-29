@@ -1,10 +1,10 @@
 {
- "taken": "2026-10-26",
+ "taken": "2026-10-29",
  "versions": {
-  "app": "1.2.55",
-  "details": "0.13.33",
-  "material": "0.2.34",
-  "pena": "1.5.51"
+  "app": "1.2.57",
+  "details": "0.13.35",
+  "material": "0.2.35",
+  "pena": "1.5.52"
  },
  "images": {
   "details-about": {
@@ -181,7 +181,7 @@
   },
   "pena-tare-figure": {
    "w": 1122,
-   "h": 505
+   "h": 502
   },
   "pena-tare-print": {
    "w": 1280,

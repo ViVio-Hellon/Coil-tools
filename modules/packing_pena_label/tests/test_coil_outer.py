@@ -120,9 +120,22 @@ class ChooseTest(unittest.TestCase):
         self.assertIsNone(tip)
         self.assertIn("第2パスにもありません", note)
 
-    def test_実績の形式でなければ何もしない(self):
-        with self._with(_FakeResults(self.path, wanted=False)):
+    def test_どちらの部品も無ければ何もしない(self):
+        with self._with(_FakeResults(self.path, wanted=False)), \
+                mock.patch.object(CO, "_details", return_value=None):
             self.assertEqual(CO.choose("W123456", "TIP1000"), (None, ""))
+
+    def test_実績の形式でなくても黙らない(self):
+        """統合 1.2.57・現場の指摘「外径計算してチップボールを選んでいない」: 以前は資材計算の仕掛パスの
+        名前が LS4LOT のままなら**何も言わずに**選ばなかった。いまは理由を出す。"""
+        with self._with(_FakeResults(self.path, wanted=False)), \
+                mock.patch.object(CO, "lookup_lot",
+                                  return_value={"found": False, "reason": "仕掛のファイルにロット W123456 がありません",
+                                                "notes": [], "kensa": "", "outer": None}):
+            tip, note = CO.choose("W123456", "TIP1000")
+        self.assertIsNone(tip)
+        self.assertIn("自動で選んでいません", note)
+        self.assertIn("ロット W123456 がありません", note)
 
 
 class ApplyWeightChoosesTipTest(WorkflowTestBase):
@@ -153,6 +166,93 @@ class ApplyWeightChoosesTipTest(WorkflowTestBase):
             r = self.wf.apply_weight(st)
         self.assertTrue(r.ok, r.message)
         self.assertEqual(st.tip, "TIP1000")
+
+
+def _ls4lot_file(rows, *, kensa_col="検査番号", name="LS4LOT.sqlite3"):
+    """梱包明細が読む仕掛(名前は LS4LOT のまま)に、検査番号・内径・肉厚の列もあるファイル。"""
+    folder = tempfile.mkdtemp(prefix="ppl_ls4lot_")
+    path = os.path.join(folder, name)
+    with sqlite3.connect(path) as c:
+        c.execute(f'CREATE TABLE "仕掛" ("{ls4_source.COL_LOT}" TEXT, "{kensa_col}" TEXT,'
+                  f' "当工程設計_縦割数" INTEGER, "当工程設計_横割数" INTEGER,'
+                  f' "{ls4_source.COL_INNER}" REAL, "{ls4_source.COL_THICK}" REAL)')
+        c.executemany('INSERT INTO "仕掛" VALUES (?,?,?,?,?,?)',
+                      [(lot, ken, 2, 12, inner, thick) for lot, ken, inner, thick in rows])
+    return path
+
+
+class LotNoTest(WorkflowTestBase):
+    """LOTNO から新検番とチップボール(統合 1.2.57・現場の指示)。
+
+    LOTNO を探すデータは梱包明細が読む仕掛(LS4LOT)。ﾛｯﾄ番号がヒットしたら同じ行の検査番号を新検番に入れ、
+    そのとき外径も計算してチップボールを選ぶ。ファイルの名前が LS4LOT のままでも、列があれば外径を出す。
+    """
+
+    def setUp(self):
+        super().setUp()
+        CO.forget()
+        from modules.packing_details.meisai import lot_lookup
+        self.lot_lookup = lot_lookup
+        lot_lookup.forget()
+        self.path = _ls4lot_file([("L6241W0", "N6X0945", 400.0, 200.0),      # 800mm → 820
+                                  ("L7160C0", "H670129", 508.0, 260.0)])     # 1028mm → 950
+        from pathlib import Path
+        self.patch = mock.patch.object(lot_lookup, "sources", return_value=[Path(self.path)])
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+
+    def test_LOTNOで同じ行の検査番号とチップボール(self):
+        st = self._cb_state(5)
+        r = self.wf.lookup_lot(st, "l6241w0")                     # 小文字でも
+        self.assertTrue(r.ok, r.message)
+        self.assertEqual(st.kensa_no, "N6X0945")
+        self.assertEqual(st.lot_no, "L6241W0")
+        self.assertEqual(st.tip, "TIP820")
+        self.assertIn("検査番号 N6X0945 を新検番に入れました", r.message)
+        self.assertIn("コイル外径 800mm", r.message)
+        self.assertEqual(r.data["state"]["kensaNo"], "N6X0945")
+        saved = self.wf.load_state()
+        self.assertEqual((saved.kensa_no, saved.tip, saved.lot_no), ("N6X0945", "TIP820", "L6241W0"))
+
+    def test_重量反映はLOTNOで外径を引く(self):
+        """検査番号はロット番号と違う(L7160C0 の検査番号は H670129)。LOTNO で引いた検査番号なら LOTNO で引く。"""
+        st = self._cb_state(5)
+        self.wf.lookup_lot(st, "L7160C0")
+        st.tip = "TIP1000"                                         # 手で選び直していた
+        st.weight1, st.weight2 = "10", "12"
+        r = self.wf.apply_weight(st)
+        self.assertTrue(r.ok, r.message)
+        self.assertEqual(st.tip, "TIP950")
+        self.assertIn("コイル外径 1028mm", r.message)
+
+    def test_見つからなければ断って何も変えない(self):
+        st = self._cb_state(5, kensa_no="N1A2345")
+        r = self.wf.lookup_lot(st, "L0000000")
+        self.assertFalse(r.ok)
+        self.assertIn("LOTNO L0000000 が見つかりません", r.message)
+        self.assertEqual(st.kensa_no, "N1A2345")
+
+    def test_検査番号の列が無ければそう知らせる(self):
+        from pathlib import Path
+        other = _ls4lot_file([("L6241W0", "X", 400.0, 200.0)], kensa_col="備考")
+        self.lot_lookup.forget()
+        with mock.patch.object(self.lot_lookup, "sources", return_value=[Path(other)]):
+            st = self._cb_state(5, kensa_no="N1A2345")
+            r = self.wf.lookup_lot(st, "L6241W0")
+        self.assertTrue(r.ok)
+        self.assertEqual(st.kensa_no, "N1A2345", "検査番号が無いので新検番は変えない")
+        self.assertIn("検査番号の列が見つかりません", r.message)
+        self.assertEqual(st.tip, "TIP820", "外径からは選ぶ")
+
+    def test_画面のAPI(self):
+        from modules.packing_pena_label.app.routes.api import ApiRoutes
+        import time
+        api = ApiRoutes(self.wf, getattr(self, "cfg", None), time.time())
+        out = api._lot_lookup({"lotNo": "L6241W0", "current": {"tip": "TIP1000", "kensaNo": ""}})
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["state"]["kensaNo"], "N6X0945")
+        self.assertEqual(out["state"]["tip"], "TIP820")
+        self.assertIn("/api/lot-lookup", ApiRoutes._STATE_WRITING)
 
 
 if __name__ == "__main__":

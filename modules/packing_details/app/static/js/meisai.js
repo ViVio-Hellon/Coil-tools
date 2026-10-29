@@ -332,13 +332,19 @@ function renderEdit(state) {
   const lockedBy = (action, code) => Boolean(locks[action]) && locks[action].code === code;
   $("btnStrands").disabled = Boolean(locks.strands);
   $("btnStrands").title = locks.strands ? locks.strands.message : "";
-  $("strandsLockNote").hidden = !lockedBy("strands", "strands_locked");
+  $("strandsLockNote").hidden = !lockedBy("strands", "strands_locked") || lockedBy("jou_su", "jou_su_locked");
   $("strandsLockNote").textContent = locks.strands ? locks.strands.message : "";
   // 丈数は、修正中か、積み上げを始めたら変えられない(VER 0.13.24。変えるときは全クリア)
   const jouLocked = Boolean(locks.jou_su);
   $("jouSu").disabled = jouLocked;
   document.querySelectorAll("[data-jou]").forEach((b) => { b.disabled = jouLocked; });
   $("jouLockNote").hidden = !lockedBy("jou_su", "jou_su_locked");
+  // 重量も、積み上げを始めたら変えられない(VER 0.13.35。−/＋ と欄を止める。サーバも断る)
+  const weightLocked = Boolean(locks.weights);
+  document.querySelectorAll("#weights input, #weights button").forEach((el) => {
+    el.disabled = weightLocked;
+    el.title = weightLocked ? locks.weights.message : "";
+  });
   // 前工程実績数も、修正中か積み上げを始めたら変えられない(VER 0.13.25)
   const zenLocked = Boolean(locks.zen_kotei);
   $("btnEditZen").disabled = zenLocked;

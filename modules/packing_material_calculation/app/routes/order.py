@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from flask import Blueprint, current_app, jsonify, render_template, request
 
-from modules.packing_material_calculation.coil_tool import (checklist_service, order_history, order_sheet_service,
-                                                            reports, user_settings)
+from modules.packing_material_calculation.coil_tool import (checklist_service, config, order_history,
+                                                            order_sheet_service, reports, user_settings)
 from modules.packing_material_calculation.coil_tool.logging_utils import get_logger
 
 from .. import base, conf, get_db, shell
@@ -51,7 +51,7 @@ def _outdated(conn) -> bool:
 
 def _sheet_view(sheet) -> dict:
     return {
-        "種類": sheet.種類, "角サイズ": sheet.角サイズ,
+        "種類": sheet.種類, "角サイズ": sheet.角サイズ, "ロット": sheet.ロット,
         "提出日付": sheet.提出日付, "依頼者": sheet.依頼者,
         "rows": [{"長さ": r.長さ, "LotNo": r.LotNo, "数量": r.数量}
                  for r in sheet.rows],
@@ -74,7 +74,13 @@ def page():
 def current():
     notice = CHECKLIST_CHANGED_MESSAGE if _outdated(get_db()) else ""
     return jsonify(ok=True, sheets=[_sheet_view(s) for s in _pending["sheets"]],
-                   worker=_pending["worker"], committed=_pending["committed"], notice=notice)
+                   worker=_pending["worker"], committed=_pending["committed"], notice=notice,
+                   by_lot=by_lot_setting())
+
+
+def by_lot_setting() -> bool:
+    """「LOTで分ける」を最後に選んだか(資材計算 0.2.35)。"""
+    return user_settings.get(config.KEY_ORDER_BY_LOT) is True
 
 
 _MESSAGES = {
@@ -97,9 +103,13 @@ def build():
 
     payload = request.get_json(silent=True) or {}
     check = not bool(payload.get("確認済み"))
+    # 「LOTで分ける」(資材計算 0.2.35)。送られてこなければ前に選んだほう
+    by_lot = bool(payload["LOTで分ける"]) if "LOTで分ける" in payload else by_lot_setting()
+    if by_lot != by_lot_setting():
+        user_settings.save(config.KEY_ORDER_BY_LOT, by_lot)
 
     stamp = checklist_service.fingerprint(conn)
-    result = order_sheet_service.build(conn, worker=worker, check_history=check)
+    result = order_sheet_service.build(conn, worker=worker, check_history=check, by_lot=by_lot)
     if not result.ok:
         return jsonify(ok=False, reason=result.reason,
                        message=_MESSAGES.get(result.reason, "発注票を作れません"),
@@ -113,6 +123,7 @@ def build():
         ok=True,
         sheets=[_sheet_view(s) for s in result.sheets],
         extra_lengths=result.extra_lengths,
+        by_lot=by_lot,
         duplicates=[{
             "LotNo": d.LotNo, "処理日": d.処理日, "担当者": d.担当者,
             "サイズ": d.サイズ, "数量": d.数量, "日数表示": d.日数表示,

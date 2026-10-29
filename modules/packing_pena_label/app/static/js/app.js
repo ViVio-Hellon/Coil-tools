@@ -662,6 +662,9 @@
       if (ch && state.coilH && typeof state.coilH[i] === "string") { ch.value = state.coilH[i]; }
     });
     if (typeof state.kensaNo === "string") { $("#kensaNo").value = state.kensaNo; }
+    if (typeof state.lotNo === "string" && $("#lotNo") && document.activeElement !== $("#lotNo")) {
+      $("#lotNo").value = state.lotNo;
+    }
     // チップボール: サーバがコイル外径から選び直すことがある(統合 1.2.35)。選んだわけを下に出す
     if (typeof state.tip === "string") {
       $$("input[name=tip]").forEach(function (r) { r.checked = r.value === state.tip; });
@@ -774,6 +777,14 @@
 
   // --- ボタン ---
   var ACTIONS = {
+    lotLookup: function () {
+      var lot = ($("#lotNo") || {}).value || "";
+      return post("/api/lot-lookup", { current: collect(), lotNo: lot }).then(function (j) {
+        toast(j.message, j.ok ? (j.level || "info") : (j.level || "warn"));
+        paint(j.state);
+        if (j.ok && $("#weight1")) { $("#weight1").focus(); }
+      });
+    },
     applyWeight: function () {
       return post("/api/apply-weight", { current: collect() }).then(function (j) {
         toast(j.message, j.ok ? (j.level || "info") : (j.level || "warn"));
@@ -840,6 +851,17 @@
       x.addEventListener("click", function () { $("#quickCard").hidden = true; });
     }
   })();
+
+  // LOTNO で Enter → 検査番号を引く(統合 1.2.57)
+  var lotBox = $("#lotNo");
+  if (lotBox) {
+    lotBox.addEventListener("keydown", function (ev) {
+      if (ev.key !== "Enter") { return; }
+      ev.preventDefault();
+      var b = form.querySelector('[data-act="lotLookup"]');
+      if (b && !b.disabled) { b.click(); }
+    });
+  }
 
   form.addEventListener("click", function (e) {
     var btn = e.target.closest("[data-act]");

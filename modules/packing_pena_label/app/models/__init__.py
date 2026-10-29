@@ -37,6 +37,10 @@ class FormState:
     #: チップボールをコイル外径から選んだ(選ばなかった)ときの案内(統合 1.2.35。画面のチップボールの下に出す)
     tip_note: str = ""
 
+    #: LOTNO(統合 1.2.57)と、それで引いた検査番号。重量反映のとき、この検査番号なら LOTNO で外径を引く
+    lot_no: str = ""
+    lot_kensa: str = ""
+
     #: 入力欄
     kensa_no: str = ""
     weight1: str = ""
@@ -107,6 +111,8 @@ class FormState:
             "namedCb": self.named_cb,
             "tip": self.tip,
             "tipNote": self.tip_note,
+            "lotNo": self.lot_no,
+            "lotKensa": self.lot_kensa,
             "kensaNo": self.kensa_no,
             "weight1": self.weight1,
             "weight2": self.weight2,
@@ -135,6 +141,8 @@ class FormState:
         # (選んでいない。計算で止める。統合 1.2.32)
         st.tip = d["tip"] if "tip" in d else "TIP1000"
         st.tip_note = d.get("tipNote") or ""
+        st.lot_no = d.get("lotNo") or ""
+        st.lot_kensa = d.get("lotKensa") or ""
         st.kensa_no = d.get("kensaNo") or ""
         st.weight1 = d.get("weight1") or ""
         st.weight2 = d.get("weight2") or ""

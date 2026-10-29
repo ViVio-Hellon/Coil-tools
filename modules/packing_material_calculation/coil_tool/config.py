@@ -308,6 +308,8 @@ KEY_ADMIN_PASSWORD = "admin_password"
 # 発注票の定尺(`order_sheet_service.stock_lengths`)。**ふだんは梱包資材マスタの表「リプラサイズ」**
 # から作り、この設定は表が空のときだけ使う(統合 1.2.13)。画面には欄が無い
 KEY_STOCK_LENGTHS = "stock_lengths"
+# 発注票の「LOTで分ける」(資材計算 0.2.35)。最後に作ったときの選び方を覚えておく
+KEY_ORDER_BY_LOT = "order_by_lot"
 
 # 起動時の自動取り込みを既定で ON にするか。
 # 元ファイルが更新されているときだけ取り込むので毎回全部は読み直さない

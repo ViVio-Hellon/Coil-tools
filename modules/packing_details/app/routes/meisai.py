@@ -316,8 +316,14 @@ _STARTED_LOCKED = {
                   "変えるときは「全クリア」してからにしてください。", "value"),
     "jou_su": ("jou_su_locked", "積み上げを始めたロットは丈数を変えられません。"
                "丈数を変えるときは「全クリア」してからにしてください。", "value"),
-    "strands": ("strands_locked", "前工程実績数・丈数が条番号を配ったときと違うため、積み上げを始めた"
-                "ロットでは配り直せません。「全クリア」してからにしてください。", ""),
+    # 条番号表示は、積み上げを始めたら押させない(VER 0.13.35・現場の指示「積み上げが始まったら丈数と重量の
+    # 変更はできなくしろ」)。以前は配分が変わらない再表示を通していたので、丈数の −/＋ が押せなくても
+    # 条番号表示は押せた(押すと出力していない使用済みがほどけ、重量も読み直された)
+    "strands": ("strands_locked", "積み上げを始めたロットは「条番号表示」を押せません(条番号を配り直すと、"
+                "積んだコイル・出力済みの紙と食い違うため)。やり直すときは「全クリア」してからにしてください。", ""),
+    # 重量も同じ(VER 0.13.35)。紙に載る重量が途中で変わらないように
+    "weights": ("weights_locked", "積み上げを始めたロットは重量を変えられません。"
+                "重量を変えるときは「全クリア」してからにしてください。", "value"),
 }
 
 
@@ -335,8 +341,6 @@ def _locks(conn, board, started=None) -> dict:
         started = _stacking_started(conn, board)
     if started:
         for action, refusal in _STARTED_LOCKED.items():
-            if action == "strands" and not board.redeal_differs():
-                continue        # 配分が変わらない再表示は通す(開き直したあとの作り直し)
             out.setdefault(action, refusal)
     return out
 
@@ -500,13 +504,13 @@ def set_weights():
         return jsonify(error_body("no_lot", "ロット番号を入力してください。")), 409
 
     values = (request.get_json(silent=True) or {}).get("weights", [])
-    refused = _take_screen_weights(board, values)
+    refused = _take_screen_weights(board, values, conn=conn)
     if refused:
         return refused
     return _ok(conn)
 
 
-def _take_screen_weights(board, values):
+def _take_screen_weights(board, values, *, conn=None):
     """画面の重量欄の値を読んで盤面に入れる (VBA `ReadWeights`)。断るときは応答を返す。
 
     VBA は「出力」「条番号表示」を押すたびに、画面の欄を読み直していた。サーバに残っている
@@ -516,9 +520,16 @@ def _take_screen_weights(board, values):
     if not isinstance(values, list):
         values = []         # 形が違うものは「未入力」として断る(1文字ずつ読まない)
     try:
-        board.weights = meisai_service.read_weights(values, board.jou_su)
+        weights = meisai_service.read_weights(values, board.jou_su)
     except RefusedError as exc:
         return _refused(exc)
+    if list(weights) != list(board.weights):
+        # 積み上げを始めたら重量は変えさせない(VER 0.13.35)。同じ値なら通す(出力のたびに欄の値を添えて来る)
+        locked = _locks(conn or get_db(), board).get("weights")
+        if locked:
+            code, message, field = locked
+            return jsonify(error_body(code, message, field)), 409
+    board.weights = weights
     return None
 
 
@@ -566,7 +577,7 @@ def build_strands():
             "bad_zen_kotei",
             "前工程実績数が0以下です。正しい値を入力してください。")), 400
     if "weights" in body:
-        refused = _take_screen_weights(board, body["weights"])
+        refused = _take_screen_weights(board, body["weights"], conn=conn)
         if refused:
             return refused
     if any(w <= 0 for w in board.weights[:board.jou_su]):
@@ -697,7 +708,7 @@ def output():
 
     body = request.get_json(silent=True) or {}
     if "weights" in body:
-        refused = _take_screen_weights(board, body["weights"])
+        refused = _take_screen_weights(board, body["weights"], conn=conn)
         if refused:
             return refused
     confirm = bool(body.get("confirm"))
