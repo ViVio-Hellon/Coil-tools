@@ -19,6 +19,21 @@ from typing import List, Optional
 from .size_master import take_of
 from .vba_compat import is_numeric, to_narrow
 
+#: ロット番号(LOTNO)の形(統合 1.2.63・現場の指示「7桁の決まりのある文字列が来たら自動で引く」)。
+#: 現場から受け取った取り込み元の 8,301 ロット(SIKALOT・SIKAHIKI・LS4LOT・実績_LS4)と、現場が示した一覧で確かめた形:
+#:   1 文字目 英字 / 2 文字目 英字か数字 / 3〜4 文字目 数字 / 5〜6 文字目 「数字+英字」か「英字+数字」 / 7 文字目 数字
+#:   例 L7151N0・LX051L0・L815C51・HD034Y0・L0023M9・LY94Q50
+#: 検査番号(N6X0945・H670129)はこの形に当たらない(3 文字目が英字、または 5〜6 文字目が両方数字)。
+#: 画面はこの形がそろったら自動で検査番号を引く(`app.js`。この文字列を画面へ渡す)
+LOT_PATTERN = r"^[A-Z][A-Z0-9][0-9]{2}(?:[0-9][A-Z]|[A-Z][0-9])[0-9]$"
+
+
+def is_lot_no(text: str) -> bool:
+    """ロット番号の形か(`LOT_PATTERN`)。"""
+    import re
+    return re.match(LOT_PATTERN, str(text or "")) is not None
+
+
 #: VBA ValidateKensaNo の共通メッセージ前半（Chr(10) = LF）
 _MSG_HEAD = "検査NOが7桁入力されていない\nもしくは"
 

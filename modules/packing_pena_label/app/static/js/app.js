@@ -855,6 +855,23 @@
   // LOTNO で Enter → 検査番号を引く(統合 1.2.57)
   var lotBox = $("#lotNo");
   if (lotBox) {
+    // ロット番号の形(7 桁)がそろったら、押さなくても自動で引く(統合 1.2.63・現場の指示)。
+    // 形はサーバの `validation.LOT_PATTERN`(画面へ渡す)。読み取り機の速い入力も、そろってから少し待って1回だけ
+    var lotRe = null;
+    try { lotRe = new RegExp(lotBox.getAttribute("data-lot-pattern") || "^$"); } catch (err) { lotRe = null; }
+    var lastAutoLot = "";
+    var autoLotTimer = null;
+    lotBox.addEventListener("input", function () {
+      clearTimeout(autoLotTimer);
+      autoLotTimer = setTimeout(function () {
+        var v = String(lotBox.value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (!lotRe || !lotRe.test(v)) { lastAutoLot = ""; return; }   // 打ち直したら、同じ番号でもまた引く
+        if (v === lastAutoLot) { return; }
+        lastAutoLot = v;
+        var b = form.querySelector('[data-act="lotLookup"]');
+        if (b && !b.disabled) { b.click(); }
+      }, 150);
+    });
     lotBox.addEventListener("keydown", function (ev) {
       if (ev.key !== "Enter") { return; }
       ev.preventDefault();

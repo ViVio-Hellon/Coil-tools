@@ -23,6 +23,7 @@ from ..config import code_stamp as _code_stamp
 from ..services import label_layout as LL
 from ..services import size_master as SM
 from ..services import tare_figure as TF
+from ..services import validation
 from ..view import Renderer, esc, nl2br
 
 
@@ -321,6 +322,8 @@ class PageRoutes:
             "lblSize2": esc(state.lbl_size2), "lblWeight2": esc(state.lbl_weight2),
             "kensaNo": esc(state.kensa_no),
             "lotNo": esc(state.lot_no),
+            # LOTNO の形(統合 1.2.63)。そろったら画面が自動で検査番号を引く
+            "lotPattern": esc(validation.LOT_PATTERN),
             "weight1": esc(state.weight1), "weight2": esc(state.weight2),
             "tip1000": "checked" if state.tip == "TIP1000" else "",
             "tip950": "checked" if state.tip == "TIP950" else "",

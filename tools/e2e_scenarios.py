@@ -727,9 +727,10 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
           "/pena/labels/print" in labels.url and labels.locator("section.sheet").count() >= 1, labels.url)
     labels.close()
     # LOTNO から検査番号と外径(統合 1.2.57)。梱包明細と同じ仕掛(LS4LOT)の同じ行
-    fr.fill("#lotNo", "l5160z0")
-    fr.press("#lotNo", "Enter")
-    check("ペナラベル: LOTNO で仕掛ロット(SIKALOT)の検査番号が新検番に入る(1.5.52・統合 1.2.58)",
+    # 7 桁そろえば押さなくても自動で引く(統合 1.2.63)。読み取り機と同じく続けて打つ(Enter は押さない)
+    fr.fill("#lotNo", "")
+    fr.type("#lotNo", "l5160z0", delay=15)
+    check("ペナラベル: LOTNO を 7 桁打つと自動で、仕掛ロット(SIKALOT)の検査番号が新検番に入る(1.5.52・統合 1.2.63)",
           wait_until(lambda: fr.input_value("#kensaNo") == "N6X0945", 8),
           (fr.input_value("#kensaNo"), text(fr, "#toast .toast-body")))
     check("ペナラベル: LOTNO の外径(1100mm)でチップボールを選ぶ(1.5.52)",

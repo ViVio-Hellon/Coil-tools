@@ -258,3 +258,32 @@ class LotNoTest(WorkflowTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LotPatternTest(unittest.TestCase):
+    """LOTNO の形(統合 1.2.63)。7 桁の決まった形がそろったら画面が自動で引く。"""
+
+    def test_現場のロット番号はすべて当たる(self):
+        from modules.packing_pena_label.app.services import validation as V
+        for lot in ("L7151N0", "LX051L0", "L815C51", "L997A00", "HD034Y0", "H0030R0", "J1011D0",
+                    "L0023M9", "LZ801B0", "LY94Q50", "N915C50", "L6666A6", "NX31E50", "LX17N52",
+                    "N926T52", "L7777H9", "N0013M9", "HD999A0", "LX15F50", "N194K00"):
+            self.assertTrue(V.is_lot_no(lot), lot)
+
+    def test_検査番号や打ちかけは当たらない(self):
+        from modules.packing_pena_label.app.services import validation as V
+        for text in ("N6X0945", "H670129", "K6X1502", "N6X786L", "L7151N", "L7151N00", "l7151n0",
+                     "L71S1N0", "LX0510L", "", "0000000"):
+            self.assertFalse(V.is_lot_no(text), text)
+
+    def test_画面へ形を渡し_そろったら自動で引く(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        def read(*parts):
+            with open(os.path.join(root, *parts), encoding="utf-8") as f:
+                return f.read()
+        self.assertIn('data-lot-pattern="{{lotPattern}}"', read("app", "templates", "index.html"))
+        self.assertIn('"lotPattern": esc(validation.LOT_PATTERN)', read("app", "routes", "pages.py"))
+        js = read("app", "static", "js", "app.js")
+        self.assertIn('getAttribute("data-lot-pattern")', js)
+        self.assertIn('lotBox.addEventListener("input"', js)
