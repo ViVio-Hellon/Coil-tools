@@ -128,14 +128,15 @@ DEFAULT_KONPO_DB_DIR = Path(os.environ.get(
     r"\\nlmfangyshrd\各課共有\0130_日軽稲沢\梱包課\梱包課共有\仕掛"))
 KONPO_DB_FILE = "LS4LOT.sqlite3"
 
-# CSV などの書き出し先。**書く場所**なので、既定は共有ではなくツールの下。
+# CSV などの書き出し先。**書く場所**なので、既定は共有ではなくこの PC の領域(`%LOCALAPPDATA%\\CoilMaterialTool\\export\\`)。
 # 【いまは使っていない】設定の欄は外した(統合 1.2.22。そこへ書き出す処理が移植元から無かった)。
 # 書き出す機能を足すときの置き場所として残す
 # 共有に届かない端末でも書き出しそのものは必ず成功させる
-# 統合版では統合アプリのフォルダの直下 `export\\packing_material_calculation\\`
+# 統合 1.2.63 までは統合アプリのフォルダの直下だった。ツールのフォルダは更新のたびに丸ごと上書きされる前提
+# (業務ツール統合ランチャー 1.8.9)なので外へ移した(統合 1.2.64)
 DEFAULT_EXPORT_DIR = Path(os.environ.get(
     "COIL_TOOL_EXPORT_DIR",
-    str(APP_DIR / "export" / "packing_material_calculation")))
+    str(app_config.local_root() / "export")))
 
 
 # ------------------------------------------------------------------

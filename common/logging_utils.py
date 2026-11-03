@@ -195,7 +195,12 @@ def legacy_dirs() -> list[Path]:
 
 
 def writable_problem(folder: Path) -> str:
-    """そのフォルダに書けるか。書けなければ理由(作れなければ作れない理由)。"""
+    """そのフォルダに書けるか。書けなければ理由(作れなければ作れない理由)。
+
+    ツールのフォルダの中は書けないとみなす(統合 1.2.64。更新のたびに丸ごと上書きされる。相対で書くとここになる)。
+    """
+    if app_config.inside_app(folder):
+        return f"{app_config.INSIDE_APP_MESSAGE}: {folder}"
     try:
         folder.mkdir(parents=True, exist_ok=True)
         probe = folder / f".write_test_{os.getpid()}_{threading.get_ident()}"

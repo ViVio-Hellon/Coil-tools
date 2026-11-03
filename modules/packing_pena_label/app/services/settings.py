@@ -310,6 +310,10 @@ def check_path(spec: SettingSpec, value: str) -> CheckResult:
     if spec.kind == "dir":
         if not os.path.isdir(v):
             return CheckResult(False, "error", "フォルダーではありません")
+        if spec.need_write and _inside_app(v):
+            # 書く場所はツールのフォルダの外(統合 1.2.64。更新のたびに丸ごと上書きされる)
+            return CheckResult(False, "error", "ツールのフォルダの中です。外のフォルダーを指定してください"
+                                               "(更新のたびに丸ごと上書きされ、書いたものが消えます)")
         if spec.must_contain:
             target = os.path.join(v, spec.must_contain)
             if not os.path.exists(target):
@@ -416,6 +420,15 @@ def coerce(spec: SettingSpec, raw: Any) -> Any:
     return s
 
 
+def _inside_app(path: str) -> bool:
+    """ツールのフォルダの中か(統合版のときだけ見る。単体のペナラベルは見ない)。"""
+    try:
+        from common import app_config as _app
+    except Exception:                                   # noqa: BLE001 - 単体のペナラベル
+        return False
+    return _app.inside_app(path)
+
+
 def validate_all(values: Dict[str, Any]) -> Dict[str, str]:
     """保存前の検証。``{キー: エラー文}``（空なら問題なし）。"""
     errors: Dict[str, str] = {}
@@ -425,9 +438,13 @@ def validate_all(values: Dict[str, Any]) -> Dict[str, str]:
             errors[key] = "不明な設定です"
             continue
         try:
-            coerce(spec, raw)
+            value = coerce(spec, raw)
         except ValueError as exc:
             errors[key] = str(exc)
+            continue
+        if spec.kind == "dir" and spec.need_write and value and _inside_app(str(value)):
+            # 書く場所はツールのフォルダの外(統合 1.2.64。更新のたびに丸ごと上書きされる。相対で書くとここになる)
+            errors[key] = "ツールのフォルダの中には書けません(更新のたびに丸ごと上書きされます)。外のフォルダーを指定してください"
     return errors
 
 

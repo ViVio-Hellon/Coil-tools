@@ -152,12 +152,15 @@ HISTORY_KEEP_YEARS = 3
 # ときはその場で送るので、これは届かなかった分を拾い直すためのもの
 HISTORY_SEND_INTERVAL_SEC = 300
 
-# CSVの書き出し先。**読む場所ではなく書く場所**なので、共有ではなく
-# このアプリのフォルダの下(総合ツールと同じ考え)。ブラウザでの
-# ダウンロードはしない ── ファイルに書いて、場所を出す(現場の指定)
-# 統合版では統合アプリのフォルダの直下 `export\\packing_details\\`(機能ごとに分ける)
+# CSVの書き出し先。**読む場所ではなく書く場所**なので、共有ではなくこの PC の領域
+# (`%LOCALAPPDATA%\\PackingDetails\\export\\`)。ブラウザでのダウンロードはしない ── ファイルに書いて、
+# 場所を出す(現場の指定)。
+# 統合 1.2.63 までは統合アプリのフォルダの直下 `export\\packing_details\\` だった。業務ツール統合ランチャー 1.8.9 から
+# ツールのフォルダは更新のたびに丸ごと上書きされる前提なので、外へ移した(前の場所の CSV は初回に写す。`export_dir`)
 EXPORT_DIR = Path(os.environ.get("PACKING_DETAILS_EXPORT_DIR",
-                                 str(APP_DIR / "export" / "packing_details")))
+                                 str(app_config.local_root() / "export")))
+#: 統合 1.2.63 までの書き出し先(アプリのフォルダの中)。残っていれば初回に新しい場所へ写す
+LEGACY_EXPORT_DIR = APP_DIR / "export" / "packing_details"
 
 # 仕掛台帳の3ファイル(手元のテーブル名 → 取り込み元のファイル名)。
 # 拡張子違い(.db)も `source_db.find` が拾う。
@@ -378,7 +381,7 @@ def konpo_db_dir() -> Path:
 def export_dir() -> Path:
     """CSV の出力先(マスタ管理・明細の履歴)。設定画面の値を優先する。
 
-    既定はアプリのフォルダの `export\\packing_details\\`(`EXPORT_DIR`)。設定の
+    既定はこの PC の領域の `export\\`(`EXPORT_DIR`。統合 1.2.64 から。前はアプリのフォルダの中)。設定の
     「置き場所・取り込み」で変えられる(現場の指摘: 出力先も設定できるように)。
     相対で書くとアプリのフォルダからたどる(ほかの置き場所と同じ)。
     """
@@ -386,7 +389,39 @@ def export_dir() -> Path:
     configured = user_settings.get(KEY_EXPORT_DIR)
     if isinstance(configured, str) and configured.strip():
         return resolve_dir(configured)
+    carry_legacy_exports()
     return EXPORT_DIR
+
+
+_legacy_checked = False
+
+
+def carry_legacy_exports() -> list[str]:
+    """前の書き出し先(アプリのフォルダの中)に残っている CSV を、新しい既定の場所へ1度だけ写す。
+
+    写すのは新しい場所に同じ名前が無いものだけ。前の場所のものは消さない(更新で消えるまでは残る)。
+    写せなくても書き出しは止めない。戻り値は写した名前(統合 1.2.64)。
+    """
+    global _legacy_checked
+    if _legacy_checked:
+        return []
+    _legacy_checked = True
+    copied: list[str] = []
+    try:
+        old = LEGACY_EXPORT_DIR
+        if not old.is_dir() or old.resolve() == EXPORT_DIR.resolve():
+            return []
+        import shutil
+        EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+        for item in old.iterdir():
+            target = EXPORT_DIR / item.name
+            if item.is_file() and not target.exists():
+                shutil.copy2(item, target)
+                copied.append(item.name)
+    except OSError as exc:
+        from .logging_utils import get_logger
+        get_logger("config").warning("前の書き出し先の CSV を写せませんでした: %s", exc)
+    return copied
 
 
 def ensure_dirs() -> None:

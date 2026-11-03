@@ -179,7 +179,10 @@ def redirect_pycache(root: Path) -> None:
         try:
             target.mkdir(parents=True, exist_ok=True)
         except OSError:
-            return                                  # 書かないまま動く(遅くなるだけ)
+            # 書かないまま動く(遅くなるだけ)。アプリのフォルダへは書かない(統合 1.2.64。以前はデスクトップ版の
+            # 経路で書く設定のまま戻り、アプリのフォルダに `__pycache__` ができていた)
+            sys.dont_write_bytecode = True
+            return
         sys.pycache_prefix = str(target)
     sys.dont_write_bytecode = bool(sys.flags.dont_write_bytecode)
 

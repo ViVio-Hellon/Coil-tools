@@ -37,7 +37,13 @@ from __future__ import annotations
 import json
 import os
 import sys
-import threading
+
+# **アプリのフォルダに `__pycache__` を作らない**(統合 1.2.64。業務ツール統合ランチャー 1.8.9: ツールのフォルダは
+# 更新のたびに丸ごと上書きされる前提)。書き先(ローカル領域の pycache\)が決まるまで書かない。以前は
+# `start_app` と `common` を読み込んだ時点で、アプリのフォルダに `__pycache__` ができていた
+sys.dont_write_bytecode = True
+
+import threading  # noqa: E402
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Optional

@@ -508,7 +508,13 @@ def read_second_lot():
 
 
 def _writable_problem(folder) -> str:
-    """そのフォルダに CSV を書けるか。書けなければ理由(無ければ作ってみる)。"""
+    """そのフォルダに CSV を書けるか。書けなければ理由(無ければ作ってみる)。
+
+    ツールのフォルダの中は断る(統合 1.2.64。更新のたびに丸ごと上書きされる。相対で書くとここになる)。
+    """
+    from common import app_config as _app
+    if _app.inside_app(folder):
+        return f"{_app.INSIDE_APP_MESSAGE}: {folder}"
     try:
         folder.mkdir(parents=True, exist_ok=True)
         probe = folder / ".write-test"
@@ -584,6 +590,10 @@ def set_record_dir():
             target = config.resolve_dir(value) / work_record.pc_folder_name()
         except ValueError as exc:
             return jsonify(error_body("bad_path", str(exc), "value")), 400
+        from common import app_config as _app
+        if _app.inside_app(target):
+            # 共有がいま届かないのとは違い、置いても更新で消える。保存しない(統合 1.2.64)
+            return jsonify(error_body("inside_app", f"{_app.INSIDE_APP_MESSAGE}: {target}", "value")), 400
     if not user_settings.save(config.KEY_RECORD_DIR, value):
         return jsonify(error_body("write_failed", "設定ファイルに書けませんでした。")), 500
     if target is None:

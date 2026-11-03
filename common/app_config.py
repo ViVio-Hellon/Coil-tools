@@ -51,6 +51,25 @@ from typing import Any, Optional
 # このファイルの2つ上 = リポジトリのルート(= 基盤仕様書のいう ApplicationRoot)
 APP_ROOT = Path(__file__).resolve().parent.parent
 
+
+def inside_app(path: Any) -> bool:
+    """その場所がツールのフォルダ(`APP_ROOT`)の中か(統合 1.2.64)。
+
+    業務ツール統合ランチャー 1.8.9 から、ツールのフォルダは**更新のたびに丸ごと上書きされる**前提。書き出し・記録・
+    ログの置き場所を中にすると、更新で消える・書きかけのファイルが上書きを止める・共有では何台もが同じファイルに書く。
+    """
+    try:
+        target = os.path.normcase(os.path.abspath(str(path)))
+        root = os.path.normcase(os.path.abspath(str(APP_ROOT)))
+        return os.path.commonpath([target, root]) == root
+    except (TypeError, ValueError):
+        return False
+
+
+#: 置き場所がツールのフォルダの中だったときの知らせ(後ろに置き場所を足す)
+INSIDE_APP_MESSAGE = ("ツールのフォルダの中には書けません(更新のたびに丸ごと上書きされ、書いたものが消えます)。"
+                      "ツールのフォルダの外を指定してください")
+
 # アプリ固有値の置き場所。環境変数で差し替えられるようにしておくと、
 # 検証時に本番設定を書き換えずに試せる
 CONFIG_PATH = Path(os.environ.get(
