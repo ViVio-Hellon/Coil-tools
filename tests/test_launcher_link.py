@@ -195,7 +195,7 @@ class ShutdownAsksScreensTest(unittest.TestCase):
 
 
 class ProcessManagerTest(unittest.TestCase):
-    """stop.bat(process_manager.py)の戻り値 0 / 2 / 1。"""
+    """stop.bat(process_manager.py)の戻り値 0 / 3 / 1(止めなかったは 3。統合 1.2.64・ランチャー 1.8.9)。"""
 
     def setUp(self):
         info = mock.Mock(port=8740, token="t", pid=12345, app_root="")
@@ -215,15 +215,42 @@ class ProcessManagerTest(unittest.TestCase):
     def test_stopped_is_0(self):
         self.assertEqual(self.run_main({"ok": True}), 0)
 
-    def test_asking_waits_then_0_or_2(self):
+    def test_asking_waits_then_0_or_3(self):
         asking = {"ok": False, "reason": "asking", "message": "確かめています"}
         self.assertEqual(self.run_main(asking, gone=True), 0)
-        self.assertEqual(self.run_main(asking, gone=False), 2)
+        self.assertEqual(self.run_main(asking, gone=False), 3)
 
-    def test_refused_and_busy_are_2(self):
-        self.assertEqual(self.run_main({"ok": False, "reason": "refused"}), 2)
+    def test_refused_and_busy_are_3(self):
+        """ランチャー 1.8.9: 処理中で止めないときは 0 以外(おすすめは 3)。"""
+        self.assertEqual(self.run_main({"ok": False, "reason": "refused"}), 3)
         self.assertEqual(self.run_main({"ok": False, "busy": True, "reason": "busy",
-                                        "running": ["資材計算: 取り込み"]}), 2)
+                                        "running": ["資材計算: 取り込み"]}), 3)
+
+    def test_busy_reason_is_the_first_stdout_line(self):
+        """標準出力の1行目が理由(管理者の一覧と利用者への知らせに出る)。"""
+        import io
+        from contextlib import redirect_stdout
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.run_main({"ok": False, "busy": True, "reason": "busy", "running": ["資材計算: 取り込み"]})
+        self.assertEqual(out.getvalue().splitlines()[0], "止めませんでした: 実行中の処理があります: 資材計算: 取り込み")
+
+    def test_asking_note_goes_to_stderr(self):
+        """画面で確認中の途中の知らせは標準エラーへ。1行目は最後の結果。"""
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            self.run_main({"ok": False, "reason": "asking", "message": "確かめています"}, gone=False)
+        self.assertTrue(out.getvalue().startswith("止めませんでした: まだ画面で確認中です"), out.getvalue())
+        self.assertIn("確かめています", err.getvalue())
+
+    def test_nopause_is_ignored(self):
+        """stop.bat の /nopause(ランチャー 1.8.9)が process_manager に渡っても断らない。"""
+        with mock.patch.object(process_manager, "_request_shutdown", return_value={"ok": True}), \
+                mock.patch.object(launch_guard, "wait_port_closed", return_value=True):
+            self.assertEqual(process_manager.main(["/nopause"]), 0)
+            self.assertEqual(process_manager.main(["--force", "/NOPAUSE"]), 0)
 
     def test_reason_comes_first_for_the_launcher(self):
         """ランチャー 1.7.1 は stop.bat の出力のはじめの行を理由として見せる。"""

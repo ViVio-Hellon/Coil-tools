@@ -247,6 +247,24 @@ class BatchTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn("pause", read_text(name))
 
+    def test_stop_batはランチャー189の決まりに合わせる(self) -> None:
+        """業務ツール統合ランチャー 1.8.9「更新のため全 PC で止める」(統合 1.2.64)。
+
+        止めなかったら 3・/nopause か STOP_NOPAUSE=1 で一時停止を飛ばす・道は " で囲み括弧の中に書かない。
+        """
+        text = read_text("stop.bat")
+        commands = _commands(text)
+        self.assertIn('if "%STOP_NOPAUSE%"=="1" set "NOPAUSE=1"', commands)
+        self.assertIn('for %%A in (%*) do if /i "%%~A"=="/nopause" set "NOPAUSE=1"', commands)
+        self.assertIn('if "%RC%"=="3" set "CODE=3"', commands)
+        self.assertIn("endlocal & exit /b %CODE%", commands)
+        pauses = [c for c in commands if c.endswith("pause") and "nopause" not in c.lower()]
+        self.assertEqual(pauses, [], "一時停止はどれも NOPAUSE で飛ばせる")
+        for c in commands:
+            if "%~dp0" in c:
+                self.assertIn('"%~dp0"', c, "道は \" で囲む")
+                self.assertNotIn("(", c.replace("(%*)", ""), "道を括弧の中に書かない(フォルダ名の括弧で切れる)")
+
     def test_呼び出す先が実在する(self) -> None:
         for name, target in (("start.bat", "start_app.py"),
                              ("stop.bat", "process_manager.py")):

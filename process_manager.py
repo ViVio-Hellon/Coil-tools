@@ -73,10 +73,13 @@ UNSURE_NOTE = "(待ち受けは閉じました。プロセスが居なくなっ�
 # 画面で確かめてもらうのを待つ上限(秒)。ランチャーは stop.bat を 20 秒で見切る
 ASKING_WAIT_SEC = 15.0
 
-#: 戻り値
+#: 戻り値。止めなかった(処理中・保存していない入力・画面で確認中)は 3(統合 1.2.64。業務ツール統合ランチャー
+#: 1.8.9 の「更新のため全 PC で止める」の決まり: 処理中で止めないときは 0 以外・おすすめは 3。1.2.63 までは 2)
 EXIT_STOPPED = 0
 EXIT_FAILED = 1
-EXIT_REFUSED = 2
+EXIT_REFUSED = 3
+#: stop.bat が一時停止を飛ばす印(process_manager は読み捨てる)
+NOPAUSE_ARGS = ("/nopause", "--nopause")
 
 DESKTOP_MESSAGE = ("デスクトップ版(コイル梱包ツール.exe の窓)が動いています。"
                    "窓の × か「終了」で閉じてください(stop.bat では止めません)。")
@@ -159,7 +162,9 @@ def stop(mode: str, *, force: bool = False) -> StopResult:
     if reason == "asking":
         # 開いている画面に、保存していない入力を確かめてから閉じるよう頼んだ。
         # 済めば入口が自分で終わる。少しだけ待つ
-        print(asked.get("message") or "画面に確かめてもらっています")
+        # 途中の知らせは標準エラーへ(統合 1.2.64)。ランチャーは標準出力の1行目を「止めなかった理由」として
+        # 管理者の一覧と利用者への知らせに出すので、1行目は最後の結果(`止めませんでした: …`)にする
+        print(asked.get("message") or "画面に確かめてもらっています", file=sys.stderr)
         if _wait_gone(info.port, ASKING_WAIT_SEC):
             launch_guard.remove_lock(mode)
             result.stopped = True
@@ -337,6 +342,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     # 古い launcher_stop.bat が残ると、ランチャー 1.7〜 はそれを終了の入口として使う。そのときも
     # 引数の誤りで断らず、ふつうに止める(読み捨てる)
     parser.add_argument("--any", action="store_true", help=argparse.SUPPRESS)
+    if argv is None:
+        argv = sys.argv[1:]
+    # `/nopause`(stop.bat の一時停止を飛ばす印。ランチャー 1.8.9)は読み捨てる
+    argv = [a for a in argv if a.lower() not in NOPAUSE_ARGS]
     args = parser.parse_args(argv)
 
     targets = list(modes.KEYS) if args.all else [modes.normalize(args.mode)]
