@@ -127,14 +127,19 @@ class BuildResult:
     files: int = 0
     with_settings: bool = False
     zip_path: str = ""
+    #: 一式を入れた中のフォルダ(``<out>\\機側ツール``。統合 1.2.66)
+    tool_dir: str = ""
 
     def to_dict(self) -> dict:
-        return {"out": self.out, "lines": list(self.lines), "files": self.files,
+        return {"out": self.out, "tool_dir": self.tool_dir, "lines": list(self.lines), "files": self.files,
                 "withSettings": self.with_settings, "zipPath": self.zip_path}
 
 
 #: 配布用フォルダの名前の頭(統合 1.2.48・現場の指定。機側(ラインの PC)に配る統合ツール)
 DIST_PREFIX = "機側用統合"
+#: 一式を入れる中のフォルダの名前(統合 1.2.66・現場の指定)。**版を入れない**。版は親の ``機側用統合_VER<版>`` に入れる。
+#: 配った先では、この「機側ツール」をそのまま決まった場所に置く・上書きする(業務ツール統合ランチャー 1.8.9: フォルダ名に版を付けない)
+TOOL_DIR = "機側ツール"
 
 
 def dist_name(version: str = "") -> str:
@@ -264,6 +269,10 @@ def build(out: Optional[Path] = None, *, with_settings: bool = True,
                                % (out, MEMO_NAME))
         shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)
+    parent = out
+    # 一式は中の「機側ツール」へ(統合 1.2.66)。配布メモは親に置く(置き方の説明。一式には混ぜない)
+    out = parent / TOOL_DIR
+    out.mkdir()
 
     try:
         missing = []
@@ -281,7 +290,8 @@ def build(out: Optional[Path] = None, *, with_settings: bool = True,
         if missing:
             raise BuildRefused("配るはずのファイルがありません: " + ", ".join(missing))
 
-        lines = ["配布用フォルダを作りました: %s" % out,
+        lines = ["配布用フォルダを作りました: %s" % parent,
+                 "一式は中の「%s」フォルダです（フォルダ名に版は入れていません）" % TOOL_DIR,
                  # 統合ツールの版と3機能の版(分けて持つ。common/versions.py)
                  "版: %s" % _versions.describe(),
                  "   （ペナラベルの中身の指紋 %s / %s）" % (code_stamp(), APP_BUILD)]
@@ -341,24 +351,24 @@ def build(out: Optional[Path] = None, *, with_settings: bool = True,
         files = sum(1 for p in out.rglob("*") if p.is_file())
         lines.append("ファイル数: %d" % files)
         # Windows のメモ帳でも崩れないよう BOM 付き・CRLF
-        (out / MEMO_NAME).write_text(_memo(lines).replace("\n", "\r\n"),
-                                     encoding="utf-8-sig", newline="")
+        (parent / MEMO_NAME).write_text(_memo(lines).replace("\n", "\r\n"),
+                                        encoding="utf-8-sig", newline="")
     except BuildRefused:
-        shutil.rmtree(str(out), ignore_errors=True)
+        shutil.rmtree(str(parent), ignore_errors=True)
         raise
     except OSError as exc:
-        shutil.rmtree(str(out), ignore_errors=True)
+        shutil.rmtree(str(parent), ignore_errors=True)
         raise BuildRefused("作れませんでした: %s" % exc)
 
-    result = BuildResult(out=str(out), lines=lines, files=files,
-                         with_settings=included)
+    result = BuildResult(out=str(parent), lines=lines, files=files,
+                         with_settings=included, tool_dir=str(out))
     if make_zip:
-        archive = shutil.make_archive(str(out), "zip", root_dir=str(out.parent),
-                                      base_dir=out.name)
+        archive = shutil.make_archive(str(parent), "zip", root_dir=str(parent.parent),
+                                      base_dir=parent.name)
         result.zip_path = archive
         result.lines.append("zip も作りました: %s" % archive)
     log.info("配布用フォルダを作りました: %s（%d ファイル、配布設定 %s）",
-             out, files, "あり" if included else "なし")
+             parent, files, "あり" if included else "なし")
     return result
 
 
@@ -370,9 +380,9 @@ def _memo(lines: List[str]) -> str:
         *lines,
         "",
         "配った先ですること",
-        "  1. 決まったフォルダ（例 C:\\業務ツール\\コイル梱包ツール。共有サーバーでもよい）に、このフォルダの中身を置く。",
-        "     このフォルダの名前（%s_VER…）のまま置かない。フォルダ名に版を付けない" % DIST_PREFIX,
-        "     （版が変わるたびに道が変わり、業務ツール統合ランチャーの登録やショートカットが切れる）",
+        "  1. 中の「%s」フォルダを、決まった場所（例 C:\\業務ツール\\。共有サーバーでもよい）に置く。" % TOOL_DIR,
+        "     版はこの親フォルダ（%s_VER…）の名前にだけ入っています。「%s」の名前は変えない" % (DIST_PREFIX, TOOL_DIR),
+        "     （版が変わるたびに道が変わると、業務ツール統合ランチャーの登録やショートカットが切れる）",
         "  2. runtime フォルダが無い場合は、Python が入っているか確かめる（.venv は作らない）",
         "  3. scripts\\make_shortcuts.vbs をダブルクリックすると、そのフォルダに",
         "     ショートカットが2つできる（%s(ブラウザ版)・%s(デスクトップ版)）。" % (APP_NAME, APP_NAME),
@@ -385,11 +395,11 @@ def _memo(lines: List[str]) -> str:
         "以前の版から入れ替えるとき（統合 1.2.64 から: 決まったフォルダを丸ごと上書きする）",
         "  1. 古い版を止める。業務ツール統合ランチャーに登録しているときは［更新のため全 PC で止める］。",
         "     そうでなければ、デスクトップ版は「終了」、ブラウザ版は stop.bat",
-        "  2. 決まったフォルダへ、このフォルダの中身を丸ごと上書きする（フォルダの名前は変えない）",
+        "  2. 置いてある「%s」フォルダへ、新しい「%s」の中身を丸ごと上書きする（名前は変えない）" % (TOOL_DIR, TOOL_DIR),
         "     端末ごとの設定・作業状態・書き出した CSV・記録・ログは %LOCALAPPDATA% の下（PackingDetails・",
         "     PackingPenaLabel・CoilMaterialTool。統合アプリのログは CoilPackingTools）にあるので、",
         "     上書きしても消えません。ツールのフォルダの中には何も書きません",
-        "     配布設定（配布設定\\）は、このフォルダに入っているものに置き換わります",
+        "     配布設定（%s\\配布設定\\）は、新しい一式に入っているものに置き換わります" % TOOL_DIR,
         "  3. 起動して確かめる",
         "",
         "入れていないもの: tests・tools・.git・src-tauri（exe のソース）・"

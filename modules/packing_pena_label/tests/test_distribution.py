@@ -349,8 +349,8 @@ class DistributionHttpTest(unittest.TestCase):
                       {"out": str(out), "password": PW, "withSettings": True})
         self.assertTrue(j["ok"], j)
         self.assertTrue((out / "配布メモ.txt").exists())
-        self.assertTrue((out / "start_app.py").exists())
-        self.assertFalse((out / "tests").exists())
+        self.assertTrue((out / "機側ツール" / "start_app.py").exists(), "一式は中の「機側ツール」(統合 1.2.66)")
+        self.assertFalse((out / "機側ツール" / "tests").exists())
         # 同じ場所へもう一度は、作り直しを選ばないと断る
         j = self.post("/api/settings/distribution/build",
                       {"out": str(out), "password": PW})

@@ -72,6 +72,7 @@ class DistFolderTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, str(self.base), True)
         self.src = fake_app(self.base)
         self.out = self.base / "out" / "機側用統合_VERX"
+        self.tool = self.out / DF.TOOL_DIR          # 一式は中の「機側ツール」(統合 1.2.66)
 
     def build(self, **kw):
         kw.setdefault("root", self.src)
@@ -89,28 +90,28 @@ class DistFolderTest(unittest.TestCase):
     def test_only_what_is_distributed_goes_in(self):
         r = self.build()
         for name in DF.INCLUDE:
-            self.assertTrue((self.out / name).exists(), name)
-        self.assertTrue((self.out / "runtime" / "python.exe").exists(),
+            self.assertTrue((self.tool / name).exists(), name)
+        self.assertTrue((self.tool / "runtime" / "python.exe").exists(),
                         "同梱の Python は配る")
         for bad in ("tests", "tools", ".git", "config/local.json", "logs",
                     MODULE + "/data/梱包資材マスタ.sqlite3", "runtime/instance.lock",
                     "runtime/instance.json", MODULE + "/app/__pycache__",
                     MODULE + "/tests", "modules/packing_details/data/packing_details.db",
                     "modules/packing_details/tests"):
-            self.assertFalse((self.out / bad).exists(), "%s が紛れた" % bad)
+            self.assertFalse((self.tool / bad).exists(), "%s が紛れた" % bad)
         self.assertGreater(r.files, 20)
 
     def test_shipped_masters_in_data_are_distributed(self):
         """このツールの data\\ は同梱のマスタ（端末ごとの中身ではない）。"""
         self.build()
         for name in ("label_stock.json", "size_master.json"):
-            self.assertTrue((self.out / MODULE / "data" / name).exists(), name)
+            self.assertTrue((self.tool / MODULE / "data" / name).exists(), name)
 
     def test_bat_files_are_copied_byte_for_byte(self):
         """start.bat / stop.bat は CP932 + CRLF。変換すると壊れる。"""
         self.build()
         for name in ("start.bat", "stop.bat", "Start.vbs"):
-            self.assertEqual((self.out / name).read_bytes(),
+            self.assertEqual((self.tool / name).read_bytes(),
                              (self.src / name).read_bytes(), name)
 
     def test_memo_is_written_for_notepad(self):
@@ -130,10 +131,10 @@ class DistFolderTest(unittest.TestCase):
             "settings": {"label_offset_x_mm": 2.5}}, ensure_ascii=False),
             encoding="utf-8")
         r = self.build(with_settings=False)
-        self.assertFalse((self.out / DF.SETTINGS).exists())
+        self.assertFalse((self.tool / DF.SETTINGS).exists())
         self.assertFalse(r.with_settings)
         r = self.build(with_settings=True, force=True)
-        self.assertTrue((self.out / DF.SETTINGS / PENA / D.SETTINGS_NAME).exists())
+        self.assertTrue((self.tool / DF.SETTINGS / PENA / D.SETTINGS_NAME).exists())
         self.assertTrue(r.with_settings)
         self.assertTrue(any("印刷位置の補正 X" in ln for ln in r.lines))
         memo = (self.out / DF.MEMO_NAME).read_text(encoding="utf-8-sig")
@@ -148,7 +149,7 @@ class DistFolderTest(unittest.TestCase):
         with mock.patch.object(D, "DIR", elsewhere):
             r = DF.build(self.out)               # root を渡さない＝本番と同じ経路
         self.assertTrue(r.with_settings)
-        self.assertTrue((self.out / DF.SETTINGS / PENA / D.SETTINGS_NAME).exists(),
+        self.assertTrue((self.tool / DF.SETTINGS / PENA / D.SETTINGS_NAME).exists(),
                         "配った先が読む名前（配布設定\\packing_pena_label）で入れる")
 
     # ---- 統合版: 3機能の配布設定 ---------------------------------------
@@ -178,7 +179,7 @@ class DistFolderTest(unittest.TestCase):
         r = self.build()
         self.assertTrue(r.with_settings)
         for key, label, _ in dist_settings.MODULES:
-            self.assertTrue((self.out / DF.SETTINGS / key / D.SETTINGS_NAME).exists(), key)
+            self.assertTrue((self.tool / DF.SETTINGS / key / D.SETTINGS_NAME).exists(), key)
             self.assertTrue(any(label in ln for ln in r.lines), label)
         memo = (self.out / DF.MEMO_NAME).read_text(encoding="utf-8-sig")
         self.assertIn("配布設定\\packing_details", memo)
@@ -191,7 +192,7 @@ class DistFolderTest(unittest.TestCase):
         self._stale_in_module()
         r = self.build(with_settings=False)
         self.assertFalse(r.with_settings)
-        leaked = [str(p.relative_to(self.out)) for p in self.out.rglob("*")
+        leaked = [str(p.relative_to(self.tool)) for p in self.tool.rglob("*")
                   if p.name == DF.SETTINGS or p.name == D.SETTINGS_NAME]
         self.assertEqual(leaked, [], "入れないと決めたのに入った")
 
@@ -200,14 +201,14 @@ class DistFolderTest(unittest.TestCase):
         self._export(PENA, {"label_offset_x_mm": 2.5})
         self._stale_in_module()
         self.build(with_settings=True)
-        self.assertFalse((self.out / MODULE / DF.SETTINGS).exists())
-        self.assertTrue((self.out / DF.SETTINGS / PENA / D.SETTINGS_NAME).exists())
+        self.assertFalse((self.tool / MODULE / DF.SETTINGS).exists())
+        self.assertTrue((self.tool / DF.SETTINGS / PENA / D.SETTINGS_NAME).exists())
 
     def test_only_exported_modules_go_in_and_the_rest_are_named(self):
         self._export("packing_details", {"export_dir": "D:\\出力"})
         r = self.build()
-        self.assertTrue((self.out / DF.SETTINGS / "packing_details").is_dir())
-        self.assertFalse((self.out / DF.SETTINGS / PENA).exists())
+        self.assertTrue((self.tool / DF.SETTINGS / "packing_details").is_dir())
+        self.assertFalse((self.tool / DF.SETTINGS / PENA).exists())
         self.assertTrue(any("書き出していない機能" in ln and "ペナラベル" in ln
                             and "資材計算" in ln for ln in r.lines))
 
@@ -272,10 +273,10 @@ class DistFolderTest(unittest.TestCase):
         built = self.src / "src-tauri" / "target" / "release" / "CoilPackingTools.exe"
         built.write_bytes(b"MZ-desktop")
         r = self.build()
-        self.assertEqual((self.out / DF.EXE_NAME).read_bytes(), b"MZ-desktop")
-        self.assertTrue((self.out / "bridge.py").is_file(), "exe が起動する入口")
-        self.assertFalse((self.out / "src-tauri").exists(), "外枠のソースは配らない")
-        self.assertFalse((self.out / ".github").exists())
+        self.assertEqual((self.tool / DF.EXE_NAME).read_bytes(), b"MZ-desktop")
+        self.assertTrue((self.tool / "bridge.py").is_file(), "exe が起動する入口")
+        self.assertFalse((self.tool / "src-tauri").exists(), "外枠のソースは配らない")
+        self.assertFalse((self.tool / ".github").exists())
         self.assertTrue(any(DF.EXE_NAME in line for line in r.lines))
         memo = (self.out / DF.MEMO_NAME).read_text(encoding="utf-8-sig")
         self.assertIn(DF.EXE_NAME, memo)
@@ -284,17 +285,17 @@ class DistFolderTest(unittest.TestCase):
     def test_exe_next_to_the_app_wins_and_can_be_named(self):
         (self.src / "CoilPackingTools.exe").write_bytes(b"MZ-root")
         self.build()
-        self.assertEqual((self.out / DF.EXE_NAME).read_bytes(), b"MZ-root")
+        self.assertEqual((self.tool / DF.EXE_NAME).read_bytes(), b"MZ-root")
         other = self.base / "受け取り.exe"
         other.write_bytes(b"MZ-given")
         self.build(exe=other, force=True)
-        self.assertEqual((self.out / DF.EXE_NAME).read_bytes(), b"MZ-given")
+        self.assertEqual((self.tool / DF.EXE_NAME).read_bytes(), b"MZ-given")
         with self.assertRaises(DF.BuildRefused):
             self.build(exe=self.base / "無い.exe", force=True)
 
     def test_without_exe_it_still_builds_and_says_so(self):
         r = self.build()
-        self.assertFalse((self.out / DF.EXE_NAME).exists())
+        self.assertFalse((self.tool / DF.EXE_NAME).exists())
         self.assertTrue(any("CoilPackingTools.exe" in line and "Start.vbs" in line
                             for line in r.lines), r.lines)
 
@@ -320,3 +321,22 @@ class DistFolderTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ToolDirTest(unittest.TestCase):
+    """版は親フォルダに入れ、一式は中の「機側ツール」(統合 1.2.66・現場の指定)。"""
+
+    def test_一式は版の入らない機側ツールの中_配布メモは親(self):
+        import tempfile, shutil as _sh
+        base = Path(tempfile.mkdtemp(prefix="dist_tool_"))
+        self.addCleanup(_sh.rmtree, base, True)
+        out = base / DF.dist_name("9.9.9")
+        r = DF.build(out)
+        self.assertEqual(Path(r.out).name, "機側用統合_VER9.9.9")
+        self.assertEqual(Path(r.tool_dir), out / "機側ツール")
+        self.assertTrue((out / "機側ツール" / "Start.vbs").is_file())
+        self.assertTrue((out / DF.MEMO_NAME).is_file())
+        self.assertEqual(sorted(p.name for p in out.iterdir()), sorted([DF.MEMO_NAME, "機側ツール"]))
+        self.assertNotIn("VER", DF.TOOL_DIR)
+        memo = (out / DF.MEMO_NAME).read_text(encoding="utf-8-sig")
+        self.assertIn("「機側ツール」", memo)
