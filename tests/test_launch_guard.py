@@ -160,3 +160,59 @@ def test_ロックは別名で書いてから置き換える(local, monkeypatch)
     launch_guard.write_lock(info)
     assert seen and seen[0][1] == str(launch_guard.lock_path(info.mode))
     assert launch_guard.read_lock_state(info.mode)[0] == launch_guard.LOCK_OK
+
+
+# ==================================================================
+# プロセスの番号の使い回し(統合 1.2.65)
+# ==================================================================
+def _lock_with(pid, started_at):
+    from common import modes
+    m = modes.KEYS[0]
+    info = launch_guard.LockInfo(app_id="x", mode=m, pid=pid, port=1, url="", started_at=started_at)
+    launch_guard.write_lock(info)
+    return m, info
+
+
+def test_自分のプロセスの起動時刻はロックより前(local):
+    started = launch_guard.process_started_at(os.getpid())
+    assert started is not None and started <= time.time()
+    m, info = _lock_with(os.getpid(), time.time())
+    assert launch_guard.lock_owner_alive(info) is True
+
+
+def test_ロックを書いたあとに起動したプロセスは書いた本人ではない(local, monkeypatch):
+    """PC を再起動すると、残ったロックの番号を別のプログラムが持っていることがある(Windows は番号を使い回す)。"""
+    m, info = _lock_with(4242, time.time() - 3600)                  # 1時間前に書いたロック
+    monkeypatch.setattr(launch_guard, "is_process_alive", lambda pid: True)
+    monkeypatch.setattr(launch_guard, "process_started_at", lambda pid: time.time() - 60)   # 1分前に起動した別物
+    assert launch_guard.lock_owner_alive(info) is False
+    monkeypatch.setattr(launch_guard, "process_started_at", lambda pid: None)               # 分からなければ居る
+    assert launch_guard.lock_owner_alive(info) is True
+
+
+def test_使い回しなら待たずにロックを片付けて起動する(local, monkeypatch):
+    m, info = _lock_with(4242, time.time() - 3600)
+    monkeypatch.setattr(launch_guard, "is_process_alive", lambda pid: True)
+    monkeypatch.setattr(launch_guard, "process_started_at", lambda pid: time.time() - 60)
+    monkeypatch.setattr(launch_guard, "probe_health",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("答えを待たない")))
+    res = launch_guard.check_existing(m)
+    assert res.should_start is True
+    assert not launch_guard.lock_path(m).exists()
+
+
+def test_stop_batは使い回しのとき落とさずに印を片付ける(local, monkeypatch):
+    """以前は「このアプリではないようなので止めません」でロックを残し、何もしていなかった。
+    --force でも関係の無いプログラムを終わらせない。"""
+    import process_manager
+    m, info = _lock_with(4242, time.time() - 3600)
+    monkeypatch.setattr(launch_guard, "is_process_alive", lambda pid: True)
+    monkeypatch.setattr(launch_guard, "process_started_at", lambda pid: time.time() - 60)
+    monkeypatch.setattr(launch_guard, "probe_health", lambda *a, **k: None)
+    monkeypatch.setattr(launch_guard, "desktop_running", lambda: False)
+    killed = []
+    monkeypatch.setattr(process_manager.os, "kill", lambda *a: killed.append(a))
+    res = process_manager.stop(m, force=True)
+    assert res.stopped is True and "Start.vbs で起動できます" in res.message
+    assert killed == []
+    assert not launch_guard.lock_path(m).exists()

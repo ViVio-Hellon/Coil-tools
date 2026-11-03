@@ -358,6 +358,81 @@ def is_process_alive(pid: int) -> bool:
     return process_alive_state(pid) is not False
 
 
+#: ロックを書いた時刻とプロセスの起動時刻を比べるときの余裕(秒)。自分のプロセスは必ずロックより前に起動している
+OWNER_TIME_SLACK_SEC = 2.0
+
+
+def process_started_at(pid: int) -> Optional[float]:
+    """そのPIDのプロセスが起動した時刻(エポック秒)。分からなければ None。
+
+    統合 1.2.65。Windows はプロセスの番号を使い回す。PC を再起動すると、ロックに残った番号を
+    まったく別のプログラムが持っていることがある。番号だけでは見分けられないので、起動した時刻で見分ける。
+    """
+    if pid <= 0:
+        return None
+    try:
+        if os.name == "nt":
+            return _started_at_windows(pid)
+        return _started_at_proc(pid)
+    except Exception as exc:                      # noqa: BLE001 - 分からなければ None(これまでの判定に戻る)
+        log.debug("pid=%s の起動時刻を取れませんでした: %s", pid, exc)
+        return None
+
+
+def _started_at_windows(pid: int) -> Optional[float]:
+    """`OpenProcess` + `GetProcessTimes`(読むだけの権限。ハンドルは必ず閉じる)。"""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    handle = kernel32.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel32.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
+            return None
+        created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+        return created / 10_000_000 - 11_644_473_600             # 1601-01-01 からの 100ns → エポック秒
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _started_at_proc(pid: int) -> Optional[float]:
+    """Linux: /proc/<pid>/stat の starttime(起動からの刻み)+ /proc/stat の btime。"""
+    with open(f"/proc/{pid}/stat", "rb") as f:
+        stat = f.read()
+    fields = stat[stat.rfind(b")") + 2:].split()
+    ticks = int(fields[19])                                       # 22 番目の項目
+    with open("/proc/stat", "rb") as f:
+        btime = next(int(line.split()[1]) for line in f if line.startswith(b"btime"))
+    return btime + ticks / os.sysconf("SC_CLK_TCK")
+
+
+def lock_owner_alive(info: "LockInfo") -> bool:
+    """ロックを書いたプロセスがまだ居るか。**番号と起動時刻の両方で見る**(統合 1.2.65)。
+
+    - 番号のプロセスが居なければ False
+    - 居ても、**ロックを書いた時刻より後に起動したプロセスなら、書いた本人ではない**(番号の使い回し)→ False
+      (ロックの `started_at` は 1.2.0 から書いているので、前の版が残したロックでも見分けられる)
+    - 起動時刻が分からなければ、これまでどおり「居る」
+    """
+    if not is_process_alive(info.pid):
+        return False
+    started = process_started_at(info.pid)
+    written = float(getattr(info, "started_at", 0) or 0)
+    if started is not None and written > 0 and started > written + OWNER_TIME_SLACK_SEC:
+        log.info("pid=%s はロックを書いたあと(%s)に起動した別のプロセスです(番号の使い回し)",
+                 info.pid, time.strftime("%Y/%m/%d %H:%M:%S", time.localtime(written)))
+        return False
+    return True
+
+
 def process_alive_state(pid: int) -> Optional[bool]:
     """そのPIDのプロセスが居るか。**確かめられなければ None**(tasklist を実行できないなど)。
 
@@ -592,10 +667,12 @@ def check_existing(mode: str) -> GuardResult:
     if info is None:
         return GuardResult(True, reason="ロックなし")
 
-    if not is_process_alive(info.pid):
-        log.info("死んだロックを掃除します (pid=%s は不在)", info.pid)
+    if not lock_owner_alive(info):
+        # 居ない、または番号を別のプログラムが使い回している(PC を再起動したあとなど。統合 1.2.65)。
+        # 以前は使い回しのときも「居る」とみなし、答えを待ってから片付けていた
+        log.info("残っていたロックを片付けます (pid=%s はロックを書いたプロセスではない)", info.pid)
         remove_lock(mode)
-        return GuardResult(True, reason=f"ロックは残っていたがpid {info.pid} は不在")
+        return GuardResult(True, reason=f"ロックは残っていたがpid {info.pid} は書いたプロセスではない")
 
     health = probe_health(info.port)
     if health is None:

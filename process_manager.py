@@ -147,13 +147,16 @@ def stop(mode: str, *, force: bool = False) -> StopResult:
 
     health = launch_guard.probe_health(info.port)
     if not launch_guard.is_our_app(health, mode):
-        # 応答しない、または別のアプリ。ロックだけ残っている状態
-        if launch_guard.is_process_alive(info.pid):
+        # 応答しない、または別のアプリ。ロックだけ残っている状態。番号と起動時刻の両方で、ロックを書いた
+        # プロセスがまだ居るかを見る(統合 1.2.65。PC を再起動すると番号を別のプログラムが使い回していることがある。
+        # 以前はそれを「居る」とみなし、「このアプリではないようなので止めません」でロックを残していた)
+        if launch_guard.lock_owner_alive(info):
             return _stop_by_pid(mode, info, result, force=force)
         launch_guard.remove_lock(mode)
         result.stopped = True
         result.method = "stale-lock"
-        result.message = "動いていませんでした(残っていたロックを片付けました)"
+        result.message = "動いていませんでした。残っていた起動の印を片付けました。Start.vbs で起動できます"
+        log.info("動いていなかったので、残っていた起動の印(pid=%s)を片付けました。Start.vbs で起動できます", info.pid)
         return result
 
     # --- 1. 正常終了を要求する ---
@@ -221,11 +224,12 @@ def _stop_by_pid(mode: str, info, result: StopResult, *, force: bool,
     """
     import launch_guard
 
-    if not launch_guard.is_process_alive(info.pid):
+    if not launch_guard.lock_owner_alive(info):
+        # 居ない、または番号の使い回し(統合 1.2.65)。**落とさない**(関係の無いプログラムを終わらせない)
         launch_guard.remove_lock(mode)
         result.stopped = True
         result.method = "already-gone"
-        result.message = "すでに終了していました"
+        result.message = "すでに終了していました。残っていた起動の印を片付けました。Start.vbs で起動できます"
         return result
 
     if not (_answered_as_us(info, mode, health) or _looks_like_our_process(info)):
