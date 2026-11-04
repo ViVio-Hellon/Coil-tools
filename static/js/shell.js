@@ -465,8 +465,11 @@
   }
 
   // ---------------------------------------------------------- 終了
-  function markStopped() {
+  function markStopped(text) {
     stopped = true;
+    var label = $("stoppedText");
+    if (label && text) label.textContent = text;
+    var band = $("rsBanner"); if (band) band.hidden = true;
     setConn("", "終了しました");
     var box = $("stopped"); if (box) box.hidden = false;
     panes.forEach(function (p) { p.hidden = true; });
@@ -476,7 +479,7 @@
   // 知らせが無いと、外枠は「バックエンドと通信できません」を出していた
   window.addEventListener("message", function (e) {
     if (e.origin !== location.origin || !e.data) return;
-    if (e.data.type === "cpt:stopped") markStopped();
+    if (e.data.type === "cpt:stopped") markStopped("");
     // 機能の画面の「終了」(資材計算の帯)は、統合画面の「終了」と同じ流れにする(統合 1.2.5)
     if (e.data.type === "cpt:quit") requestQuit();
   });
@@ -496,12 +499,12 @@
     // 打ちかけはいま確かめた。入口に「画面へ訊く」をもう一度させない
     post("/api/shutdown", { screens_ready: true })
       .then(function (res) {
-        if (res.body.stopped) { markStopped(); return; }
+        if (res.body.stopped) { markStopped(""); return; }
         if (res.status === 409 && res.body.reason === "busy") {
           var text = (res.body.message || "実行中の処理があります") + "\n\n中断して終了しますか?";
           if (!window.confirm(text)) { quit.disabled = false; return; }
           return post("/api/shutdown", { force: true }).then(function (again) {
-            if (again.body.stopped) { markStopped(); return; }
+            if (again.body.stopped) { markStopped(""); return; }
             quit.disabled = false;
             window.alert(again.body.message || ("終了できませんでした (HTTP " + again.status + ")"));
           });
@@ -540,12 +543,217 @@
           })
           .then(function (res) {
             closeAnswered = seq;
-            if (res && res.body && res.body.stopping) markStopped();
+            if (res && res.body && res.body.stopping) markStopped("");
           });
       })
       .catch(function () { /* 入口に届かない。次の回に */ })
       .then(function () { closeAsking = 0; });
   }
+
+  // ---------------------------------------------------------- 管理者以外停止(統合 1.2.67)
+  // 5秒ごとに入口へたずねる(入口はメモリだけを見る。共有を読むのは入口の見張り)。お願いが出ていれば
+  // 帯を出し、3機能の画面に「保存していない入力」を訊いて答える(何も無ければ入口がまもなく止める)。
+  // 答えには、強制で止まったときの控えに使う「打っていた値」(保存していない入力がある画面の、変えた欄だけ。
+  // パスワードは持たない)を付ける。控えはこの PC の手元に残り、次の起動で知らせる。
+  var RS_POLL_MS = 5000, RS_MISSES = 2;
+  var rsActive = null, rsDeadline = 0, rsMiss = 0, rsNotesShown = [];
+  function changedField(el) {
+    var type = (el.type || "").toLowerCase();
+    if (el.readOnly || el.disabled) return false;
+    if (["password", "hidden", "button", "submit", "reset", "file", "image"].indexOf(type) >= 0) return false;
+    if (type === "checkbox" || type === "radio") return el.checked !== el.defaultChecked;
+    if (el.tagName === "SELECT") {
+      if (el.multiple) return false;
+      var def = Array.prototype.findIndex.call(el.options, function (o) { return o.defaultSelected; });
+      return el.selectedIndex !== (def < 0 ? 0 : def);
+    }
+    return el.value !== el.defaultValue;
+  }
+  function fieldLabel(el) {
+    var text = "";
+    try { if (el.labels && el.labels[0]) text = el.labels[0].textContent; } catch (e) { text = ""; }
+    text = (text || el.getAttribute("aria-label") || el.getAttribute("title") || el.placeholder ||
+            el.name || el.id || "").replace(/\s+/g, " ").trim();
+    return text.slice(0, 60);
+  }
+  function fieldValue(el) {
+    var type = (el.type || "").toLowerCase();
+    if (type === "checkbox" || type === "radio") return el.checked ? "入" : "切";
+    if (el.tagName === "SELECT") {
+      var opt = el.options[el.selectedIndex];
+      return opt ? (opt.textContent || opt.value).trim() : "";
+    }
+    return String(el.value || "");
+  }
+  function screenFields(frame, screen) {
+    var out = [];
+    try {
+      var doc = frame && frame.contentDocument;
+      if (!doc) return out;
+      Array.prototype.forEach.call(doc.querySelectorAll("input, select, textarea"), function (el) {
+        if (out.length < 80 && changedField(el)) {
+          out.push({ screen: screen, label: fieldLabel(el), value: fieldValue(el).slice(0, 300) });
+        }
+      });
+    } catch (e) { /* 読めない画面は数えない */ }
+    return out;
+  }
+  function screensNow() {
+    var labels = [], fields = [];
+    panes.forEach(function (p) {
+      var frame = p.querySelector("iframe");
+      var found = askFrame(frame);
+      if (!found.length) return;
+      labels = labels.concat(found);
+      var tab = $("tab-" + p.id.replace(/^pane-/, ""));
+      var name = tab ? (tab.querySelector(".tab__label") || tab).textContent.trim() : "";
+      fields = fields.concat(screenFields(frame, name));
+    });
+    var logDlg = $("logDialog");
+    if (logDlg && logDlg.open) labels = labels.concat(askFrame(logDlg.querySelector("iframe")));
+    return { labels: labels, fields: fields.slice(0, 200) };
+  }
+  function rsShowBand(req, localLabels) {
+    var band = $("rsBanner");
+    if (!band) return;
+    if (!req || stopped) { band.hidden = true; return; }
+    band.hidden = false;
+    $("rsBy").textContent = req.text || "";
+    var left = (req.left && req.left.length) ? req.left : localLabels;
+    $("rsLeft").textContent = left.length
+      ? "残っているもの: " + left.join("、") + "。保存・送信してから「確かめて終了」を押してください(残りの時間が来ると強制で止まります)"
+      : "保存していない入力・処理中はありません。まもなく自動で終了します";
+    rsDeadline = Date.now() + Math.max(0, Number(req.deadline_ms || 0) - Number(req.now_ms || 0));
+    rsCountdown();
+  }
+  function rsCountdown() {
+    var el = $("rsCount");
+    if (!el || !rsActive) return;
+    var sec = Math.max(0, Math.round((rsDeadline - Date.now()) / 1000));
+    el.textContent = Math.floor(sec / 60) + ":" + ("0" + (sec % 60)).slice(-2);
+  }
+  function rsShowNotes(notes) {
+    var box = $("rsNotes"), list = $("rsNotesList");
+    if (!box || !list) return;
+    notes = notes || [];
+    if (JSON.stringify(notes) === JSON.stringify(rsNotesShown) && !box.hidden === !!notes.length) return;
+    rsNotesShown = notes.slice();
+    list.innerHTML = "";
+    notes.forEach(function (n) { var li = document.createElement("li"); li.textContent = n; list.appendChild(li); });
+    box.hidden = !notes.length || stopped;
+  }
+  function rsPoll() {
+    if (stopped) return;
+    fetch("/api/remote-stop/state?page=" + encodeURIComponent(CLIENT),
+          { cache: "no-store", headers: { "X-Tool-Token": TOKEN } })
+      .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then(function (j) {
+        rsMiss = 0;
+        rsShowNotes(j.notes);
+        var req = j.request || null;
+        if (req && req.stopping) {
+          markStopped("管理者の停止で終了しました。更新が終わってから開き直してください。");
+          return;
+        }
+        rsActive = req;
+        if (!req) { rsShowBand(null, []); return; }
+        var now = screensNow();
+        rsShowBand(req, now.labels);
+        return post("/api/remote-stop/report", { page: CLIENT, labels: now.labels, fields: now.fields })
+          .then(function (res) { if (res.body && res.body.request) rsShowBand(res.body.request, now.labels); })
+          .catch(function () {});
+      })
+      .catch(function () {
+        // お願いを受けていたあとで入口に届かなくなった = 止まった
+        rsMiss += 1;
+        if (rsActive && rsMiss >= RS_MISSES) {
+          markStopped("管理者の停止で終了しました。更新が終わってから開き直してください。");
+        }
+      });
+  }
+  (function () {
+    var quitBtn = $("rsQuit");
+    if (quitBtn) quitBtn.addEventListener("click", requestQuit);
+    var close = $("rsNotesClose");
+    if (close) close.addEventListener("click", function () {
+      var shown = rsNotesShown.slice();
+      $("rsNotes").hidden = true;
+      post("/api/remote-stop/notes-seen", { notes: shown })
+        .then(function (res) { rsShowNotes((res.body && res.body.notes) || []); })
+        .catch(function () {});
+    });
+  })();
+
+  // 管理者の画面(上の帯の「管理者停止」)。開いているあいだだけ、5秒ごとに各 PC の様子を読む
+  (function () {
+    var btn = $("rsBtn"), dlg = $("rsDialog");
+    if (!btn || !dlg) return;
+    var timer = 0;
+    function msg(text, ng) {
+      var el = $("rsMsg"); if (!el) return;
+      el.textContent = text || ""; el.className = "rsdlg__msg" + (ng ? " ng" : "");
+    }
+    function cell(tr, text) { var td = document.createElement("td"); td.textContent = text || ""; tr.appendChild(td); }
+    function render(j) {
+      var st = $("rsStatus");
+      st.className = "rsdlg__status";
+      if (!j.available) {
+        st.textContent = j.why || "共有の梱包資材マスタのフォルダに届きません";
+      } else if (j.unreadable) {
+        st.textContent = j.unreadable + "(読めるようになるまで、出す・解除するはできません)";
+      } else if (j.request) {
+        st.className = "rsdlg__status on";
+        st.textContent = "お願いが出ています: " + (j.request_text || "");
+      } else {
+        st.textContent = "お願いは出ていません(この端末: " + (j.me_pc || "?") + " / " + (j.me_login || "?") + ")";
+      }
+      var body = $("rsPcs");
+      body.innerHTML = "";
+      (j.pcs || []).forEach(function (pc) {
+        var tr = document.createElement("tr");
+        if (pc.stale) tr.className = "stale";
+        cell(tr, pc.pc); cell(tr, pc.login); cell(tr, pc.label); cell(tr, pc.detail); cell(tr, pc.beat);
+        body.appendChild(tr);
+      });
+      if (!(j.pcs || []).length) {
+        var tr = document.createElement("tr"); var td = document.createElement("td");
+        td.colSpan = 5; td.textContent = "動いている PC の知らせはありません"; tr.appendChild(td); body.appendChild(tr);
+      }
+    }
+    function load() {
+      fetch("/api/remote-stop/overview", { cache: "no-store", headers: { "X-Tool-Token": TOKEN } })
+        .then(function (r) { return r.json(); })
+        .then(render)
+        .catch(function () { $("rsStatus").textContent = "様子を読めませんでした"; });
+    }
+    function act(path, body, okText) {
+      var pw = $("rsPassword");
+      body.password = pw ? pw.value : "";
+      msg("確かめています…", false);
+      return post(path, body).then(function (res) {
+        if (pw) pw.value = "";
+        msg(res.body.message || (res.body.ok ? okText : "できませんでした (HTTP " + res.status + ")"), !res.body.ok);
+        load();
+      }).catch(function () { msg("入口に届きませんでした", true); });
+    }
+    btn.addEventListener("click", function () {
+      msg("", false);
+      if (!dlg.open) { try { dlg.showModal(); } catch (e) { dlg.setAttribute("open", ""); } }
+      load();
+      clearInterval(timer);
+      timer = setInterval(function () { if (dlg.open) load(); else clearInterval(timer); }, 5000);
+    });
+    $("rsClose").addEventListener("click", function () { dlg.close(); });
+    dlg.addEventListener("close", function () { clearInterval(timer); });
+    $("rsIssue").addEventListener("click", function () {
+      if (!window.confirm("ほかの PC のコイル梱包ツールを止めます。\n" +
+                          "保存していない入力が残っている PC も、5分たつと強制で止まります。よろしいですか?")) return;
+      act("/api/remote-stop/issue", { reason: ($("rsReason").value || "").trim() }, "お願いを出しました");
+    });
+    $("rsClear").addEventListener("click", function () {
+      act("/api/remote-stop/clear", {}, "解除しました");
+    });
+  })();
 
   // ---------------------------------------------------------- 開始
   health();
@@ -559,4 +767,7 @@
   alive({ reason: "open", replaces: previous });
   setInterval(function () { alive({ reason: "timer" }); }, S.alivePollMs || 20000);
   if (!DESKTOP) setInterval(watchCloseAsk, 1000);
+  rsPoll();
+  setInterval(rsPoll, RS_POLL_MS);
+  setInterval(rsCountdown, 1000);
 })();

@@ -476,6 +476,10 @@ def start(mode: str, *, open_browser: bool = True) -> int:
             print(f"起動しました: {srv.url}")
         log().info("待機画面まで %.2f秒", time.monotonic() - _BOOT_AT)
 
+        # --- 管理者以外停止モード中(更新中)なら起動しない(統合 1.2.67) ---
+        if _blocked_by_remote_stop(srv, thread):
+            return 0
+
         # --- 本体を組み立てて差し替える ---
         try:
             srv.build()
@@ -486,6 +490,7 @@ def start(mode: str, *, open_browser: bool = True) -> int:
             # 答える(boot_server)。**誰も見ていなければ自分で終わる**(残り続けるとフォルダを
             # 消せない。業務ツール統合ツール all-tools で起きた不具合と同じ形。統合 1.2.19)
             _watch_failed_boot(srv)
+            _watch_remote_stop(srv, kind="browser", bare=True)    # 理由の画面のままでも、お願いで止まる
             _hold_until_stopped(srv, thread)
             return 1
 
@@ -495,6 +500,7 @@ def start(mode: str, *, open_browser: bool = True) -> int:
         _hold_until_stopped(srv, thread)
         return 0
     finally:
+        _leave_remote_stop()
         _close_modules()
         # 自分のロックだけ消す(入れ替えで新しい版が書いたロックを消さない。統合 1.2.26)
         launch_guard.remove_lock(mode, pid=os.getpid())
@@ -587,6 +593,7 @@ def _hard_exit() -> None:
     """後始末をしてから、確実に落とす。"""
     import logging
 
+    _leave_remote_stop()
     _close_modules()
     logging.shutdown()
     os._exit(0)
@@ -691,11 +698,14 @@ def start_bridge(mode: str, *, token: str = "", server_factory) -> int:
     thread = server_module.run_in_background(srv)
     log().info("待機画面まで %.2f秒(デスクトップ版)", time.monotonic() - _BOOT_AT)
     try:
+        if _blocked_by_remote_stop(srv, thread):
+            return 0
         try:
             srv.build()
         except Exception as exc:                  # noqa: BLE001 - 画面に出して継続
             log().exception("アプリを組み立てられませんでした")
             srv.boot.mark_error(f"アプリを組み立てられませんでした: {exc}")
+            _watch_remote_stop(srv, kind="desktop", bare=True)    # 理由の画面のままでも、お願いで止まる
             _hold_until_stopped(srv, thread)
             return 1
         # 窓を閉じたら外枠が終わらせるので、心拍による自動終了は使わない
@@ -703,6 +713,7 @@ def start_bridge(mode: str, *, token: str = "", server_factory) -> int:
         _hold_until_stopped(srv, thread)
         return 0
     finally:
+        _leave_remote_stop()
         _close_modules()
         log().info("終了しました: mode=%s(デスクトップ版)", mode)
 
@@ -727,6 +738,62 @@ def _initialize(srv, *, watch_idle: bool = True) -> None:
         idle_exit.install(srv.stop, app_module.busy, on_wake=app_module.on_wake)
 
     run_initializers(srv, app_module.all_modules())
+    _watch_remote_stop(srv, kind="browser" if watch_idle else "desktop")
+
+
+def _blocked_by_remote_stop(srv, thread) -> bool:
+    """管理者以外停止モード中(更新中)なら、理由を待機画面に出して、しばらくして終わる。止めたら True。
+
+    **本体を組み立てる前に**見る(更新の上書きの途中のファイルを読み込まない)。お願いを出した PC は止めない。
+    読めないときは止めない(`remote_stop.startup_block`)。
+    """
+    try:
+        from common import remote_stop
+        why = remote_stop.startup_block()
+    except Exception as exc:                      # noqa: BLE001 - 判定で起動を止めない
+        log().warning("管理者以外停止のお願いを確かめられませんでした: %s", exc)
+        return False
+    if not why:
+        return False
+    srv.boot.mark_error(why)
+    timer = threading.Timer(remote_stop.BLOCK_SHOW_SEC, srv.stop)
+    timer.daemon = True
+    timer.start()
+    _hold_until_stopped(srv, thread)
+    return True
+
+
+def _watch_remote_stop(srv, *, kind: str, bare: bool = False) -> None:
+    """管理者以外停止のお願いを見張る(統合 1.2.67)。止め方は画面の「終了」と同じ道(`srv.stop`)。
+
+    前に強制で止められて控えたものがあれば、ここで戻して(資材計算の作業)知らせる(画面の入力)。
+    `bare`: 本体を組み立てられなかった(理由の画面のまま)。入力も処理も無いので、お願いを受ければまもなく止まる。
+    """
+    try:
+        from common import remote_stop, stop_keep
+        if bare:
+            def busy() -> list:
+                return []
+        else:
+            import app as app_module
+            busy = app_module._busy_labels
+            for note in stop_keep.restore():
+                remote_stop.user_note(note)
+        remote_stop.install(srv.stop, remote_stop.screens_left, busy,
+                            kind=kind, mode=str(getattr(srv, "mode", "") or ""),
+                            before_force=stop_keep.save_before_force)
+    except Exception as exc:                      # noqa: BLE001 - 見張りが立たなくても起動は続ける
+        log().warning("管理者以外停止の見張りを立てられませんでした: %s", exc)
+
+
+def _leave_remote_stop() -> None:
+    mod = sys.modules.get("common.remote_stop")
+    if mod is None:
+        return
+    try:
+        mod.leave()
+    except Exception:                             # noqa: BLE001 - 終わるときの後始末で止まらない
+        pass
 
 
 def run_initializers(srv, modules, *, limit_sec: Optional[float] = None) -> Optional[threading.Thread]:

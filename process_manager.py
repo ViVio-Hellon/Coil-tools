@@ -365,6 +365,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                       f"ready={health['ready']} 起動={lock['started']}")
         return 0
 
+    # **管理者以外停止モード中は使わない**(統合 1.2.67。ランチャーの「全 PC で止める」と同時に使わない、
+    # 現場の決め)。`--force` でも断る。固まった PC を強制で止めたいときは、先に解除する
+    refusal = _remote_stop_refusal()
+    if refusal:
+        print(f"止められませんでした: {refusal}")
+        return EXIT_FAILED
+
     import launch_guard
 
     if launch_guard.desktop_running():
@@ -385,6 +392,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     if EXIT_FAILED in codes:
         return EXIT_FAILED
     return EXIT_REFUSED if codes else EXIT_STOPPED
+
+
+def _remote_stop_refusal() -> Optional[str]:
+    """管理者以外停止のお願いが出ていれば断る理由。読めない・確かめられないなら断らない(止める道を閉じない)。"""
+    try:
+        from common import remote_stop
+        return remote_stop.stop_bat_refusal()
+    except Exception:                             # noqa: BLE001
+        return None
 
 
 def bring_desktop_to_front() -> bool:

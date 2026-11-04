@@ -49,7 +49,8 @@ from markupsafe import escape
 from werkzeug.exceptions import HTTPException
 
 from common import (app_config, boot_screen, close_ask, idle_exit, incidents, local_settings,
-                    log_distribution, logging_utils, manual, modes, security, versions)
+                    log_distribution, logging_utils, manual, modes, remote_stop, security,
+                    versions)
 from common.logging_utils import get_logger
 
 log = get_logger("coil_packing_tools", "app")
@@ -607,6 +608,8 @@ def _shell_blueprint() -> Blueprint:
         replaces = str(body.get("replaces", ""))
         watching = idle_exit.signal(client=client, leaving=leaving, hidden=hidden,
                                     replaces=replaces)
+        if leaving and client:
+            remote_stop.page_gone(client)     # 閉じた画面の答えはもう待たない(管理者以外停止)
         # 外からの停止のとき「閉じる前の頼み」を出す相手(ブラウザ版の統合画面だけが `page` を送る)
         page = str(body.get("page", ""))
         if page:
@@ -680,7 +683,71 @@ def _shell_blueprint() -> Blueprint:
 
     _log_routes(bp)
     _manual_routes(bp)
+    _remote_stop_routes(bp)
     return bp
+
+
+# ------------------------------------------------------------------
+# 管理者以外停止モード(統合 1.2.67。`common/remote_stop.py`)
+# ------------------------------------------------------------------
+def _remote_stop_routes(bp: Blueprint) -> None:
+    @bp.get("/api/remote-stop/state")
+    def remote_stop_state():
+        """統合画面が5秒ごとにたずねる: 停止のお願いが出ていないか・出す一言。**共有は読まない**(メモリだけ)。"""
+        denied = _need_token()
+        if denied:
+            return denied
+        remote_stop.page_seen(request.args.get("page", ""))
+        return jsonify({"ok": True, "request": remote_stop.screen_state(),
+                        "notes": remote_stop.notes()})
+
+    @bp.post("/api/remote-stop/report")
+    def remote_stop_report():
+        """お願いが出ているあいだの画面の答え: 保存していない入力の名前と、打っていた値(控え用)。"""
+        denied = _need_token()
+        if denied:
+            return denied
+        body = request.get_json(silent=True) or {}
+        labels = body.get("labels") if isinstance(body.get("labels"), list) else []
+        fields = body.get("fields") if isinstance(body.get("fields"), list) else []
+        remote_stop.report(str(body.get("page") or ""), labels, fields)
+        return jsonify({"ok": True, "request": remote_stop.screen_state()})
+
+    @bp.post("/api/remote-stop/notes-seen")
+    def remote_stop_notes_seen():
+        denied = _need_token()
+        if denied:
+            return denied
+        body = request.get_json(silent=True) or {}
+        shown = body.get("notes") if isinstance(body.get("notes"), list) else []
+        remote_stop.notes_seen([str(x) for x in shown])
+        return jsonify({"ok": True, "notes": remote_stop.notes()})
+
+    @bp.get("/api/remote-stop/overview")
+    def remote_stop_overview():
+        """管理者の画面: いまのお願いと各 PC の様子(開いているあいだだけ読む)。"""
+        denied = _need_token()
+        if denied:
+            return denied
+        return jsonify({"ok": True, **remote_stop.overview().to_dict()})
+
+    @bp.post("/api/remote-stop/issue")
+    def remote_stop_issue():
+        denied = _need_token()
+        if denied:
+            return denied
+        body = request.get_json(silent=True) or {}
+        result = remote_stop.issue(str(body.get("password") or ""), str(body.get("reason") or ""))
+        return jsonify(result.to_dict()), (200 if result.ok else 400)
+
+    @bp.post("/api/remote-stop/clear")
+    def remote_stop_clear():
+        denied = _need_token()
+        if denied:
+            return denied
+        body = request.get_json(silent=True) or {}
+        result = remote_stop.clear(str(body.get("password") or ""))
+        return jsonify(result.to_dict()), (200 if result.ok else 400)
 
 
 # ------------------------------------------------------------------

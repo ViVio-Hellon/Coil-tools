@@ -67,6 +67,10 @@
       {# ログとエラーの記録(3機能共通)。出力先の設定・エラーの一覧(なぜなぜ分析用) #}
       <button class="btn btn--bar" type="button" id="logBtn" aria-haspopup="dialog"
               title="ログとエラーの記録(出力先の設定・エラーの一覧)">ログ</button>
+      {# 管理者以外停止モード(統合 1.2.67)。管理者パスワード かつ Administrator の端末から、
+         ほかの PC のこのツールを止める(更新の前)。押しても、確かめるまでは何も起きない #}
+      <button class="btn btn--bar" type="button" id="rsBtn" aria-haspopup="dialog"
+              title="管理者以外停止モード: 更新の前に、ほかの PC のコイル梱包ツールを止めます(管理者パスワードと Administrator の端末が必要)">管理者停止</button>
       <span class="conn" id="conn" title="バックエンド接続状態">接続確認中</span>
       <button class="btn btn--danger" type="button" id="quit"
               title="このアプリを終了します(3つの機能とも終わります)">終了</button>
@@ -83,7 +87,23 @@
     <button class="btn" type="button" id="btnReload">読み込み直す</button>
   </div>
   <div class="banner banner--ok" id="stopped" hidden role="status">
-    終了しました。このタブは閉じてください。
+    <span id="stoppedText">終了しました。このタブは閉じてください。</span>
+  </div>
+  {# 管理者以外停止のお願い(統合 1.2.67)。止まるまでの残りと、残っているもの #}
+  <div class="banner banner--warn rsband" id="rsBanner" hidden role="alert">
+    <div class="rsband__text">
+      <b>管理者が更新のため停止を求めています</b>
+      <span id="rsBy"></span>
+      <span id="rsLeft"></span>
+    </div>
+    <span class="rsband__count" id="rsCount" title="強制で止まるまでの残り"></span>
+    <button class="btn" type="button" id="rsQuit"
+            title="保存していない入力を確かめてから終了します(いつもの「終了」と同じ)">確かめて終了</button>
+  </div>
+  {# 前に管理者の停止で消えた・戻したものの知らせ。「閉じる」を押すまで出し続ける #}
+  <div class="banner banner--info rsnotes" id="rsNotes" hidden role="status">
+    <ul id="rsNotesList"></ul>
+    <button class="btn" type="button" id="rsNotesClose">閉じる</button>
   </div>
 
   {% block main %}{% endblock %}
@@ -96,6 +116,37 @@
   </div>
   {# 中身(iframe)は開いたときに作る(開かないうちは読みに行かない) #}
   <div class="logdlg__body" id="logBody"></div>
+</dialog>
+{# 管理者以外停止モード(統合 1.2.67) #}
+<dialog class="rsdlg" id="rsDialog" aria-label="管理者以外停止モード">
+  <div class="logdlg__head">
+    <b>管理者以外停止モード</b><span>更新の前に、ほかの PC のコイル梱包ツールを止める</span>
+    <button class="btn" type="button" id="rsClose">閉じる</button>
+  </div>
+  <div class="rsdlg__body">
+    <p class="rsdlg__lead">お願いを出すと、ほかの PC の画面に「管理者が更新のため停止を求めています」が出ます。
+      保存していない入力・処理中が無ければまもなく止まり、残っていても <b>5分</b> で強制で止まります
+      (保存していない入力はその PC の控えに残り、次の起動で知らせます)。お願いが出ているあいだ、ほかの PC では起動できません。
+      <b>ランチャーの「全 PC で止める」と同時には使わないでください</b>(お願いが出ているあいだ stop.bat は断ります)。</p>
+    <p class="rsdlg__status" id="rsStatus">読み込み中…</p>
+    <div class="rsdlg__form">
+      <label>理由 <input type="text" id="rsReason" maxlength="200" placeholder="更新のため" autocomplete="off"></label>
+      <label>管理者パスワード <input type="password" id="rsPassword" autocomplete="off"></label>
+      <button class="btn btn--go" type="button" id="rsIssue">ほかの PC を止める</button>
+      <button class="btn" type="button" id="rsClear">更新が終わった(解除する)</button>
+    </div>
+    <p class="rsdlg__msg" id="rsMsg" role="status"></p>
+    <div class="rsdlg__table">
+      <table>
+        <thead><tr><th>PC</th><th>ログイン</th><th>様子</th><th>残っているもの・結果</th><th>知らせ</th></tr></thead>
+        <tbody id="rsPcs"><tr><td colspan="5">―</td></tr></tbody>
+      </table>
+    </div>
+    <p class="rsdlg__hint">手順: 1. お願いを出す → 2. 一覧が「止まりました」「強制で止めました」になるのを待つ →
+      3. <b>この PC のツールも閉じてから</b>共有のツールのフォルダを上書きする → 4. 新しい版で起動して確かめ、「解除する」。
+      この PC で解除できないときは、共有の梱包資材マスタのフォルダの <code>管理者以外停止\コイル梱包ツール\お願い.json</code>
+      を別の名前に変えると解除できます。</p>
+  </div>
 </dialog>
 {# 操作説明書。中身は /manual/<機能>(manual/*.html)。開いたときに読む #}
 <dialog class="logdlg manualdlg" id="manualDialog" aria-label="操作説明書">
