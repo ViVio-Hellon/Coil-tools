@@ -41,6 +41,8 @@ class _Base(unittest.TestCase):
             self.addCleanup(patcher.stop)
         remote_stop.reset()
         self.addCleanup(remote_stop.reset)
+        stop_keep._shown.clear()
+        self.addCleanup(stop_keep._shown.clear)
 
     def allow(self, password_ok: bool = True, rows=None):
         rows = self.ADMIN_ROWS if rows is None else rows
@@ -135,6 +137,19 @@ class IssueTests(_Base):
         self.assertTrue(self.clear().ok)
         self.assertEqual(self.clear().reason, remote_stop.REFUSE_NOT_ACTIVE)
         self.assertIsNone(remote_stop.read_request())
+
+    def test_ほかの管理者がほぼ同時に出したら_あとの方が残ったと言う(self) -> None:
+        real_write = remote_stop.write_json
+
+        def race(path, data, **kw):
+            ok = real_write(path, data, **kw)
+            real_write(path, {**data, "id": "other", "by_pc": "PC-ADMIN2"}, **kw)   # 直後にほかの管理者が書いた
+            return ok
+        with mock.patch.object(remote_stop, "write_json", side_effect=race):
+            result = self.issue()
+        self.assertFalse(result.ok)
+        self.assertIn("ほかの管理者がほぼ同時に", result.message)
+        self.assertIn("PC-ADMIN2", result.message)
 
     def test_読めないお願いは上書きしない(self) -> None:
         remote_stop.folder().mkdir(parents=True)
@@ -243,7 +258,28 @@ class ScreenReportTests(_Base):
 
     def test_長く問い合わせてこない画面は居ないとみなす(self) -> None:
         remote_stop.page_seen("shell-a", now=100.0)
-        self.assertEqual(remote_stop.screens_left(now=100.0 + remote_stop.PAGE_ALIVE_SEC + 1), [])
+        self.assertEqual(remote_stop.screens_left(now=100.0 + remote_stop.PAGE_REMEMBER_SEC + 1), [])
+
+    def test_裏に回って1分に1回しか問い合わせないタブも待つ(self) -> None:
+        """ブラウザは裏のタブのタイマーを1分に1回まで間引く。黙ったことを「残りなし」と取り違えない。"""
+        remote_stop.page_seen("shell-a", now=100.0)              # お願いの少し前に問い合わせた
+        self.assertEqual(remote_stop.screens_left(now=100.0 + 59), [remote_stop.WAITING_SCREEN])
+        remote_stop.report("shell-a", ["ペナラベル: 重量"], [], now=160.0)
+        self.assertEqual(remote_stop.screens_left(now=160.0 + 59), ["ペナラベル: 重量"])
+
+    def test_保存していない入力を答えたあと黙った画面は_その入力で待ち続ける(self) -> None:
+        remote_stop.report("shell-a", ["梱包明細: 重量"], [], now=100.0)
+        later = 100.0 + remote_stop.REPORT_FRESH_SEC + 30
+        self.assertEqual(remote_stop.screens_left(now=later), ["梱包明細: 重量"],
+                         "凍った・固まったタブ。期限まで待ち、控えてから強制で止める")
+
+    def test_新しいお願いでは前のお願いへの答えを使わない(self) -> None:
+        self.issue()
+        remote_stop.report("shell-a", ["梱包明細: 重量"], [])
+        with self.as_pc("PC-LINE1"):
+            w = remote_stop.Watcher(lambda: None, remote_stop.screens_left, lambda: [])
+            w.tick()
+        self.assertEqual(remote_stop.screens_left(), [remote_stop.WAITING_SCREEN])
 
 
 class WatcherTests(_Base):
@@ -431,7 +467,9 @@ class StopKeepTests(_Base):
         self.assertEqual(len(notes), 1)
         self.assertIn("重量1「12.3」", notes[0])
         self.assertIn("打ち直して", notes[0])
-        self.assertEqual(stop_keep.restore(), [], "二度は知らせない")
+        self.assertEqual(stop_keep.restore(), notes, "閉じる前に終わったら、次の起動でもう一度知らせる")
+        stop_keep.acknowledge(notes)
+        self.assertEqual(stop_keep.restore(), [], "閉じたら二度は知らせない")
         self.assertEqual(len(list((stop_keep.keep_dir() / stop_keep.DONE_NAME).glob("*.json"))), 1,
                          "知らせた控えは消さずに移す")
 
@@ -455,6 +493,22 @@ class StopKeepTests(_Base):
         back = self.session.get()
         self.assertEqual((back.LOT, back.積数, back.order.受注番号, back.候補, back.flags),
                          ("A12B3C4", "3", "J-1", ["J-1", "J-2"], {"no_single"}))
+        self.session.reset()
+        self.assertEqual(stop_keep.restore(), [], "二度は戻さない(積んだあとの作業を古い作業で上書きしない)")
+        self.assertEqual(self.session.get().LOT, "")
+
+    def test_資材計算と画面の入力の両方なら_作業は一度だけ戻し_知らせは閉じるまで出す(self) -> None:
+        self.session.get().LOT = "A12B3C4"
+        remote_stop.report("shell-a", ["梱包明細: 重量"], [])
+        stop_keep.save_before_force()
+        self.session.reset()
+        first = stop_keep.restore()
+        self.assertEqual(len(first), 2)
+        self.session.reset()
+        again = stop_keep.restore()
+        self.assertEqual(len(again), 1, "画面の入力の知らせだけもう一度")
+        self.assertIn("消えた入力", again[0])
+        self.assertEqual(self.session.get().LOT, "", "作業は戻さない")
 
     def test_いま別の作業があれば戻さない(self) -> None:
         self.session.get().LOT = "A12B3C4"
@@ -511,10 +565,12 @@ class RouteTests(_Base):
                          json={"page": "shell-a", "labels": ["梱包明細: 重量"], "fields": "壊れた形"})
         self.assertEqual(remote_stop.screens_left(), ["梱包明細: 重量"])
         remote_stop.user_note("前回の控えを知らせます")
+        stop_keep._shown["前回の控えを知らせます"] = Path(self.share) / "無い控え.json"
         self.assertEqual(self.client.get("/api/remote-stop/state", headers=self.h).get_json()["notes"],
                          ["前回の控えを知らせます"])
         self.client.post("/api/remote-stop/notes-seen", json={"notes": ["前回の控えを知らせます"]}, headers=self.h)
         self.assertEqual(remote_stop.notes(), [])
+        self.assertNotIn("前回の控えを知らせます", stop_keep._shown, "閉じた知らせの控えを片付けに行く")
         self.client.post("/api/alive", json={"client": "shell-a", "leaving": True})
         self.assertEqual(remote_stop.screens_left(), [], "閉じた画面は待たない")
 

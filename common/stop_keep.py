@@ -17,7 +17,8 @@ r"""強制で止める前に、保存していない入力を控えに残し、�
                         発注票の下書きは、チェックリスト(DB に残る)からいつでも作り直せるので持たない
 
 - 次の起動で、統合画面に「戻しました/消えた入力はこれです」を出す。**利用者が閉じるまで出し続ける**
-- 知らせた控えは `停止控え\戻した\` へ移して残す(もう一度知らせない。念のため消さない)
+- 利用者が知らせを閉じたら、控えを `停止控え\戻した\` へ移して残す(もう一度知らせない。念のため消さない)。
+  閉じる前に終わったら、次の起動でもう一度知らせる。資材計算の作業は戻した時点で控えから外す(二度戻さない)
 - **控えを読めなければ知らせず、控えも残す**(壊れていれば記録に出す)
 """
 from __future__ import annotations
@@ -156,8 +157,17 @@ def _field_text(fields: list) -> str:
     return "、".join(parts) + (f" ほか {more} 欄" if more > 0 else "")
 
 
+# 知らせた一言 → その控え。利用者が「閉じる」を押したら `戻した\` へ移す(`acknowledge`)
+_shown: dict[str, Path] = {}
+
+
 def restore() -> list[str]:
-    """控えがあれば、資材計算の作業を戻し、消えた画面の入力を知らせる。知らせる一言を返す。"""
+    """控えがあれば、資材計算の作業を戻し、消えた画面の入力を知らせる。知らせる一言を返す。
+
+    **画面の入力の知らせは、利用者が「閉じる」を押すまで控えを片付けない**(見る前に閉じた・落ちたら、
+    次の起動でもう一度知らせる)。資材計算の作業は戻した時点で控えから外す(二度戻すと、チェックリストへ
+    積んだあとの作業を古い作業で上書きしてしまう)。
+    """
     notes: list[str] = []
     for path in _pending():
         try:
@@ -173,39 +183,61 @@ def restore() -> list[str]:
             when = "前回"
         found: list[str] = []
         material = data.get("material")
+        keep_material = False
         if isinstance(material, dict):
-            found.append(_restore_material(material, when))
+            note, done = _restore_material(material, when)
+            found.append(note)
+            keep_material = not done
         screens = [str(x) for x in (data.get("screens") or [])]
         fields = [x for x in (data.get("fields") or []) if isinstance(x, dict)]
+        screen_note = ""
         if screens or fields:
-            text = f"{when} に管理者の停止で保存できずに消えた入力があります"
+            screen_note = f"{when} に管理者の停止で保存できずに消えた入力があります"
             if screens:
-                text += f": {'、'.join(screens)}"
-            text += "。"
+                screen_note += f": {'、'.join(screens)}"
+            screen_note += "。"
             if fields:
-                text += f"打っていた値: {_field_text(fields)}。"
-            text += f"確かめて打ち直してください(控え: {path.name})"
-            found.append(text)
+                screen_note += f"打っていた値: {_field_text(fields)}。"
+            screen_note += f"確かめて打ち直してください(控え: {path.name})"
+            found.append(screen_note)
         for note in found:
             log.warning("%s", note)
         notes += found
-        _done(path)
+        if screen_note or keep_material:
+            if isinstance(material, dict) and not keep_material:
+                # 戻した作業は控えから外す。外せなければ、二度戻さないよう控えごと片付ける
+                if not _write(path, {**data, "material": None, "material_restored_at": time.time()}):
+                    _done(path)
+                    continue
+            if screen_note:
+                _shown[screen_note] = path
+        else:
+            _done(path)
     return notes
 
 
-def _restore_material(data: dict, when: str) -> str:
+def acknowledge(shown) -> None:
+    """利用者が知らせを閉じた。その控えを `戻した\\` へ移す(もう知らせない)。"""
+    for note in list(shown or []):
+        path = _shown.pop(note, None)
+        if path is not None and path.exists():
+            _done(path)
+
+
+def _restore_material(data: dict, when: str) -> tuple[str, bool]:
+    """(知らせ, 控えから外してよいか)。"""
     from modules.packing_material_calculation.app import session
     label = _material_label(data)
     current = session.get()
     if str(getattr(current, "LOT", "") or "").strip():
         return (f"{when} に管理者の停止で保存できなかった{label}の控えがありますが、いま別の作業があるので"
-                "戻しませんでした。")
+                "戻しませんでした(次の起動でもう一度ためします)。", False)
     try:
         state = build_material_state(data)
     except (TypeError, ValueError) as exc:
         log.warning("資材計算の作業の控えを戻せませんでした: %s", exc)
-        return f"{when} に管理者の停止で保存できなかった{label}を戻せませんでした(控えが読めません)。"
+        return f"{when} に管理者の停止で保存できなかった{label}を戻せませんでした(控えが読めません)。", True
     with session._lock:
         session._state = state
     return (f"{when} に管理者の停止で保存できなかった{label}を戻しました(まだチェックリストへ積んでいません)。"
-            "資材計算の画面で確かめてください。要らなければ「はじめから」で消してください。")
+            "資材計算の画面で確かめてください。要らなければ「はじめから」で消してください。", True)

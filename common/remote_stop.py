@@ -67,9 +67,14 @@ STALE_SEC = 180.0
 BLOCK_SHOW_SEC = 60.0
 # たまたま読めない(書いている最中・掴まれている)ときの読み直し(秒)
 READ_RETRY_SEC = (0.2, 0.5, 1.0)
-# 統合画面がこの間に問い合わせてきていれば「開いている」。開いている画面の答えがこれより古ければ待つ
-PAGE_ALIVE_SEC = 30.0
-REPORT_FRESH_SEC = 20.0
+# 統合画面の答えを待つ決まり。画面は5秒ごとに問い合わせるが、**裏に回ったタブ・最小化した窓はブラウザが
+# 1分に1回まで間引く**(Chrome/Edge。Edge のスリープタブは止める)。短く切ると、裏のタブの打ちかけを
+# 訊かずに止めてしまう(控えも残らない)。
+#   PAGE_REMEMBER_SEC  この間に問い合わせてきた画面は「居るかもしれない」。答えが新しくなければ待つ
+#                      (閉じた画面は閉じた合図で忘れる。合図が届かなかった画面は期限まで待つことになる)
+#   REPORT_FRESH_SEC   答えが新しいとみなす長さ(裏のタブの1分に1回より長く)
+PAGE_REMEMBER_SEC = 600.0
+REPORT_FRESH_SEC = 75.0
 WAITING_SCREEN = "統合画面の確認(保存していない入力があるか)を待っています"
 
 # 各プロセスの答え
@@ -345,6 +350,18 @@ def issue(password: str, reason: str = "") -> Result:
     }
     if not write_json(request_path(), data):
         return Result(False, f"お願いを書けませんでした: {request_path()}", REFUSE_WRITE)
+    # 書いたものを読み直す。**ほかの管理者がほぼ同時に出した**と、あとから書いた方が残る
+    # (そのときこの PC は「お願いを出した PC」ではなくなり、止められる側になる)
+    try:
+        written = read_request()
+    except Unreadable:
+        written = data                            # 書けたばかり。読めないのはたまたま
+    if written is None or written.get("id") != data["id"]:
+        other = describe_request(written) if written else "(取り下げられています)"
+        log.warning("管理者以外停止のお願いを出しましたが、ほかのお願いに置き換わりました: %s", other)
+        return Result(False, "ほかの管理者がほぼ同時にお願いを出したので、そちらが残りました。" + other
+                      + " この PC も止める側になります。続けるなら、出した管理者と相談してください。",
+                      REFUSE_ALREADY)
     log.warning("管理者以外停止のお願いを出しました: %s", describe_request(data))
     _forget_old_answers()
     return Result(True, "お願いを出しました。ほかの PC は保存していない入力・処理中が無ければまもなく止まり、"
@@ -568,16 +585,22 @@ def report(page: str, labels: Iterable[Any], fields: Iterable[Any] = (),
 
 
 def screens_left(now: Optional[float] = None) -> list[str]:
-    """開いている画面の、保存していない入力。**答えが新しくない画面があれば「待っている」を返す**。"""
+    """開いている画面の、保存していない入力。
+
+    - 答えが新しい画面 → その答え(空なら残りなし)
+    - 答えが古い・まだ答えていない画面 → **前に答えた保存していない入力があればそれ、無ければ「待っている」**
+      (裏で間引かれた・凍ったタブ。黙ったことを「残りなし」と取り違えない。期限が来れば控えてから強制で止める)
+    """
     now = time.monotonic() if now is None else now
     out: list[str] = []
     waiting = False
     with _pages_lock:
         for page, at in list(_pages.items()):
-            if now - at > PAGE_ALIVE_SEC:
+            if now - at > PAGE_REMEMBER_SEC:
                 continue
             rep = _reports.get(page)
-            if rep is None or now - rep[0] > REPORT_FRESH_SEC:
+            fresh = rep is not None and now - rep[0] <= REPORT_FRESH_SEC
+            if not fresh and not (rep and rep[1]):
                 waiting = True
                 continue
             for name in rep[1]:
@@ -597,6 +620,12 @@ def screen_values() -> tuple[list, list]:
             names += [n for n in labels if n not in names]
             values += fields
     return names, values
+
+
+def _forget_reports() -> None:
+    """お願いが替わった・取り下げられた。前のお願いへの答えを使わない(画面の名乗りは覚えたまま)。"""
+    with _pages_lock:
+        _reports.clear()
 
 
 def _reset_pages() -> None:
@@ -730,11 +759,13 @@ class Watcher:
             if self.request is not None:
                 log.info("管理者以外停止のお願いが取り下げられました。止めずに続けます")
                 user_note("管理者が停止のお願いを取り下げました。そのまま使えます。")
+                _forget_reports()
             self.request = None
             self.state, self.detail = STATE_RUNNING, ""
             self._beat()
             return
         if self.request is None or self.request.get("id") != req.get("id"):
+            _forget_reports()
             self.request = req
             self.received_at = now
             try:

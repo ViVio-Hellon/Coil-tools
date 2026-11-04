@@ -555,7 +555,7 @@
   // 帯を出し、3機能の画面に「保存していない入力」を訊いて答える(何も無ければ入口がまもなく止める)。
   // 答えには、強制で止まったときの控えに使う「打っていた値」(保存していない入力がある画面の、変えた欄だけ。
   // パスワードは持たない)を付ける。控えはこの PC の手元に残り、次の起動で知らせる。
-  var RS_POLL_MS = 5000, RS_MISSES = 2;
+  var RS_POLL_MS = 5000, RS_MISSES = 3;   // 3回(15秒)続けて届かなければ止まったとみなす
   var rsActive = null, rsDeadline = 0, rsMiss = 0, rsNotesShown = [];
   function changedField(el) {
     var type = (el.type || "").toLowerCase();

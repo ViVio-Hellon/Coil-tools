@@ -720,7 +720,13 @@ def _remote_stop_routes(bp: Blueprint) -> None:
             return denied
         body = request.get_json(silent=True) or {}
         shown = body.get("notes") if isinstance(body.get("notes"), list) else []
-        remote_stop.notes_seen([str(x) for x in shown])
+        shown = [str(x) for x in shown]
+        remote_stop.notes_seen(shown)
+        try:
+            from common import stop_keep
+            stop_keep.acknowledge(shown)          # 閉じた知らせの控えを片付ける(閉じるまでは次の起動でも知らせる)
+        except Exception:                         # noqa: BLE001 - 片付けられなければ次の起動でもう一度知らせる
+            log.exception("停止の控えを片付けられませんでした")
         return jsonify({"ok": True, "notes": remote_stop.notes()})
 
     @bp.get("/api/remote-stop/overview")
