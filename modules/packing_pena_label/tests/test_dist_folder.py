@@ -333,7 +333,8 @@ class ToolDirTest(unittest.TestCase):
         out = base / DF.dist_name("9.9.9")
         r = DF.build(out)
         self.assertEqual(Path(r.out).name, "機側用統合_VER9.9.9")
-        self.assertEqual(Path(r.tool_dir), out / "機側ツール")
+        # Windows の一時フォルダは短い名前(RUNNER~1)で渡り、build は長い名前に直して返す。実体で比べる
+        self.assertEqual(Path(r.tool_dir).resolve(), (out / "機側ツール").resolve())
         self.assertTrue((out / "機側ツール" / "Start.vbs").is_file())
         self.assertTrue((out / DF.MEMO_NAME).is_file())
         self.assertEqual(sorted(p.name for p in out.iterdir()), sorted([DF.MEMO_NAME, "機側ツール"]))
