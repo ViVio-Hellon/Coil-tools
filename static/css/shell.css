@@ -121,7 +121,7 @@ button.ver:hover{ color:var(--bar-ink); }
 .btn:hover{ background:#ffffff22; }
 .btn--danger{ border-color:#f0767299; color:#ffd9d7; }
 .btn--danger:hover{ background:#f0767233; }
-.banner .btn{ border-color:currentColor; background:transparent; }
+.banner .btn{ border-color:currentColor; background:transparent; white-space:nowrap; flex:0 0 auto; }
 
 /* ---- 中身 ---- */
 .panes{ position:relative; flex:1 1 auto; min-height:0; }
