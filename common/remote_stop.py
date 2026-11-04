@@ -11,6 +11,8 @@
     更新中               お願いが出ているあいだ、お願いを出した PC 以外では**起動させない**
     ランチャー           「全 PC で止める」は据え置き。ただし**同時には使わない**
                         (お願いが出ているあいだ stop.bat は断る)
+    期限                 解除を忘れても **1時間で自動で解除**(管理者の画面の「1時間延長」で延ばせる)。
+                        期限の近くは共有フォルダの時計で確かめる(PC の時計のずれで早く解除しない)
 
 【どこに置くか】
 共有の梱包資材マスタのフォルダ(資材計算の `config.master_db_dir()`。配布設定で全 PC が同じ場所を見る)の
@@ -56,6 +58,11 @@ ADMINISTRATOR = "Administrator"
 
 # 保存していない入力・処理中の PC を待つ長さ(秒)。過ぎたら強制で止める(現場の決め)
 GRACE_SEC = 300
+# お願いの期限(秒)。**解除を忘れても、1時間で自動で解除する**(現場の決め。忘れるとほかの PC がずっと起動
+# できない)。更新が長引くときは管理者の画面の「1時間延長」で延ばす
+EXPIRE_SEC = 3600
+# 期限のこの手前からは、PC の時計でなく**共有フォルダの時計**で確かめる(PC の時計のずれで早く解除しない)
+CLOCK_CHECK_SEC = 900
 # 何も残っていない PC でも、帯を見せてから止めるまでの間(秒)。画面の問い合わせ(5秒ごと)より十分長く
 NOTICE_SEC = 30
 # 見張りの間隔(秒)と、「動いています」の知らせの間隔(秒)
@@ -205,23 +212,93 @@ def write_json(path: Path, data: dict, *, warn: bool = True) -> bool:
         return False
 
 
-def read_request(*, retry: bool = True) -> Optional[dict]:
-    """いまのお願い。**出ていなければ None**(無い・解除済み)。読めなければ `Unreadable`。"""
+def read_active(*, retry: bool = True) -> Optional[dict]:
+    """出ているお願い(**期限は見ない**)。無い・解除済みなら None。読めなければ `Unreadable`。"""
     data = read_json(request_path(), retry=retry)
     if data is None or not data.get("active"):
         return None
     return data
 
 
+_expired_ids: set = set()
+
+
+def read_request(*, retry: bool = True) -> Optional[dict]:
+    """いまのお願い。**出ていなければ None**(無い・解除済み・期限切れ)。読めなければ `Unreadable`。"""
+    data = read_active(retry=retry)
+    if data is None:
+        return None
+    if is_expired(data):
+        rid = str(data.get("id") or "")
+        if rid not in _expired_ids:
+            _expired_ids.add(rid)
+            log.warning("管理者以外停止のお願いは期限(%d分)で自動で解除されました: %s",
+                        EXPIRE_SEC // 60, describe_request(data))
+        return None
+    return data
+
+
+def expires_at(req: dict) -> float:
+    try:
+        return float(req["expires_at"])
+    except (KeyError, TypeError, ValueError):
+        try:
+            return float(req.get("created_at") or 0) + EXPIRE_SEC
+        except (TypeError, ValueError):
+            return 0.0
+
+
+def _shared_age() -> Optional[float]:
+    """お願いのファイルを書いてからの秒数を、**共有フォルダの時計**で(書いた時刻と、いま書いた試しのファイルの
+    時刻の差)。測れなければ None(PC の時計で決める)。"""
+    probe = folder() / f".時計_{_safe(identity()[0])}_{os.getpid()}.tmp"
+    try:
+        written = request_path().stat().st_mtime
+        probe.write_bytes(b"")
+        now = probe.stat().st_mtime
+    except OSError:
+        return None
+    finally:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return now - written
+
+
+def is_expired(req: dict, now: Optional[float] = None) -> bool:
+    """期限が過ぎたか。期限の近く(・過ぎたと見えるとき)は共有フォルダの時計で確かめる。"""
+    now = time.time() if now is None else now
+    exp = expires_at(req)
+    if now < exp - CLOCK_CHECK_SEC:
+        return False
+    try:
+        written = float(req.get("renewed_at") or req.get("created_at") or 0)
+    except (TypeError, ValueError):
+        written = 0.0
+    span = exp - written if written else EXPIRE_SEC
+    age = _shared_age()
+    if age is None:
+        return now >= exp
+    return age >= span
+
+
+def _clock(at: float) -> str:
+    try:
+        return time.strftime("%H:%M", time.localtime(float(at)))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "?"
+
+
 def describe_request(req: dict) -> str:
-    """「誰が・いつ・何のために」の一言。"""
+    """「誰が・いつ・何のために」と自動で解除する時刻の一言。"""
     try:
         when = time.strftime("%m/%d %H:%M", time.localtime(float(req.get("created_at") or 0)))
     except (TypeError, ValueError, OverflowError, OSError):
         when = "?"
     who = f"{req.get('by_pc') or '?'}({req.get('by_login') or '?'})"
     reason = req.get("reason") or "更新のため"
-    return f"{who} が {when} に出しました: {reason}"
+    return f"{who} が {when} に出しました: {reason}(解除し忘れても {_clock(expires_at(req))} に自動で解除)"
 
 
 # ------------------------------------------------------------------
@@ -348,6 +425,7 @@ def issue(password: str, reason: str = "") -> Result:
         "reason": (reason or "").strip()[:200] or "更新のため",
         "created_at": time.time(), "grace_sec": GRACE_SEC, "version": _version(),
     }
+    data["expires_at"] = data["created_at"] + EXPIRE_SEC
     if not write_json(request_path(), data):
         return Result(False, f"お願いを書けませんでした: {request_path()}", REFUSE_WRITE)
     # 書いたものを読み直す。**ほかの管理者がほぼ同時に出した**と、あとから書いた方が残る
@@ -378,6 +456,12 @@ def clear(password: str) -> Result:
     except Unreadable as exc:
         return Result(False, f"いまのお願いを読めないので解除しません: {exc}", REFUSE_UNREADABLE)
     if current is None:
+        try:
+            stale = read_active()
+        except Unreadable:
+            stale = None
+        if stale is not None:
+            return Result(False, f"お願いは期限({EXPIRE_SEC // 60}分)で自動で解除されています。", REFUSE_NOT_ACTIVE)
         return Result(False, "お願いは出ていません。", REFUSE_NOT_ACTIVE)
     pc, login = identity()
     done = {**current, "active": False, "cleared_at": time.time(),
@@ -387,6 +471,28 @@ def clear(password: str) -> Result:
     log.warning("管理者以外停止を解除しました(%s / %s)。ほかの PC も起動できます", pc, login)
     _forget_old_answers()
     return Result(True, "解除しました。ほかの PC も起動できます。")
+
+
+def extend(password: str) -> Result:
+    """期限を延ばす(いまから1時間)。更新が長引くとき。お願いは同じまま(止まった PC はそのまま、起動も止めたまま)。"""
+    allowed = can_issue(password)
+    if not allowed.ok:
+        return allowed
+    try:
+        current = read_request()
+    except Unreadable as exc:
+        return Result(False, f"いまのお願いを読めないので延ばしません: {exc}", REFUSE_UNREADABLE)
+    if current is None:
+        return Result(False, "お願いは出ていません(期限で解除されたなら、もう一度出してください)。",
+                      REFUSE_NOT_ACTIVE)
+    pc, login = identity()
+    now = time.time()
+    data = {**current, "expires_at": now + EXPIRE_SEC, "renewed_at": now,
+            "renewed_by_pc": pc, "renewed_by_login": login}
+    if not write_json(request_path(), data):
+        return Result(False, f"延長を書けませんでした: {request_path()}", REFUSE_WRITE)
+    log.warning("管理者以外停止のお願いを延ばしました(%s / %s): %s", pc, login, describe_request(data))
+    return Result(True, f"延ばしました。{_clock(data['expires_at'])} に自動で解除されます。")
 
 
 def _forget_old_answers() -> None:
@@ -432,10 +538,12 @@ class Overview:
     me_pc: str = ""
     me_login: str = ""
     folder: str = ""
+    expired_text: str = ""
 
     def to_dict(self) -> dict:
         return {"available": self.available, "why": self.why, "request": self.request,
                 "request_text": self.request_text, "unreadable": self.unreadable,
+                "expired_text": self.expired_text, "expire_min": EXPIRE_SEC // 60,
                 "pcs": self.pcs, "me_pc": self.me_pc, "me_login": self.me_login,
                 "folder": self.folder, "grace_sec": GRACE_SEC}
 
@@ -449,6 +557,11 @@ def overview() -> Overview:
     view = Overview(True, me_pc=pc, me_login=login, folder=str(folder()))
     try:
         view.request = read_request(retry=False)
+        if view.request is None:
+            stale = read_active(retry=False)
+            if stale is not None:
+                view.expired_text = (f"前のお願いは期限({EXPIRE_SEC // 60}分)で自動で解除されました"
+                                     f"({describe_request(stale)})")
     except Unreadable as exc:
         view.unreadable = f"お願いのファイルを読めません: {exc}"
     if view.request:
@@ -757,8 +870,11 @@ class Watcher:
             req = None                            # お願いを出した PC は止めない
         if req is None:
             if self.request is not None:
-                log.info("管理者以外停止のお願いが取り下げられました。止めずに続けます")
-                user_note("管理者が停止のお願いを取り下げました。そのまま使えます。")
+                if str(self.request.get("id") or "") in _expired_ids:
+                    user_note(f"停止のお願いは期限({EXPIRE_SEC // 60}分)で自動で解除されました。そのまま使えます。")
+                else:
+                    log.info("管理者以外停止のお願いが取り下げられました。止めずに続けます")
+                    user_note("管理者が停止のお願いを取り下げました。そのまま使えます。")
                 _forget_reports()
             self.request = None
             self.state, self.detail = STATE_RUNNING, ""
@@ -887,6 +1003,7 @@ def reset() -> None:
     if _watcher is not None:
         _watcher._halt.set()
     _watcher = None
+    _expired_ids.clear()
     with _notes_lock:
         _notes.clear()
     _reset_pages()

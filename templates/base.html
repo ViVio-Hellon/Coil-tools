@@ -127,12 +127,15 @@
     <p class="rsdlg__lead">お願いを出すと、ほかの PC の画面に「管理者が更新のため停止を求めています」が出ます。
       保存していない入力・処理中が無ければまもなく止まり、残っていても <b>5分</b> で強制で止まります
       (保存していない入力はその PC の控えに残り、次の起動で知らせます)。お願いが出ているあいだ、ほかの PC では起動できません。
-      <b>ランチャーの「全 PC で止める」と同時には使わないでください</b>(お願いが出ているあいだ stop.bat は断ります)。</p>
+      <b>ランチャーの「全 PC で止める」と同時には使わないでください</b>(お願いが出ているあいだ stop.bat は断ります)。
+      解除し忘れても <b>1時間</b> で自動で解除されます(長引くときは「1時間延長」)。</p>
     <p class="rsdlg__status" id="rsStatus">読み込み中…</p>
     <div class="rsdlg__form">
       <label>理由 <input type="text" id="rsReason" maxlength="200" placeholder="更新のため" autocomplete="off"></label>
       <label>管理者パスワード <input type="password" id="rsPassword" autocomplete="off"></label>
       <button class="btn btn--go" type="button" id="rsIssue">ほかの PC を止める</button>
+      <button class="btn" type="button" id="rsExtend"
+              title="更新が長引くとき。いまから1時間後に自動で解除されるようにします">1時間延長</button>
       <button class="btn" type="button" id="rsClear">更新が終わった(解除する)</button>
     </div>
     <p class="rsdlg__msg" id="rsMsg" role="status"></p>

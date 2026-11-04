@@ -746,6 +746,15 @@ def _remote_stop_routes(bp: Blueprint) -> None:
         result = remote_stop.issue(str(body.get("password") or ""), str(body.get("reason") or ""))
         return jsonify(result.to_dict()), (200 if result.ok else 400)
 
+    @bp.post("/api/remote-stop/extend")
+    def remote_stop_extend():
+        denied = _need_token()
+        if denied:
+            return denied
+        body = request.get_json(silent=True) or {}
+        result = remote_stop.extend(str(body.get("password") or ""))
+        return jsonify(result.to_dict()), (200 if result.ok else 400)
+
     @bp.post("/api/remote-stop/clear")
     def remote_stop_clear():
         denied = _need_token()

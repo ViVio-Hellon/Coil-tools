@@ -705,7 +705,8 @@
         st.className = "rsdlg__status on";
         st.textContent = "お願いが出ています: " + (j.request_text || "");
       } else {
-        st.textContent = "お願いは出ていません(この端末: " + (j.me_pc || "?") + " / " + (j.me_login || "?") + ")";
+        st.textContent = (j.expired_text ? j.expired_text + "。" : "") +
+          "お願いは出ていません(この端末: " + (j.me_pc || "?") + " / " + (j.me_login || "?") + ")";
       }
       var body = $("rsPcs");
       body.innerHTML = "";
@@ -749,6 +750,9 @@
       if (!window.confirm("ほかの PC のコイル梱包ツールを止めます。\n" +
                           "保存していない入力が残っている PC も、5分たつと強制で止まります。よろしいですか?")) return;
       act("/api/remote-stop/issue", { reason: ($("rsReason").value || "").trim() }, "お願いを出しました");
+    });
+    $("rsExtend").addEventListener("click", function () {
+      act("/api/remote-stop/extend", {}, "延ばしました");
     });
     $("rsClear").addEventListener("click", function () {
       act("/api/remote-stop/clear", {}, "解除しました");

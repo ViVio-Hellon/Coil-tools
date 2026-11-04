@@ -219,6 +219,89 @@ class StartupTests(_Base):
             self.assertLess(text.index("_blocked_by_remote_stop"), text.index("srv.build()"), func.__name__)
 
 
+class ExpireTests(_Base):
+    """解除を忘れても1時間で自動で解除する(現場の決め)。期限の近くは共有フォルダの時計で確かめる。"""
+
+    def age(self, sec):
+        return mock.patch.object(remote_stop, "_shared_age", return_value=sec)
+
+    def test_お願いには1時間後の期限が付き_一言に解除の時刻が出る(self) -> None:
+        self.issue()
+        req = remote_stop.read_active()
+        self.assertAlmostEqual(req["expires_at"] - req["created_at"], 3600)
+        self.assertIn("自動で解除", remote_stop.describe_request(req))
+
+    def test_1時間たてば解除_起動もstop_batも止めない(self) -> None:
+        self.issue()
+        later = __import__("time").time() + remote_stop.EXPIRE_SEC + 1
+        with self.age(remote_stop.EXPIRE_SEC + 1), mock.patch("time.time", return_value=later):
+            self.assertIsNone(remote_stop.read_request())
+            with self.as_pc("PC-LINE1"):
+                self.assertIsNone(remote_stop.startup_block())
+            self.assertIsNone(remote_stop.stop_bat_refusal())
+            self.assertIn("期限", self.clear().message)
+            self.assertTrue(self.issue().ok, "期限が切れたら新しく出せる")
+
+    def test_PCの時計が進んでいても_共有フォルダの時計でまだなら解除しない(self) -> None:
+        self.issue()
+        later = __import__("time").time() + remote_stop.EXPIRE_SEC + 600
+        with self.age(120), mock.patch("time.time", return_value=later):
+            self.assertIsNotNone(remote_stop.read_request())
+
+    def test_PCの時計が遅れていても_共有フォルダの時計で過ぎていれば解除(self) -> None:
+        self.issue()
+        near = __import__("time").time() + remote_stop.EXPIRE_SEC - 300        # 期限の5分前に見える
+        with self.age(remote_stop.EXPIRE_SEC + 5), mock.patch("time.time", return_value=near):
+            self.assertIsNone(remote_stop.read_request())
+
+    def test_期限まで遠ければ共有フォルダの時計は測らない(self) -> None:
+        self.issue()
+        with mock.patch.object(remote_stop, "_shared_age") as age:
+            self.assertIsNotNone(remote_stop.read_request())
+        age.assert_not_called()
+
+    def test_共有フォルダの時計を測れなければPCの時計で決める(self) -> None:
+        self.issue()
+        later = __import__("time").time() + remote_stop.EXPIRE_SEC + 1
+        with self.age(None), mock.patch("time.time", return_value=later):
+            self.assertIsNone(remote_stop.read_request())
+
+    def test_共有フォルダの時計を本当に測る(self) -> None:
+        self.issue()
+        age = remote_stop._shared_age()
+        self.assertIsNotNone(age)
+        self.assertLess(abs(age), 60)
+        self.assertEqual([p.name for p in remote_stop.folder().glob(".時計_*")], [], "試しのファイルは残さない")
+
+    def test_延長すると_いまから1時間に延びる(self) -> None:
+        self.issue()
+        a, b = self.allow(password_ok=False)
+        with a, b:
+            self.assertEqual(remote_stop.extend("x").reason, remote_stop.REFUSE_PASSWORD)
+        before = remote_stop.read_active()["expires_at"]
+        now = __import__("time").time() + 1800
+        a, b = self.allow()
+        with a, b, mock.patch("time.time", return_value=now):
+            result = remote_stop.extend("pw")
+        self.assertTrue(result.ok, result.message)
+        after = remote_stop.read_active()
+        self.assertAlmostEqual(after["expires_at"], now + 3600)
+        self.assertGreater(after["expires_at"], before)
+        self.assertEqual(after["id"], remote_stop.read_active()["id"], "お願いは同じまま")
+
+    def test_期限で解除されたら_受け側は止めずに続け_期限の知らせを出す(self) -> None:
+        self.issue()
+        with self.as_pc("PC-LINE1"):
+            w = remote_stop.Watcher(lambda: None, lambda: ["梱包明細: 重量"], lambda: [])
+            w.tick()
+            self.assertIsNotNone(w.request)
+            later = __import__("time").time() + remote_stop.EXPIRE_SEC + 1
+            with self.age(remote_stop.EXPIRE_SEC + 1), mock.patch("time.time", return_value=later):
+                w.tick()
+        self.assertEqual(w.state, remote_stop.STATE_RUNNING)
+        self.assertTrue(any("期限" in n for n in remote_stop.notes()))
+
+
 class StopBatTests(_Base):
     def test_お願いが出ているあいだstop_batは断る(self) -> None:
         import process_manager
