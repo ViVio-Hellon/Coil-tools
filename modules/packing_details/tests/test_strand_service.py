@@ -179,6 +179,26 @@ class StackTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             board.set_stack_max(0)
 
+    def test_積み条数は前工程実績数より多くできない(self):
+        # VER 0.13.42・現場の指摘。コイルの数よりスロットが多いと、埋まらず出力できない
+        board = _board(zen=4, jou=2, stack=4)
+        self.assertEqual(board.stack_limit, 4)
+        with self.assertRaises(ValueError) as cm:
+            board.set_stack_max(5)
+        self.assertIn("前工程実績数(4)より多くできません", str(cm.exception))
+        self.assertEqual(board.stack_max, 4)
+
+    def test_前工程実績数が上限より多ければ上限まで_分からなければ上限まで(self):
+        self.assertEqual(_board(zen=40, jou=2).stack_limit, config.STACK_LIMIT)
+        board = Board(lot_no="X", zen_kotei=0, jou_su=1)
+        self.assertEqual(board.stack_limit, config.STACK_LIMIT)
+
+    def test_前工程実績数を減らしたら積み条数を合わせる(self):
+        board = _board(zen=24, jou=2, stack=10)
+        board.zen_kotei = 6
+        board.fit_stack_max()
+        self.assertEqual((board.stack_max, len(board.slots)), (6, 6))
+
     def test_積み始めてから積み条数を変えても積んだコイルは残る(self):
         # VER 0.13.33・現場の求め。VBA `txtTsumiJouSu_Change` は全部外していた(積み直しになった)
         board = _board()

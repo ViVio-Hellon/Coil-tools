@@ -265,7 +265,31 @@ function renderWeights(state) {
 
 function renderGrid(state) {
   const grid = $("grid");
+  // **並びが同じなら作り直さず、ボタンの状態だけ合わせる**(VER 0.13.42・現場の指摘)。作り直すと、
+  // 条が多くて横にスクロールした丈が、条を選ぶたびに先頭へ戻っていた
+  const sig = JSON.stringify(state.rows.map((row) => row.map((cell) => cell.key)));
+  if (grid.dataset.sig === sig && grid.childElementCount === state.rows.length) {
+    const cells = new Map();
+    state.rows.forEach((row) => row.forEach((cell) => cells.set(cell.key, cell)));
+    grid.querySelectorAll("button.coil").forEach((button) => {
+      const cell = cells.get(button.dataset.key);
+      if (!cell) return;
+      button.dataset.state = cell.state;
+      button.disabled = cell.state === "used" && !haikiMode;
+    });
+    grid.querySelectorAll(".jou > .lab").forEach((lab, index) => {
+      lab.textContent = `丈${index + 1} ／ ${state.strands[index]}条`;
+    });
+    $("strandHint").textContent = haikiMode
+      ? "廃棄選択中：クリックで廃棄の付け外し"
+      : "クリックで積み上げへ";
+    return;
+  }
+  // 作り直すときも、丈ごとの横スクロールの位置は残す(丈の数が同じなら)
+  const scrolled = Array.from(grid.querySelectorAll(".coils"), (box) => box.scrollLeft);
+  const sameRows = scrolled.length === state.rows.length;
   grid.textContent = "";
+  grid.dataset.sig = sig;
   state.rows.forEach((row, index) => {
     const jou = index + 1;
     const block = document.createElement("div");
@@ -293,6 +317,7 @@ function renderGrid(state) {
     }
     block.appendChild(coils);
     grid.appendChild(block);
+    if (sameRows && scrolled[index]) coils.scrollLeft = scrolled[index];
   });
 
   $("strandHint").textContent = haikiMode
@@ -304,6 +329,11 @@ function renderStack(state) {
   const box = $("stack");
   box.textContent = "";
   $("stackMax").value = state.stack_max || "";
+  // 積み条数の上限は前工程実績数まで(VER 0.13.42)。−/＋ もここで止まる
+  if (state.stack_limit) {
+    $("stackMax").dataset.max = String(state.stack_limit);
+    $("stackLimit").textContent = `最大${state.stack_limit}`;
+  }
   for (let i = 0; i < state.slots.length; i += 1) {
     const key = state.slots[i];
     const button = document.createElement("button");

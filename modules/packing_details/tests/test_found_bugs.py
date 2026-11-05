@@ -250,3 +250,21 @@ class OtherLotRequestTest(_Base):
         res = self._post_from("L5160Z0", "/api/stack", {"key": "1-6"})
         self.assertEqual(res.status_code, 409)
         self.assertEqual(res.get_json()["error"]["code"], "lot_changed")
+
+
+class StackLimitByZenTest(_Base):
+    """積み条数は前工程実績数より多くできない(VER 0.13.42・現場の指摘)。"""
+
+    def test_前工程実績数より多い積み条数は断り_画面に上限を渡す(self):
+        _post(self.client, "/api/zen-kotei", {"value": "3"})
+        res = _post(self.client, "/api/stack-max", {"value": "4"})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("前工程実績数(3)より多くできません", res.get_json()["error"]["message"])
+        body = _post(self.client, "/api/stack-max", {"value": "3"}).get_json()
+        self.assertTrue(body.get("ok"), body)
+        self.assertEqual((body["state"]["stack_max"], body["state"]["stack_limit"]), (3, 3))
+
+    def test_前工程実績数を減らすと積み条数も合わせる(self):
+        _post(self.client, "/api/stack-max", {"value": "8"})
+        body = _post(self.client, "/api/zen-kotei", {"value": "5"}).get_json()
+        self.assertEqual((body["state"]["stack_max"], body["state"]["stack_limit"]), (5, 5))

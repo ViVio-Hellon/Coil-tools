@@ -245,9 +245,13 @@ class Board:
         - 減らす … 上の空きのスロットを取る。取るスロットに積んだコイルがあれば断る
           (どれを外すかを勝手に決めない。上のスロットを先に解除してもらう)
         """
-        if not 1 <= value <= config.STACK_LIMIT:
+        limit = self.stack_limit
+        if not 1 <= value <= limit:
+            if value > limit and limit < config.STACK_LIMIT:
+                raise ValueError(
+                    f"積み条数は前工程実績数({self.zen_kotei})より多くできません(1〜{limit}): {value}")
             raise ValueError(
-                f"積み条数は1〜{config.STACK_LIMIT}です: {value}")
+                f"積み条数は1〜{limit}です: {value}")
         kept = list(self.slots[:value])
         dropped = [(i + 1, k) for i, k in enumerate(self.slots[value:], start=value) if k]
         if dropped:
@@ -258,6 +262,22 @@ class Board:
                 "そのコイルを先に解除してから減らしてください。")
         self.stack_max = value
         self.slots = kept + [None] * (value - len(kept))
+
+    @property
+    def stack_limit(self) -> int:
+        """積み条数の上限。**前工程実績数より多くは積めない**(VER 0.13.42・現場の指摘。コイルの数より
+        スロットが多いと埋まらず出力できない)。前工程実績数が分からない(0)ときは `STACK_LIMIT` だけ。"""
+        if self.zen_kotei > 0:
+            return min(config.STACK_LIMIT, self.zen_kotei)
+        return config.STACK_LIMIT
+
+    def fit_stack_max(self) -> None:
+        """前工程実績数を減らしたとき、積み条数を上限に収める(上の**空きの**スロットだけ取る)。"""
+        limit = self.stack_limit
+        if self.stack_max > limit and not any(self.slots[limit:]):
+            log.info("積み条数を前工程実績数に合わせて %s -> %s", self.stack_max, limit)
+            self.stack_max = limit
+            self.slots = self.slots[:limit]
 
     def clear_slots(self) -> None:
         """スロットを空にする (VBA `ClearGimmickC` 相当)。"""

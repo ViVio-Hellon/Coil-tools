@@ -206,6 +206,8 @@ def _state(conn) -> dict:
         "weights": list(board.weights) if board else [],
         "strands": list(board.strands) if board else [],
         "stack_max": board.stack_max if board else 0,
+        # 積み条数の上限(前工程実績数まで。VER 0.13.42)
+        "stack_limit": board.stack_limit if board else config.STACK_LIMIT,
         "slots": list(board.slots) if board else [],
         "reversed": board.reversed_view if board else False,
         "complete": board.is_complete if board else False,
@@ -443,6 +445,7 @@ def set_zen_kotei():
         return jsonify(error_body(
             "bad_number", "前工程実績数は数値で入力してください。", "value")), 400
     board.zen_kotei = int(raw)
+    board.fit_stack_max()       # 積み条数は前工程実績数まで(VER 0.13.42)
     if board.redeal_differs():
         board.strands = []      # 配分が変わる。古い条番号に積ませない(丈数と同じ)
     log.info("set_zen_kotei: %s -> %s", board.lot_no, board.zen_kotei)

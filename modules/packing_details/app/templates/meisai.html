@@ -168,7 +168,8 @@
         <button type="button" data-stack="-1" aria-label="積み条数を1減らす">−</button>
         <button type="button" data-stack="1" aria-label="積み条数を1増やす">＋</button>
       </span>
-      <span class="stamp">最大{{ stack_limit }}</span>
+      {# 上限は前工程実績数まで(VER 0.13.42)。ロットを引くと書き換わる #}
+      <span class="stamp" id="stackLimit">最大{{ stack_limit }}</span>
     </div>
     <div class="stack" id="stack"></div>
     <div class="stack-note">下＝スロット1（最初に積むもの）</div>
