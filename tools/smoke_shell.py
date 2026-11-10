@@ -232,6 +232,11 @@ def main(argv=None) -> int:
                     check("印刷ページが心拍を送る: " + path.split("?")[0],
                           any(('"client":"tab-%s-' % key) in b.replace(" ", "") for b in beats), "%d 回" % len(beats))
                     tab.close(run_before_unload=True)
+                # 統合画面は**タブを閉じるのと同じ閉じ方で**閉じる(閉じた合図が届く)。ブラウザごと落とすと
+                # 合図が出ず、入口はまだ画面が居るとみなして(75 秒)、下の停止で「画面で確認中」と断る。
+                # 手元では間に合って通り、GitHub Actions では断られた(統合 1.2.69)
+                pg.close(run_before_unload=True)
+                time.sleep(0.8)
                 br.close()
 
     print("■ 停止(stop.bat と同じ経路 = process_manager.py)")
