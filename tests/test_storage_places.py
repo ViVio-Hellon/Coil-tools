@@ -109,8 +109,10 @@ class MaterialStorageTest(unittest.TestCase):
         local = _group(self.view["storage"], "local")
         self.assertIn(str(config.USER_CONFIG_PATH), _paths(local))
         self.assertIn(str(config.DB_PATH), _paths(local))
-        # 資材計算のパスワードはこのPCのもの(梱包明細は全ラインで共有)
-        self.assertIn("パスワード（撹拌した値。このPCだけのもの）", local["rows"][0]["holds"])
+        # 管理者パスワードはこのPCに持たない。梱包明細の共有の1つ(統合 1.2.75)
+        self.assertNotIn("パスワード", local["rows"][0]["holds"])
+        shared = _group(self.view["storage"], "shared")
+        self.assertTrue(any("梱包明細打ち出し.json" in p for p in _paths(shared)), _paths(shared))
 
     def test_master_edits_go_to_the_shared_master(self):
         from modules.packing_material_calculation.coil_tool import config
@@ -122,7 +124,8 @@ class MaterialStorageTest(unittest.TestCase):
         html = self.client.get(f"/material/settings?t={TOKEN}").get_data(as_text=True)
         self.assertIn('id="tab-storage"', html)
         self.assertIn('id="panel-storage"', html)
-        self.assertIn("このPCだけのパスワードです", html)
+        self.assertIn("全ラインで1つのパスワードです", html)
+        self.assertIn('パスワードを変える <span class="where where-shared">', html)
         self.assertIn('マスタ管理 <span class="where where-shared">', html)
         self.assertIn('ラインと担当者 <span class="where where-local">', html)
 

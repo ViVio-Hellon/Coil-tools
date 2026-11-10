@@ -26,6 +26,13 @@ def sandbox(monkeypatch, tmp_path):
     # 配布設定: ツールのフォルダの直下に書くので、試験では逃がす
     from modules.packing_material_calculation.coil_tool import distribution
     monkeypatch.setattr(distribution, "DIR", tmp_path / "tool" / "配布設定")
+    # 管理者パスワードは梱包明細の共有の1つ(統合 1.2.75)。試験ごとに空の共有へ向ける
+    # (変えた試験の値が次の試験に残らない)
+    from modules.packing_details.meisai import config as details_config, shared_settings
+    (tmp_path / "details_share").mkdir(exist_ok=True)
+    monkeypatch.setattr(details_config, "USER_CONFIG_PATH", tmp_path / "details_pc" / "user_config.json")
+    monkeypatch.setattr(details_config, "SHARED_DIR", tmp_path / "details_share" / "【■】_参照用ファイル")
+    shared_settings.reset_for_tests()
     return tmp_path
 
 

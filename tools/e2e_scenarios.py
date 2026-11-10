@@ -107,8 +107,9 @@ def default_password(rel: str, name: str) -> str:
 
 MATERIAL_PASSWORD = default_password("modules/packing_material_calculation/coil_tool/config.py",
                                      "ADMIN_PASSWORD")
-PENA_PASSWORD = default_password("modules/packing_pena_label/app/services/settings.py", "PATH_PASSWORD")
 DETAILS_PASSWORD = default_password("modules/packing_details/meisai/config.py", "ADMIN_PASSWORD")
+# ペナラベルの合言葉は梱包明細の管理者パスワードと同じ1つ(統合 1.2.75)
+PENA_PASSWORD = DETAILS_PASSWORD
 
 
 def check(name, ok, detail=""):
@@ -1687,16 +1688,17 @@ def scenario_storage(app: App, ctx, sh: Shell, note: dict, shots: str = "") -> N
                     and m.locator("#storeGroups [data-store]").count() == 3, 10)
     rows = _store_rows(m) if ok else {}
     local = "\n".join(rows.get("local", []))
-    check("保存先: 資材計算 このPCに保存(設定ファイル・作業用DB・このPCだけのパスワード)",
-          "user_config.json" in local and "coil_tool.db" in local and "このPCだけ" in local,
+    check("保存先: 資材計算 このPCに保存(設定ファイル・作業用DB)",
+          "user_config.json" in local and "coil_tool.db" in local and "パスワード" not in local,
           local[:200])
     check("保存先: 資材計算 全ラインで共有(マスタ管理の書き先)",
           any("梱包資材マスタ.sqlite3" in r and "マスタ管理" in r for r in rows.get("shared", [])),
           rows.get("shared"))
     shot(m, "material_storage")
     m.click("#tab-master")
-    check("保存先: 資材計算 パスワードは「このPCだけ」と書いてある",
-          "このPCだけのパスワードです" in text(m, "#panel-master"))
+    check("保存先: 資材計算 パスワードは全ラインで1つ(梱包明細の共有)と書いてある(統合 1.2.75)",
+          "全ラインで1つのパスワード" in text(m, "#panel-master")
+          and any("梱包明細打ち出し.json" in r for r in rows.get("shared", [])), rows.get("shared"))
     m.locator(".rail__item").first.click()            # 最初の画面へ戻す
     material_ready(m)
 

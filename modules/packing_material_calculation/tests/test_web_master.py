@@ -705,7 +705,9 @@ def test_パスワードは平文で保存しない(ready):
     ready.post("/api/master/password",
                json={"current": config.ADMIN_PASSWORD,
                      "new": "himitsu99", "confirm": "himitsu99"})
-    raw = config.USER_CONFIG_PATH.read_text(encoding="utf-8")
+    # 梱包明細の共有の控えに持つ(統合 1.2.75。全ラインで1つ)
+    from modules.packing_details.meisai import shared_settings
+    raw = shared_settings.shared_path().read_text(encoding="utf-8")
     assert "himitsu99" not in raw
     stored = json.loads(raw)[config.KEY_ADMIN_PASSWORD]
     assert stored.startswith("pbkdf2$")

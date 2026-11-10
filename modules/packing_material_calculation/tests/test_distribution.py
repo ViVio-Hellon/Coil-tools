@@ -82,8 +82,9 @@ def test_選んだものだけ_ラインは既定で入れない_担当者は入
     assert config.KEY_LINE not in settings
     assert config.KEY_WORKER not in settings
     assert config.KEY_WORKER not in distribution.ITEM_KEYS
-    # パスワードは撹拌した値だけ。平文はどこにも入らない
-    assert admin_password.KEY in settings
+    # 管理者パスワードは配らない(梱包明細の共有の1つで確かめる。統合 1.2.75)。平文もどこにも入らない
+    assert admin_password.KEY not in settings
+    assert admin_password.KEY not in distribution.ITEM_KEYS
     for path in distribution.DIR.rglob("*"):
         assert NEW_PW not in path.read_text(encoding="utf-8-sig"), path
 
@@ -120,8 +121,8 @@ def test_画面にパスワードの値を出さない(terminals):
     configure(terminals[0])
     export()
     text = json.dumps(distribution.summary(), ensure_ascii=False)
-    assert user_settings.get(admin_password.KEY) not in text
-    assert "(設定済み)" in text
+    assert NEW_PW not in text
+    assert "管理者パスワード" not in text
 
 
 def test_知らない項目と空は断る(terminals):

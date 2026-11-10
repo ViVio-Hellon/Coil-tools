@@ -584,7 +584,7 @@ if (pwSave) {
     if (r.auth) renderAuth(r.auth);
     if (r.ok) {
       $('#pwNow').value = $('#pwNew').value = $('#pwConfirm').value = '';
-      // 配布設定の「管理者パスワード」の行(いま: … / 既定のまま)もその場で新しくする
+      // 設定の表示もその場で新しくする
       const s = await call('/api/settings');
       if (s.ok) render(s.view);
     }

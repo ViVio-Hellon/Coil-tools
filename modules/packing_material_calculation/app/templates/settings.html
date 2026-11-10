@@ -106,14 +106,15 @@
   <div class="tabpanel" id="panel-master" role="tabpanel" aria-labelledby="tab-master" hidden>
 
 <section class="sec">
-  <h2>パスワードを変える <span class="where where-local">このPCに保存</span></h2>
+  <h2>パスワードを変える <span class="where where-shared">全ラインで共有</span></h2>
   <p class="setrow__d">
-    <b>このPCだけのパスワードです</b>（このPCの設定ファイルに保存）。変えても、ほかのPCは
-    変わりません。ほかのPCもそろえるときは「配布設定」に入れて配ります。<br>
+    <b>梱包明細・ペナラベルと同じ、全ラインで1つのパスワードです</b>（共有の
+    <code>梱包明細打ち出し.json</code> に撹拌して保存）。ここで変えても、梱包明細の設定で変えても、
+    全ラインの3機能に効きます。共有に届かないときは変えられません。<br>
     このパスワードは<b>マスタを直すとき</b>と<b>取り込み元の置き場所を
     変えるとき</b>の両方に使います。いまのパスワードを知っている人だけが
-    変えられます。忘れたときは、設定ファイルの <code>admin_password</code>
-    の行を消すと既定に戻ります。
+    変えられます。忘れたときは、共有の <code>梱包明細打ち出し.json</code> の
+    <code>admin_password</code> の行を消すと既定に戻ります。
   </p>
   <div class="grid grid--3">
     <label class="f"><span class="f__k">いまのパスワード</span>

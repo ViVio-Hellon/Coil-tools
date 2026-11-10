@@ -28,10 +28,12 @@ IMG = ROOT / "static" / "manual" / "img"
 
 
 def _default_passwords() -> list:
-    """3機能の既定のパスワード(設定のファイルの字面から拾う。試験に文字で書かない)。"""
+    """既定のパスワード(設定のファイルの字面から拾う。試験に文字で書かない)。
+
+    ペナラベルは統合 1.2.75 から梱包明細の値を使う(自分では書かない)ので、2つの設定から拾う。
+    """
     out = []
     for rel, name in (("modules/packing_material_calculation/coil_tool/config.py", "ADMIN_PASSWORD"),
-                      ("modules/packing_pena_label/app/services/settings.py", "PATH_PASSWORD"),
                       ("modules/packing_details/meisai/config.py", "ADMIN_PASSWORD")):
         src = (ROOT / rel).read_text(encoding="utf-8")
         m = re.search(rf'^{name}\s*=\s*(?:os\.environ\.get\([^,]+,\s*)?"([^"]*)"', src, re.M)

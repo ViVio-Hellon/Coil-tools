@@ -24,6 +24,7 @@ from common import storage_places
 from common import ls4_source
 from modules.packing_material_calculation.coil_tool import (admin_session, app_config, coil_results, config, db,
                        data_sync, distribution, source_db, staff, user_settings)
+from modules.packing_details.meisai import shared_settings as _details_shared
 from modules.packing_material_calculation.coil_tool.presenters import master as master_presenter
 from modules.packing_material_calculation.coil_tool.logging_utils import get_logger
 
@@ -354,7 +355,7 @@ def _storage() -> dict[str, Any]:
 
     現場の指摘: このPCで引き継いで使うものと、複数のPCで共有するものは違う。
     設定部にそういうファイルがあることを明記してほしい。
-    **パスワードはこのPCのもの**(梱包明細は全ラインで共有)。取り違えないよう、ここでも言う。
+    **パスワードは全ラインで1つ**(梱包明細の共有のもの。統合 1.2.75)。取り違えないよう、ここでも言う。
     """
     P = storage_places.Place
     config_path = config.USER_CONFIG_PATH
@@ -363,7 +364,7 @@ def _storage() -> dict[str, Any]:
         local=[
             P("設定ファイル", str(config_path),
               "取り込み元の置き場所（梱包資材マスタ・仕掛台帳・予備をどこにするか）・"
-              "ライン・担当者・起動時の自動取り込み・パスワード（撹拌した値。このPCだけのもの）",
+              "ライン・担当者・起動時の自動取り込み",
               "" if config_path.exists() else "まだありません（設定を保存すると作ります）"),
             P("作業用DB", str(config.DB_PATH),
               "取り込んだマスタと仕掛台帳の写し（包装仕様・パレット・リプラサイズ・班員名簿・"
@@ -376,6 +377,8 @@ def _storage() -> dict[str, Any]:
             P("仕掛台帳", str(lot_dir),
               "取り込み元（" + " / ".join(config.LOT_DB_FILES.values()) + "）",
               "読むだけ（このツールは書き換えません）"),
+            P("管理者パスワード", str(_details_shared.shared_path()),
+              "撹拌した値。梱包明細・ペナラベルと同じ、全ラインで1つ（統合 1.2.75）"),
         ],
         dist=[
             P("配布設定", str(distribution.settings_path()),
@@ -743,7 +746,7 @@ def run_import():
 # ==================================================================
 # 書き出す・読み込み直す・消すは、どれも**置き場所を変えるのと同じ関門**
 # (設定のいちばん上の認証)を通す。書き出すものには置き場所と
-# 管理者パスワードが入り、読み込み直すとこの端末の置き場所が変わるため
+# 読み込み直すとこの端末の置き場所が変わるため(管理者パスワードは配らない。統合 1.2.75)
 DIST_NEEDS_PASSWORD_MESSAGE = (
     "配布設定を扱うにはパスワードが要ります。"
     "設定のいちばん上でパスワードを入れてください。")

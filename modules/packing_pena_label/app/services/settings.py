@@ -235,12 +235,21 @@ def integrated(cfg) -> bool:
     """統合版の中で動いているか(入口 `/pena` が付いている)。"""
     return bool(getattr(cfg, "url_prefix", ""))
 
-#: パス系の変更に要る合言葉。
+#: パス系の変更に要るパスワード。
 #:
 #: 参照先を書き換えると**全員の計算に影響する**（別のマスタを読み始める）。
-#: 現場で誤って触られないよう、パス系だけ合言葉を求める。
+#: 現場で誤って触られないよう、パス系だけパスワードを求める。
 #: 秘密を守る仕組みではなく、**うっかり防止**のための手掛かり。
-PATH_PASSWORD = "nisk"
+#:
+#: 以前はここに決まった値を書いていた(変えられなかった)。いまは**梱包明細の共有の管理者パスワード**
+#: (全ラインで1つ・画面で変えられる)で確かめる(統合 1.2.75・構造点検の改善案4)。
+#: `PATH_PASSWORD` は一度も変えていないときの値(試験が使う)。
+def _shared_password():
+    from modules.packing_details.meisai import admin_password, config as details_config
+    return admin_password, details_config
+
+
+PATH_PASSWORD = _shared_password()[1].ADMIN_PASSWORD
 
 #: 合言葉が要る種別（フォルダー・ファイルのパス）
 PATH_KINDS = frozenset({"dir", "file"})
@@ -283,7 +292,13 @@ def _truthy(raw) -> bool:
 
 
 def password_ok(given: str) -> bool:
-    return str(given or "") == PATH_PASSWORD
+    """梱包明細の共有の管理者パスワードと合うか(照合は梱包明細の1か所。控えが読めなければ通さない)。"""
+    try:
+        return bool(_shared_password()[0].verify(str(given or "")))
+    except Exception:                                # noqa: BLE001 - 確かめられなければ通さない
+        import logging
+        logging.getLogger(__name__).exception("管理者パスワードを確かめられませんでした(通しません)")
+        return False
 GROUP_ORDER = [GROUP_REF, GROUP_MASTER, GROUP_LABEL,
                GROUP_BEHAVIOR, GROUP_STARTUP]
 
