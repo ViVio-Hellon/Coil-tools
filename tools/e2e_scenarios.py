@@ -480,6 +480,35 @@ def details_weights_late_reply(ctx, fr):
     details_weights(fr, *before)            # 元へ戻す(あとの試験が使う)
 
 
+def details_typing_kept(fr):
+    """重量を送った返事が、次のロット番号を打っているあいだに届いても、打ったロット番号が消えない(梱包明細 0.13.44)。
+
+    以前は返事のたびにロット番号・前工程実績数・丈数・積み条数の欄を書き直していた(重量の欄だけは 1.2.26 から
+    守っていた)。返事を画面の中で遅らせる(Playwright の `route` で遅らせると、試験の側の打つ操作まで止まる)。
+    """
+    before = (fr.input_value("#weight1"), fr.input_value("#weight2"))
+    fr.evaluate("""() => {
+        if (!window.__origFetch) window.__origFetch = window.fetch;
+        const orig = window.__origFetch;
+        window.fetch = (url, opts) => String(url).endsWith('/api/weights')
+            ? orig(url, opts).then(r => new Promise(ok => setTimeout(() => ok(r), 1500)))
+            : orig(url, opts);
+    }""")
+    try:
+        fr.fill("#weight1", "251")
+        fr.click("#lotNo")                  # 丈1の change が飛ぶ(返事は 1.5 秒遅れて届く)
+        fr.fill("#lotNo", "")
+        fr.type("#lotNo", "L51", delay=40)  # 次のロット番号を打ち始める
+        fr.wait_for_timeout(2300)           # 遅れた返事が届いて画面が描き直されるまで
+        typed = fr.input_value("#lotNo")
+    finally:
+        fr.evaluate("() => { if (window.__origFetch) window.fetch = window.__origFetch; }")
+    check("梱包明細: 重量の返事が、次のロット番号を打っているあいだに届いても、打った番号が消えない", typed == "L51", typed)
+    fr.fill("#lotNo", "")
+    details_open_lot(fr, "L5160Z0")         # 元へ戻す(あとの試験が使う)
+    details_weights(fr, *before)
+
+
 def details_slots(fr):
     return fr.evaluate("[...document.querySelectorAll('#stack button.slot')].map(b => b.textContent.trim())")
 
@@ -682,6 +711,7 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
           text(fr, "#warisu"))
     details_weights(fr, 250, 248)
     details_weights_late_reply(ctx, fr)
+    details_typing_kept(fr)
     details_weights_quick_switch(ctx, sh, fr)
     fr = sh.tab("details")
     err = details_stack_and_output(fr, ["1-12", "1-11", "2-12", "2-11"], resize=True)

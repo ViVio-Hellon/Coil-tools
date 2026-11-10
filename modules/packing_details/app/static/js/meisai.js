@@ -99,21 +99,37 @@ function confirmAsk(message, detail = []) {
 // ------------------------------------------------------------------
 // 描画
 // ------------------------------------------------------------------
-function render(state) {
+/**
+ * 返事で欄を書き直す。**打っている最中の欄には触らない**(VER 0.13.44・構造点検)。
+ *
+ * 返事は送ったあとに届く。そのあいだに利用者が別の欄(次のロット番号など)を打ち始めていると、届いた返事が
+ * その欄を前の値に戻していた(重量の欄は統合 1.2.26 から守っていた。同じ守りをほかの欄にも)。
+ * `since` は返事の元の要求を送った時刻。**それより後に打ち、いまも焦点がある欄**だけ書き直さない
+ * ── 送る前に打った値(断られた入力)は、これまでどおり返事の値に戻す。
+ */
+function setField(id, value, since) {
+  const el = $(id);
+  const typedAfter = Number(el.dataset.typedAt || 0) > since;
+  if (since !== undefined && typedAfter && el === document.activeElement && document.hasFocus()) return;
+  el.value = value;
+}
+const TYPED_FIELDS = ["lotNo", "zenKotei", "jouSu", "stackMax"];
+
+function render(state, since) {
   window.APP.state = state;
 
-  $("lotNo").value = state.lot_no || "";
-  $("zenKotei").value = state.zen_kotei || "";
+  setField("lotNo", state.lot_no || "", since);
+  setField("zenKotei", state.zen_kotei || "", since);
   $("seqNote").textContent = `現在の連番 No${state.current_seq}`;
 
-  renderLot(state);
+  renderLot(state, since);
   renderWeights(state);
   renderGrid(state);
-  renderStack(state);
+  renderStack(state, since);
   renderOutputs(state);
 }
 
-function renderLot(state) {
+function renderLot(state, since) {
   const found = state.found && state.lot;
   const hasStrands = Boolean(found && state.strands.length);
   $("lotInfo").hidden = !found;
@@ -143,7 +159,7 @@ function renderLot(state) {
     $(`f_${key}`).textContent = lot[key] || "";
   }
   $("warisu").textContent = `縦割${lot.tate_wari} × 横割${lot.yoko_wari}`;
-  $("jouSu").value = state.jou_su || "";
+  setField("jouSu", state.jou_su || "", since);
 
   // 受注番号。押すと包装仕様NOが切り替わる (VBA `lstJuchuList_Click`)
   const orders = $("orders");
@@ -325,10 +341,10 @@ function renderGrid(state) {
     : "クリックで積み上げへ";
 }
 
-function renderStack(state) {
+function renderStack(state, since) {
   const box = $("stack");
   box.textContent = "";
-  $("stackMax").value = state.stack_max || "";
+  setField("stackMax", state.stack_max || "", since);
   // 積み条数の上限は前工程実績数まで(VER 0.13.42)。−/＋ もここで止まる
   if (state.stack_limit) {
     $("stackMax").dataset.max = String(state.stack_limit);
@@ -529,10 +545,11 @@ function queued(path, data) {
 
 /** サーバを呼んで、返ってきた画面を描く。 */
 async function send(path, data, onDone) {
+  const since = performance.now();          // これより後に打った欄は、返事で書き直さない
   try {
     const body = await queued(path, data);
     if (body.confirm) return body;          // 確認が要る。呼び元が扱う
-    if (body.state) render(body.state);
+    if (body.state) render(body.state, since);
     if (body.message) notify(body.message, "ok");
     if (onDone) onDone(body);
     return body;
@@ -1005,6 +1022,11 @@ async function runImport() {
 // 組み立て
 // ------------------------------------------------------------------
 function wire() {
+  // 打った時刻を覚える(返事で書き直さないかを決める。`setField`)
+  for (const id of TYPED_FIELDS) {
+    $(id).addEventListener("input", () => { $(id).dataset.typedAt = String(performance.now()); });
+  }
+
   // --- ロット番号。英数字だけ・大文字・7桁で自動検索 ---
   const lotNo = $("lotNo");
   lotNo.addEventListener("input", () => {

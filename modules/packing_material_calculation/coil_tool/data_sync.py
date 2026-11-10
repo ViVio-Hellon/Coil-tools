@@ -45,6 +45,7 @@ import hashlib
 import itertools
 import os
 import sqlite3
+import stat
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -311,7 +312,14 @@ def import_lot_table(conn: Any, table: str, path: Path) -> TableResult:
 
     1つ目にファイルはあるが、目当てのロット(受注)が入っていないとき、2つ目にあれば
     それを使う(python-web-tools と同じ)。両方にあれば第1パスを正とする。
+
+    **1つ目のフォルダに届かないときは、2つ目で入れ替えない**(統合 1.2.69。`held_back`)。まとめての取り込み・
+    起動時の自動取り込み・1表だけの取り込み直しは、どれもここを通る。
     """
+    why = held_back(conn, table, path)
+    if why:
+        log.warning("%s", why)
+        return TableResult(table=table, ok=False, error=why)
     result = _import_table(conn, dest_table=table, source_path=path,
                            source_table=import_specs.LOT_SOURCE_TABLE)
     second = find_second_lot(table)
@@ -619,6 +627,39 @@ def _import_lot_one(conn: Any, table: str) -> TableResult:
               + (f"(第2パスは {config.lot_db2_files()[table]} で探しました)"
                  if len(config.lot_db_dirs()) > 1 else ""))
     return import_lot_table(conn, table, path)
+
+
+def held_back(conn: Any, table: str, path: Path) -> str:
+    """1つ目のフォルダに**届かない**ので、2つ目のファイルで手元の表を入れ替えないときの理由(統合 1.2.69)。
+
+    「読めない」を「無い」と取り違えない(統合 1.2.61)。`find_lot_db` は1つ目に届かないと「無い」とみなして
+    2つ目を返すので、そのまま取り込むと**手元の表を2つ目の中身だけに総入れ替え**する(2つ目は名前を変えた別の
+    ファイル・一部だけのことがある)。梱包明細の `data_sync.held_back` と同じ決まり:
+    見送るのは「前は1つ目から取り込んでいた」かつ「いま1つ目のフォルダに届かない」とき。フォルダに届いて
+    ファイルだけ無いとき、前から2つ目を使っている端末は、いままでどおり2つ目から読む。
+    """
+    primary = config.lot_db_dir()
+    if Path(path).parent == primary:
+        return ""
+    try:
+        row = conn.execute("SELECT 元ファイル FROM 取り込み履歴 WHERE テーブル名 = ?", (table,)).fetchone()
+    except Exception:                          # noqa: BLE001 - 記録が読めなければ、これまでどおり
+        row = None
+    last = str(row[0]) if row and row[0] else ""
+    if not last or Path(last) == Path(path) or Path(last).parent != primary:
+        return ""
+    if _folder_reachable(primary):
+        return ""
+    return (f"{table}: 1つ目のフォルダ({primary})に届かないので、手元は前の中身のままにしました"
+            f"({Path(path).name} で入れ替えていません。届くようになったら取り込み直します)")
+
+
+def _folder_reachable(directory: Path) -> bool:
+    """そのフォルダに届くか(あって、フォルダである)。届かない・確かめられないなら False。"""
+    try:
+        return stat.S_ISDIR(os.stat(Path(directory)).st_mode)
+    except (OSError, ValueError):
+        return False
 
 
 def import_all(conn: Optional[Any] = None) -> SyncResult:

@@ -52,6 +52,8 @@ REFUSE_WRONG = "wrong_password"     # いまのパスワードが違う
 REFUSE_TOO_SHORT = "too_short"      # 新しいパスワードが短い
 REFUSE_MISMATCH = "mismatch"        # 確認用と一致しない
 REFUSE_SAME = "same"                # 変わっていない
+REFUSE_UNREADABLE = "unreadable"    # この PC の設定が読めない(統合 1.2.69)
+REFUSE_WRITE = "write_failed"       # 書けなかった(統合 1.2.69)
 
 
 @dataclass
@@ -87,18 +89,29 @@ def _matches(password: str, stored: str) -> bool:
 # 使う
 # ==================================================================
 def _stored() -> Optional[str]:
-    value = user_settings.get(KEY)
+    """変えた値。変えていなければ None。**設定が読めなければ `user_settings.SettingsUnreadable`**(統合 1.2.69)。
+
+    読めないのを「変えていない」とみなすと、既定のパスワードで通ってしまう(梱包明細は 1.2.61 で直した同じ穴)。
+    """
+    value = user_settings.load_all(strict=True).get(KEY)
     return value if isinstance(value, str) and value.strip() else None
 
 
 def is_custom() -> bool:
-    """この端末で変えてあるか。設定画面に出す(値そのものは出さない)。"""
-    return _stored() is not None
+    """この端末で変えてあるか。設定画面に出す(値そのものは出さない)。読めなければ「変えてある」とみなす。"""
+    try:
+        return _stored() is not None
+    except user_settings.SettingsUnreadable:
+        return True
 
 
 def verify(password: str) -> bool:
-    """合っているか。**照合はここでしかしない。**"""
-    stored = _stored()
+    """合っているか。**照合はここでしかしない。** 設定が読めなければ、どの値でも通さない。"""
+    try:
+        stored = _stored()
+    except user_settings.SettingsUnreadable as exc:
+        log.warning("この PC の設定を読めないので、管理者パスワードを確かめられません(通しません): %s", exc)
+        return False
     if stored is not None:
         return _matches(str(password), stored)
     # 一度も変えていない端末。これまでどおり `config` の値で通す
@@ -125,7 +138,9 @@ def change(current: str, new: str, confirm: str) -> Result:
     if verify(new):
         return Result(False, "いまと同じパスワードです。", REFUSE_SAME)
 
-    user_settings.save(KEY, _encode(new, os.urandom(SALT_BYTES)))
+    if not user_settings.save(KEY, _encode(new, os.urandom(SALT_BYTES))):
+        # 書けなかったのに「変えました」と言わない(統合 1.2.69)
+        return Result(False, "この PC の設定に書けないので、変えられませんでした。", REFUSE_WRITE)
     log.info("管理者パスワードを変更しました")
     return Result(True, "管理者パスワードを変えました。")
 
@@ -139,7 +154,8 @@ def reset(current: str) -> Result:
     """
     if not verify(current):
         return Result(False, "いまのパスワードが違います。", REFUSE_WRONG)
-    user_settings.save(KEY, "")
+    if not user_settings.save(KEY, ""):
+        return Result(False, "この PC の設定に書けないので、戻せませんでした。", REFUSE_WRITE)
     log.info("管理者パスワードを既定に戻しました")
     return Result(True, "既定のパスワードに戻しました。")
 

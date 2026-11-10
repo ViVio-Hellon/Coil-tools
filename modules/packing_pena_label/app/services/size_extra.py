@@ -38,6 +38,7 @@ import unicodedata
 from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Optional, Tuple
 
+from . import file_stamp
 from . import master_admin as MA
 from .size_master import FIRST_EXTRA_OB, normalize_size_name
 
@@ -66,7 +67,7 @@ class SizeExtra:
         #: いま持っている行が「確かめた中身」か。最後に読めなかった(前の行のまま)なら False(統合 1.2.61)
         self.ok = True
         self._rows: List[dict] = []
-        self._stamp: Optional[Tuple[str, float, int]] = None
+        self._stamp: Optional[Tuple] = None
         self._at = 0.0
 
     def invalidate(self) -> None:
@@ -98,11 +99,8 @@ class SizeExtra:
         now = time.monotonic()
         if not force and self._stamp is not None and (now - self._at) < self.refresh_sec:
             return self.rows()
-        try:
-            st = os.stat(path)
-            stamp = (os.path.abspath(path), st.st_mtime, st.st_size)
-        except OSError:
-            stamp = None
+        # 本体と -wal・-journal(統合 1.2.69。WAL の書き込みは本体を変えない)
+        stamp = file_stamp.stamp(path)
         if not force and stamp is not None and stamp == self._stamp:
             self._at = now
             return self.rows()

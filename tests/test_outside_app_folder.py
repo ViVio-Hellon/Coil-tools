@@ -27,6 +27,17 @@ class InsideAppTest(unittest.TestCase):
         self.assertFalse(app_config.inside_app(Path(tempfile.gettempdir()) / "x"))
         self.assertFalse(app_config.inside_app(str(app_config.APP_ROOT) + "_old"), "隣の似た名前は外")
 
+    @unittest.skipIf(os.name == "nt", "リンクを作るには権限が要る(Windows)")
+    def test_別の名前で届く道でもツールのフォルダの中だと見抜く(self):
+        """統合 1.2.69。割り当てたドライブ・短い名前・リンクで同じフォルダに届くと、外に見えていた。"""
+        tmp = Path(tempfile.mkdtemp(prefix="cpt-alias-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        alias = tmp / "別名"
+        os.symlink(app_config.APP_ROOT, alias)
+        self.assertTrue(app_config.inside_app(alias / "logs"))
+        self.assertTrue(app_config.inside_app(alias))
+        self.assertFalse(app_config.inside_app(tmp / "外"))
+
     def test_ログの出力先にツールのフォルダの中は書けないと言う(self):
         problem = logging_utils.writable_problem(app_config.APP_ROOT / "logs_here")
         self.assertIn("ツールのフォルダの中", problem)

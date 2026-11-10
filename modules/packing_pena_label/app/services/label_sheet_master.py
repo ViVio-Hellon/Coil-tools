@@ -30,6 +30,8 @@ import sqlite3
 import time
 from typing import Dict, Optional, Tuple
 
+from . import file_stamp
+
 log = logging.getLogger(__name__)
 
 #: 共有マスタ側の表名
@@ -53,19 +55,16 @@ class LabelSheetMaster:
         self.last_path = ""
         self.row_count = 0
         self._rows: Dict[int, Tuple[str, str]] = {}
-        self._stamp: Optional[Tuple[str, float, int]] = None
+        self._stamp: Optional[Tuple] = None
         self._at = 0.0
         #: 一時的に読めず、前に読めた内容で続けているか(統合 1.2.49)
         self.serving_stale = False
 
     # ------------------------------------------------------------
     @staticmethod
-    def _stamp_of(path: str) -> Optional[Tuple[str, float, int]]:
-        try:
-            st = os.stat(path)
-            return (os.path.abspath(path), st.st_mtime, st.st_size)
-        except OSError:
-            return None
+    def _stamp_of(path: str) -> Optional[Tuple]:
+        """本体と -wal・-journal の目印(統合 1.2.69。WAL の書き込みは本体を変えない)。"""
+        return file_stamp.stamp(path)
 
     def rows(self) -> Dict[int, Tuple[str, str]]:
         """``{obIdx: (シート名, 型番)}``。読めていなければ空。"""

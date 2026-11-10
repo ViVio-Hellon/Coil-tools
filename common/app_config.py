@@ -57,13 +57,26 @@ def inside_app(path: Any) -> bool:
 
     業務ツール統合ランチャー 1.8.9 から、ツールのフォルダは**更新のたびに丸ごと上書きされる**前提。書き出し・記録・
     ログの置き場所を中にすると、更新で消える・書きかけのファイルが上書きを止める・共有では何台もが同じファイルに書く。
+
+    **実体の道でも比べる**(統合 1.2.69・構造点検)。同じフォルダに別の名前でも届くとき(Windows の割り当てた
+    ドライブと `\\サーバー\…`、短い名前 `RUNNER~1`、リンク)、書いたままの道だけで比べると中だと見抜けない
+    (`APP_ROOT` は実体の道なので、利用者が割り当てたドライブの道を入れると外に見えていた)。
     """
     try:
-        target = os.path.normcase(os.path.abspath(str(path)))
-        root = os.path.normcase(os.path.abspath(str(APP_ROOT)))
-        return os.path.commonpath([target, root]) == root
-    except (TypeError, ValueError):
+        text = str(path)
+        roots = {os.path.normcase(os.path.abspath(str(APP_ROOT))),
+                 os.path.normcase(os.path.realpath(str(APP_ROOT)))}
+        targets = {os.path.normcase(os.path.abspath(text)), os.path.normcase(os.path.realpath(text))}
+    except (TypeError, ValueError, OSError):
         return False
+    for target in targets:
+        for root in roots:
+            try:
+                if os.path.commonpath([target, root]) == root:
+                    return True
+            except ValueError:                   # 違うドライブ
+                continue
+    return False
 
 
 #: 置き場所がツールのフォルダの中だったときの知らせ(後ろに置き場所を足す)
