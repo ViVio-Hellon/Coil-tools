@@ -583,6 +583,48 @@ class WriteTest(unittest.TestCase):
         shared_settings.update({"qa_mark": "X"})
         self.assertFalse(lock.exists())
 
+    def _fast_clock(self, ahead: float):
+        """この PC の時計だけを進める(ファイルサーバーが付ける更新日時は本物のまま)。"""
+        real = time.time
+        return mock.patch.object(shared_settings.time, "time", side_effect=lambda: real() + ahead)
+
+    def test_PCの時計が進んでいても_ほかの端末が使っている鍵は外さない(self):
+        """統合 1.2.69。鍵の古さを PC の時計で測っていたので、30 秒進んだ PC はどの鍵もすぐ消していた。"""
+        lock = shared_settings.shared_dir() / shared_settings.LOCK_NAME
+        lock.write_text("line2", encoding="utf-8")       # いま、ほかの端末が取った鍵
+        with self._fast_clock(shared_settings.LOCK_STALE_SEC + 90), \
+                mock.patch.object(shared_settings, "LOCK_WAIT_SEC", 0.3), \
+                self.assertRaises(shared_settings.SharedError) as caught:
+            shared_settings.update({"qa_mark": "X"})
+        self.assertIn("ほかの端末が", str(caught.exception))
+        self.assertTrue(lock.exists(), "使用中の鍵を消した")
+        self.assertEqual(lock.read_text(encoding="utf-8"), "line2")
+        self.assertEqual([p.name for p in shared_settings.shared_dir().glob(".時計確認_*")], [],
+                         "試しのファイルは残さない")
+
+    def test_PCの時計が進んでいても_本当に古い鍵は外す(self):
+        lock = shared_settings.shared_dir() / shared_settings.LOCK_NAME
+        lock.write_text("line2", encoding="utf-8")
+        old = time.time() - shared_settings.LOCK_STALE_SEC - 5
+        os.utime(lock, (old, old))
+        with self._fast_clock(600):
+            shared_settings.update({"qa_mark": "X"})
+        self.assertFalse(lock.exists())
+
+    def test_PCの時計が遅れていても_本当に古い鍵は外す(self):
+        lock = shared_settings.shared_dir() / shared_settings.LOCK_NAME
+        lock.write_text("line2", encoding="utf-8")
+        old = time.time() - shared_settings.LOCK_STALE_SEC - 5
+        os.utime(lock, (old, old))
+        with self._fast_clock(-600):
+            shared_settings.update({"qa_mark": "X"})
+        self.assertFalse(lock.exists(), "遅れた PC でも、落ちた端末の鍵がいつまでも残らない")
+
+    def test_共有の時計を測れなければPCの時計で測る(self):
+        folder = shared_settings.shared_dir()
+        with mock.patch.object(type(folder), "write_bytes", side_effect=OSError(13, "denied")):
+            self.assertEqual(shared_settings._shared_offset(folder), 0.0)
+
     def test_読む側は書きかけを見ない(self):
         """別名で書いてから置き換える。途中で読んでも古いか新しいかのどちらか。"""
         shared_settings.update({"qa_mark": "A" * 20})

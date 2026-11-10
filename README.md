@@ -41,7 +41,7 @@ DB処理・帳票は移植元のまま、それぞれ独立して動きます。
 | [`docs/ランチャー連携.md`](docs/ランチャー連携.md) | 業務ツール統合ランチャーとのつなぎ方 |
 | [`docs/数の丸め点検.md`](docs/数の丸め点検.md) | 3機能の丸め・切り捨ての点検の記録 |
 | [`docs/変更履歴.md`](docs/変更履歴.md) | 統合ツールの変更履歴と版の決まり |
-| [`docs/4M変化点_VBA移行対応.md`](docs/4M変化点_VBA移行対応.md) | VBA から Python への移行の 4M変化点への対応(統合 1.2.31〜1.2.68。変更前・後・紙への影響・記録・切り替えの確認) |
+| [`docs/4M変化点_VBA移行対応.md`](docs/4M変化点_VBA移行対応.md) | VBA から Python への移行の 4M変化点への対応(統合 1.2.31〜1.2.69。変更前・後・紙への影響・記録・切り替えの確認) |
 | `templates/manual/*.html` | ツール上の説明書(上の帯の「説明書」。現場向けの写真つき) |
 
 ### 梱包明細(`modules/packing_details/`)
@@ -117,7 +117,7 @@ DB処理・帳票は移植元のまま、それぞれ独立して動きます。
 ## 画面の作り
 
 ```
-上の帯   コイル梱包ツール VER1.2.68 [梱包明細] [ペナラベル] [資材計算]   画面の色[自動|ライト|ダーク] 説明書 ログ 管理者停止 接続OK [終了]
+上の帯   コイル梱包ツール VER1.2.69 [梱包明細] [ペナラベル] [資材計算]   画面の色[自動|ライト|ダーク] 説明書 ログ 管理者停止 接続OK [終了]
 中身     見せているタブの機能の画面(iframe)。ほかのタブは隠しているだけで消えない
 ```
 
@@ -138,6 +138,7 @@ launch_guard.py                     多重起動の判定・起動の順番待�
 bridge.py                           デスクトップ版の入口(exe の子。標準入出力で Flask を呼ぶ。待ち受けない)
 src-tauri/                          デスクトップ版の外枠(Rust / Tauri)。配らない(作った exe だけを配る)
 .github/workflows/desktop-windows.yml   Windows で試験して exe を作る(GitHub Actions)
+.github/workflows/e2e-linux.yml        ブラウザ版の通し試験(smoke_shell・e2e_scenarios)を Linux の Chromium で(GitHub Actions)
 boot_server.py / server.py          起動待機画面 → 本体への引き継ぎ(waitress)
 process_manager.py                  安全な停止
 config/app.json                     統合アプリのID・表示名・版・ポート
@@ -156,8 +157,8 @@ modules/
   packing_pena_label/               ペナラベル (app/ + server.py〈Flask への取り次ぎ〉+ data/ + assets/ + tests/)
   packing_material_calculation/     資材計算   (coil_tool/ + app/ + config/ + docs/ + tests/)
 tests/                              統合の試験(タブ・入口・トークン・心拍・停止・起動ファイル)
-tools/smoke_shell.py                起動から停止までの通し(手動)
-tools/e2e_scenarios.py              3機能を現場と同じように使う通し(一連の流れ・交互・放置。手動)
+tools/smoke_shell.py                起動から停止までの通し(Actions の Linux でも流す)
+tools/e2e_scenarios.py              3機能を現場と同じように使う通し(一連の流れ・交互・放置。Actions の Linux でも流す)
 tools/desktop_e2e.py                デスクトップ版の窓を操作する通し(開発機の Linux。手動)
 tools/make_manual_shots.py          操作説明書の写真を撮る(試験用のデータで本物の画面を撮り、丸数字を描き込む)
 scripts/make_dist.py                配布用フォルダを作る(デスクトップ版の exe も入れる)
@@ -165,7 +166,7 @@ scripts/make_shortcuts.vbs          配った先で押すと、ブラウザ版�
 scripts/desktop_smoke.py            exe を起動して、画面が届く・待ち受けない・止めたら Python も終わるを確かめる
 docs/統合設計.md                    調査・比較・採用した実装・影響・テスト
 docs/仕掛ファイルの仕様.md          仕掛ファイルの置き場所(第1パス・第2パス)・LS4LOT の2つの形式・列の関係
-docs/4M変化点_VBA移行対応.md       VBA から Python への移行の 4M変化点への対応(統合 1.2.31〜1.2.68)
+docs/4M変化点_VBA移行対応.md       VBA から Python への移行の 4M変化点への対応(統合 1.2.31〜1.2.69)
 docs/デスクトップ版.md              デスクトップ版の作り・動きの約束・作り方・確かめたこと
 ```
 
@@ -266,8 +267,8 @@ Python を 3.12 から 3.13 に上げるなど **Store の Python の版を変�
 
 | | 版 | 出どころ |
 |---|---|---|
-| コイル梱包ツール(統合ツール) | 1.2.68 | `config/app.json`(デスクトップ版の `src-tauri/tauri.conf.json`・`Cargo.toml` もそろえる) |
-| 梱包明細 | 0.13.42 | `modules/packing_details/config/app.json` |
+| コイル梱包ツール(統合ツール) | 1.2.69 | `config/app.json`(デスクトップ版の `src-tauri/tauri.conf.json`・`Cargo.toml` もそろえる) |
+| 梱包明細 | 0.13.43 | `modules/packing_details/config/app.json` |
 | ペナラベル | 1.5.57 | `modules/packing_pena_label/app/config.py` の `APP_VERSION` |
 | 資材計算 | 0.2.37 | `modules/packing_material_calculation/config/app.json` |
 
@@ -321,6 +322,8 @@ python tools/desktop_e2e.py --exe src-tauri/target/debug/CoilPackingTools   # �
 
 Windows では GitHub Actions の「デスクトップ版(Windows)」が、上の Python の試験4つ・Rust の試験・
 exe の作成・exe を起動しての確認(`scripts/desktop_smoke.py`)を push のたびに流します。
+Linux では「ブラウザ版の通し試験(Linux)」が、`tools/smoke_shell.py` と `tools/e2e_scenarios.py` を
+実ブラウザ(Chromium)で push のたびに流します(統合 1.2.69。それまでは手で流していた)。
 
 3機能の試験は移植元のものを(import パスだけ直して)そのまま流しています。
 そのうち画面・API を叩く試験は、統合の試験(`tests/test_modules_mounted.py`)が

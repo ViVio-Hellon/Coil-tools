@@ -474,7 +474,7 @@ dependencies = [
 
 [[package]]
 name = "coil-packing-tools-desktop"
-version = "1.2.68"
+version = "1.2.69"
 dependencies = [
  "serde",
  "serde_json",

@@ -219,3 +219,55 @@ class LotLookupTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SharedMasterWriteNoCreateTest(unittest.TestCase):
+    """共有の梱包資材マスタへ書くとき、マスタが一瞬見えなくても空のファイルを作らない(統合 1.2.69)。
+
+    書く接続(`source_db.connect`)は開く前にファイルがあるかを見るが、見てから開くまでのあいだに
+    差し替えで消えると、既定(rwc)の開き方は**空のファイルを新しく作り**、そこへ編集履歴の表と行を書く。
+    資材計算は 1.2.61 で直していた(ほぼ同じ source_db が2本あり、こちらに入っていなかった)。
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="pd-nocreate-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.missing = self.tmp / "梱包資材マスタ.sqlite3"
+
+    def test_URIの開き方は書くときも作らない(self):
+        with self.assertRaises((sqlite3.Error, OSError)):
+            source_db._try_uri(self.missing, read_only=False)
+        self.assertFalse(self.missing.exists(), "空のマスタを作った")
+
+    def test_素のパスの開き方も書くときは作らない(self):
+        with self.assertRaises(OSError):
+            source_db._try_plain(self.missing, read_only=False)
+        self.assertFalse(self.missing.exists(), "空のマスタを作った")
+
+    def test_見てから開くまでに消えても作らない(self):
+        real = sqlite3.connect(self.missing)
+        real.execute('CREATE TABLE "x" ("a" TEXT)')
+        real.commit()
+        real.close()
+        original = source_db._try_uri
+
+        def vanish_then_open(resolved, *, read_only):
+            self.missing.unlink()                      # 差し替えの途中で一瞬消えた
+            return original(resolved, read_only=read_only)
+
+        with mock.patch.object(source_db, "_try_uri", side_effect=vanish_then_open):
+            with self.assertRaises(Exception):
+                with source_db.connect(self.missing) as conn:
+                    conn.execute('CREATE TABLE "編集履歴" ("a" TEXT)')
+        self.assertFalse(self.missing.exists(), "消えた場所に空のマスタを作った")
+
+    def test_あるファイルにはこれまでどおり書ける(self):
+        real = sqlite3.connect(self.missing)
+        real.execute('CREATE TABLE "x" ("a" TEXT)')
+        real.commit()
+        real.close()
+        with source_db.connect(self.missing) as conn:
+            conn.insert("x", {"a": "1"})
+        check = sqlite3.connect(self.missing)
+        self.assertEqual(check.execute('SELECT "a" FROM "x"').fetchall(), [("1",)])
+        check.close()

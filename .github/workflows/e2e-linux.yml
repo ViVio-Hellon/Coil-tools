@@ -1,0 +1,50 @@
+# ブラウザ版の通し試験(Linux・Chromium)
+#
+# これまで手で流していた2つを、プッシュのたびに流す(統合 1.2.69・構造点検の改善案1)。
+# 画面の JS には単体の試験が無いので、画面の壊れ(打ちかけが消える・スクロールが戻る・
+# 終了の確かめが出ない など)はここで捕まえる。
+#
+#   tools/smoke_shell.py     起動から停止までを本物の経路で(start_app.py → waitress → 3つの iframe → 停止)
+#   tools/e2e_scenarios.py   3機能を実ブラウザで通す(放置・複数タブ・印刷・マスタ・取り込み など)
+#
+# Windows のデスクトップ版の確かめは desktop-windows.yml のほう。
+name: ブラウザ版の通し試験(Linux)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    # 通し試験は放置の場面を含むので 35 分ほどかかる
+    timeout-minutes: 60
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python の部品と Chromium を入れる
+        run: |
+          python -m pip install -r requirements.txt playwright
+          python -m playwright install --with-deps chromium
+          # 日本語の字(手元で流していたときと同じ IPA ゴシック)。無いと豆腐になり、幅を測る確かめがずれる
+          sudo apt-get install -y fonts-ipafont-gothic
+
+      - name: 起動から停止までの確かめ(smoke_shell)
+        run: python tools/smoke_shell.py
+
+      - name: 3機能の通し試験(e2e_scenarios)
+        if: success() || failure()
+        run: python tools/e2e_scenarios.py --shots e2e-shots
+
+      - uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: e2e-shots
+          path: e2e-shots
+          if-no-files-found: ignore

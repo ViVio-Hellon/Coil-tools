@@ -367,7 +367,9 @@ def _prepare(conn: sqlite3.Connection) -> sqlite3.Connection:
 
 def _try_uri(resolved: Path, *, read_only: bool) -> sqlite3.Connection:
     """`file:...?mode=ro` で開く。ふだんはこれで通る。"""
-    uri = to_uri(resolved) + ("?mode=ro" if read_only else "")
+    # 書くときも `mode=rw`(統合 1.2.69。資材計算は 1.2.61 で直した同じ穴)。既定(rwc)だと、差し替え中で
+    # 一瞬消えていた共有の梱包資材マスタの場所に**空のファイルを新しく作り**、そこへ表と行を書いてしまう
+    uri = to_uri(resolved) + ("?mode=ro" if read_only else "?mode=rw")
     conn = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_MS / 1000)
     try:
         return _prepare(conn)
@@ -382,6 +384,9 @@ def _try_plain(resolved: Path, *, read_only: bool) -> sqlite3.Connection:
     `mode=ro` の代わりに `query_only` を立てます。取り込み元へ
     書き込まないことは**譲れない**ので、読み取り専用は必ず掛けます。
     """
+    if not read_only and not resolved.exists():
+        # 素のパスの connect は無ければ作る。書くときは作らない(統合 1.2.69。上の `mode=rw` と同じ)
+        raise OSError(f"ファイルが見つかりません: {resolved}")
     conn = sqlite3.connect(str(resolved), timeout=BUSY_TIMEOUT_MS / 1000)
     try:
         if read_only:

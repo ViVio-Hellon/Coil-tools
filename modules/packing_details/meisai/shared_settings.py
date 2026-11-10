@@ -62,6 +62,7 @@ import secrets
 import socket
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -624,10 +625,16 @@ def _locked(folder: Path, name: str = LOCK_NAME) -> Iterator[None]:
     鍵は「無ければ作る(あれば失敗)」で取る。ネットワークの共有でも
     効く、いちばん古いやり方。書いた端末が途中で落ちて鍵が残ったときは、
     `LOCK_STALE_SEC` を過ぎたら外す。
+
+    **鍵の古さは共有フォルダの時計で測る**(統合 1.2.69)。鍵の更新日時はファイルサーバーが付けるので、
+    この PC の時計と比べると、時計が進んでいる PC は、ほかの PC が使っている最中の鍵を「古い」と見て
+    消してしまう(30 秒進んでいれば、どの鍵もすぐ消す)。鍵があったときに1度だけ共有に試しのファイルを
+    書いて、ファイルサーバーの時計とのずれを測る。測れなければこれまでどおり PC の時計で測る。
     """
     lock = folder / name
     deadline = time.monotonic() + LOCK_WAIT_SEC
     denied_until: Optional[float] = None
+    offset: Optional[float] = None              # 共有フォルダの時計 − この PC の時計(秒)
     while True:
         try:
             fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -641,8 +648,10 @@ def _locked(folder: Path, name: str = LOCK_NAME) -> Iterator[None]:
             time.sleep(0.05)
             continue
         except FileExistsError:
+            if offset is None:
+                offset = _shared_offset(folder)
             try:
-                age = time.time() - lock.stat().st_mtime
+                age = time.time() + offset - lock.stat().st_mtime
             except FileNotFoundError:
                 continue
             except OSError as exc:
@@ -673,6 +682,29 @@ def _locked(folder: Path, name: str = LOCK_NAME) -> Iterator[None]:
             lock.unlink()
         except OSError:
             pass
+
+
+def _shared_offset(folder: Path) -> float:
+    """共有フォルダの時計とこの PC の時計のずれ(共有 − この PC。秒)。測れなければ 0(PC の時計で測る)。
+
+    試しのファイルを書いて、ファイルサーバーが付けた更新日時を見る(`slip_history._shared_clock` と同じ考え方)。
+    書き手の PC が日時を付ける共有では 0 に近くなり、これまでと同じになる。
+    """
+    probe = folder / f".時計確認_{os.getpid()}_{uuid.uuid4().hex[:8]}.tmp"
+    try:
+        before = time.time()
+        probe.write_bytes(b"")
+        after = time.time()
+        try:
+            return probe.stat().st_mtime - (before + after) / 2
+        finally:
+            try:
+                probe.unlink()
+            except OSError:
+                pass
+    except OSError as exc:
+        log.warning("共有フォルダの時計を確かめられないので、この PC の時計で鍵の古さを測ります: %s", exc)
+        return 0.0
 
 
 def _replace(tmp: Path, path: Path) -> None:
