@@ -622,6 +622,9 @@ def pena_weights(fr, kensa="w111111", w1="10", w2="12"):
     fr.fill("#kensaNo", kensa)
     fr.fill("#weight1", w1)
     fr.fill("#weight2", w2)
+    # 前の知らせ(7 秒出ている)を消してから押す。残っていると、この返事を待たずに先へ進み、
+    # 次の操作とサーバの中で重なる(CI で風袋計算の結果が空になった。統合 1.2.75)
+    fr.evaluate("() => { const t = document.querySelector('#toast'); if (t) t.hidden = true; }")
     fr.click("button[data-act=applyWeight]")
     return pena_toast(fr, "重量を反映しました")
 
@@ -659,6 +662,7 @@ def pena_typing_kept(fr):
 def pena_tare(fr, counts=("11", "11", "10", "10")):
     for i, n in enumerate(counts, 1):
         fr.fill(f"#coilH{i}", n)
+    fr.evaluate("() => { const t = document.querySelector('#toast'); if (t) t.hidden = true; }")   # 前の知らせを消す
     fr.click("button[data-act=calcTare]")
     if not pena_toast(fr, "計算しました"):
         return "計算できない: " + text(fr, "#toast .toast-body")
@@ -2211,6 +2215,9 @@ def scenario_idle(app: App, ctx, sh: Shell, note: dict, minutes: dict) -> None:
     except subprocess.TimeoutExpired:
         ended = False
     check("放置e: 全部閉じたら自分で終わる", ended, "")
+    if not ended:                                  # 手がかり: 自動終了の見張りが最後に何を見ていたか
+        for line in [l for l in app.logs().splitlines() if "idle_exit" in l][-15:]:
+            print("      " + line)
     check("放置e: 終わったあと多重起動の印(ロック)が残らない",
           not (app.local / "runtime" / "main.lock").exists(), "")
     h = app.start()
