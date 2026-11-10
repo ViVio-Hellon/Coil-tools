@@ -12,6 +12,8 @@ VBA 版は Windows レジストリに保存していた。Python 版はレジス
 """
 from __future__ import annotations
 
+from common import unreadable as _unreadable  # 「読めない」の親(統合 1.2.72)
+
 import json
 from typing import Any
 
@@ -21,7 +23,7 @@ from .logging_utils import get_logger
 log = get_logger("user_settings")
 
 
-class SettingsUnreadable(Exception):
+class SettingsUnreadable(_unreadable.Unreadable):
     """設定ファイルはあるのに読めない・壊れている(「無い」とは違う。統合 1.2.61)。"""
 
 

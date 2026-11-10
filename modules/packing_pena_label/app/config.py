@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from common import unreadable as _unreadable  # 「読めない」の親(統合 1.2.72)
+
 import json
 import os
 import sys
@@ -330,7 +332,7 @@ LAYER_LABEL = {
 }
 
 
-class LocalConfigUnreadable(OSError):
+class LocalConfigUnreadable(OSError, _unreadable.Unreadable):
     """設定ファイルは**あるのに読めない**(使用中・壊れている)。「無い」とは区別する(統合 1.2.61)。
 
     別のツールで、共有が読めなかったのを「表が無い」と取り違え、手元の実績を送り直して重複を大量に作った

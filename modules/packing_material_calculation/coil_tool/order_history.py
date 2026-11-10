@@ -17,6 +17,8 @@
 """
 from __future__ import annotations
 
+from common import unreadable as _unreadable  # 「読めない」の親(統合 1.2.72)
+
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -74,7 +76,7 @@ def _parse_day(text: str) -> Optional[date]:
     return None
 
 
-class HistoryUnreadable(Exception):
+class HistoryUnreadable(_unreadable.Unreadable):
     """発注履歴を読めなかった(「重複なし」とは言えない。統合 1.2.61)。"""
 
 

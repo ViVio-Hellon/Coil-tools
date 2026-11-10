@@ -62,7 +62,6 @@ import secrets
 import socket
 import threading
 import time
-import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -687,24 +686,14 @@ def _locked(folder: Path, name: str = LOCK_NAME) -> Iterator[None]:
 def _shared_offset(folder: Path) -> float:
     """共有フォルダの時計とこの PC の時計のずれ(共有 − この PC。秒)。測れなければ 0(PC の時計で測る)。
 
-    試しのファイルを書いて、ファイルサーバーが付けた更新日時を見る(`slip_history._shared_clock` と同じ考え方)。
-    書き手の PC が日時を付ける共有では 0 に近くなり、これまでと同じになる。
+    中身は `common/shared_clock.py`(統合 1.2.72。明細の履歴の整理・管理者以外停止と同じ1つの仕組み)。
     """
-    probe = folder / f".時計確認_{os.getpid()}_{uuid.uuid4().hex[:8]}.tmp"
-    try:
-        before = time.time()
-        probe.write_bytes(b"")
-        after = time.time()
-        try:
-            return probe.stat().st_mtime - (before + after) / 2
-        finally:
-            try:
-                probe.unlink()
-            except OSError:
-                pass
-    except OSError as exc:
-        log.warning("共有フォルダの時計を確かめられないので、この PC の時計で鍵の古さを測ります: %s", exc)
+    from common import shared_clock
+    ahead = shared_clock.offset(folder)
+    if ahead is None:
+        log.warning("共有フォルダの時計を確かめられないので、この PC の時計で鍵の古さを測ります: %s", folder)
         return 0.0
+    return ahead
 
 
 def _replace(tmp: Path, path: Path) -> None:

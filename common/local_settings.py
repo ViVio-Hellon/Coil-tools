@@ -15,6 +15,8 @@ r"""統合アプリの設定(このPCに保存) ── 3機能に共通のもの
 """
 from __future__ import annotations
 
+from common import unreadable as _unreadable  # 「読めない」の親(統合 1.2.72)
+
 import json
 import logging
 import os
@@ -49,7 +51,7 @@ def path() -> Path:
     return app_config.local_dir("data") / FILE_NAME
 
 
-class Unreadable(OSError):
+class Unreadable(OSError, _unreadable.Unreadable):
     """設定のファイルは**ある**のに読めない・壊れている(統合 1.2.61)。"""
 
 

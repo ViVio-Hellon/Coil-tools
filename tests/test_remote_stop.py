@@ -271,7 +271,7 @@ class ExpireTests(_Base):
         age = remote_stop._shared_age()
         self.assertIsNotNone(age)
         self.assertLess(abs(age), 60)
-        self.assertEqual([p.name for p in remote_stop.folder().glob(".時計_*")], [], "試しのファイルは残さない")
+        self.assertEqual([p.name for p in remote_stop.folder().glob(".時計*")], [], "試しのファイルは残さない")
 
     def test_延長すると_いまから1時間に延びる(self) -> None:
         self.issue()

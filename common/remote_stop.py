@@ -32,6 +32,8 @@
 """
 from __future__ import annotations
 
+from common import unreadable as _unreadable  # 「読めない」の親(統合 1.2.72)
+
 import getpass
 import json
 import os
@@ -109,11 +111,11 @@ REFUSE_NOT_ACTIVE = "not_active"
 REFUSE_WRITE = "write_failed"
 
 
-class Unreadable(Exception):
+class Unreadable(_unreadable.Unreadable):
     """お願いのファイルが読めない(届かない・壊れている)。「無い」とは別。"""
 
 
-class RulesUnreadable(Exception):
+class RulesUnreadable(_unreadable.Unreadable):
     """アクセス権限を読めない。「Administrator ではない」とは別(理由を分けて断る)。"""
 
 
@@ -250,20 +252,14 @@ def expires_at(req: dict) -> float:
 
 def _shared_age() -> Optional[float]:
     """お願いのファイルを書いてからの秒数を、**共有フォルダの時計**で(書いた時刻と、いま書いた試しのファイルの
-    時刻の差)。測れなければ None(PC の時計で決める)。"""
-    probe = folder() / f".時計_{_safe(identity()[0])}_{os.getpid()}.tmp"
+    時刻の差)。測れなければ None(PC の時計で決める)。共有フォルダの時計は `common/shared_clock.py`(統合 1.2.72)。"""
+    from common import shared_clock
     try:
         written = request_path().stat().st_mtime
-        probe.write_bytes(b"")
-        now = probe.stat().st_mtime
     except OSError:
         return None
-    finally:
-        try:
-            probe.unlink(missing_ok=True)
-        except OSError:
-            pass
-    return now - written
+    shared = shared_clock.now(folder())
+    return None if shared is None else shared - written
 
 
 def is_expired(req: dict, now: Optional[float] = None) -> bool:

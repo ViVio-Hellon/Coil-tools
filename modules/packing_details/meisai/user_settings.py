@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+from common import unreadable as _unreadable  # 「読めない」の親(統合 1.2.72)
+
 import json
 import os
 import threading
@@ -27,7 +29,7 @@ log = get_logger("user_settings")
 _lock = threading.RLock()
 
 
-class SettingsUnreadable(OSError):
+class SettingsUnreadable(OSError, _unreadable.Unreadable):
     """設定ファイルはあるのに読めない(押さえられている・権限が無い・届かない)。"""
 
 

@@ -531,20 +531,11 @@ def _shared_clock(folder: Path) -> Optional[datetime]:
 
     ファイルサーバーが付ける日時なので、PC ごとの時計と比べられる(書き手の PC が日時を付ける作りの
     共有では、この PC の時計と同じになり、ずれは見つけられない。そのときは消す枚数の上限が守る)。
+    中身は `common/shared_clock.py`(統合 1.2.72。共有の鍵・管理者以外停止と同じ1つの仕組み)。
     """
-    probe = folder / f".時計確認_{os.getpid()}_{uuid.uuid4().hex[:8]}.tmp"
-    try:
-        probe.write_bytes(b"")
-        try:
-            return datetime.fromtimestamp(probe.stat().st_mtime)
-        finally:
-            try:
-                probe.unlink()
-            except OSError:
-                pass
-    except OSError as exc:
-        log.warning("共有フォルダの時計を確かめられません: %s", exc)
-        return None
+    from common import shared_clock
+    at = shared_clock.now(folder)
+    return datetime.fromtimestamp(at) if at is not None else None
 
 
 def _purge_shared(hconn: sqlite3.Connection, today: str, folder: Optional[Path] = None,
