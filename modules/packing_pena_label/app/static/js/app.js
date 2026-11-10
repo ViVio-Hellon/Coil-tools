@@ -69,10 +69,14 @@
     return run;
   }
 
+  // 返事の元の要求を送った時刻(統合 1.2.73)。それより後に打ち、いまも焦点のある欄は返事で書き直さない(`keepTyping`)
+  var replySentAt = 0;
   function send(path, body) {
     var payload = body || {};
     // どの画面からの操作かを必ず名乗る（入力画面は同時に1つだけ）
     if (screenId && !payload.screenId) { payload.screenId = screenId; }
+    var sentAt = performance.now();
+    var screenCall = String(path).indexOf("/api/screen/") === 0;
     return fetch(url(path), {
       method: "POST",
       headers: headers({ "Content-Type": "application/json" }),
@@ -84,10 +88,25 @@
     }).then(function (j) {
       // 使用権を失っていた（別の画面で「この画面で使う」が押された）
       if (j && j.screenTaken) { showLost(); }
+      if (!screenCall) { replySentAt = sentAt; }
       return j;
     });
   }
   window.pplPost = post;
+
+  // 打った時刻を覚える(返事で書き直さないかを決める。`keepTyping`)
+  document.addEventListener("input", function (e) {
+    if (e.target && e.target.dataset) { e.target.dataset.typedAt = String(performance.now()); }
+  }, true);
+  /**
+   * 返事で欄を書き直してよいか(統合 1.2.73・構造点検)。**送ったあとに打ち、いまも焦点のある欄は書き直さない。**
+   * 操作は「いまの入力」を添えて送り、返事はその値を返す。返事を待つあいだに打った新検番・高さが、届いた返事で
+   * 送ったときの値に戻っていた(梱包明細 0.13.44 と同じ直し)。送る前に打った値は、これまでどおり返事の値にする。
+   */
+  function keepTyping(el) {
+    return !!el && el === document.activeElement && document.hasFocus()
+      && Number(el.dataset.typedAt || 0) > replySentAt;
+  }
 
   // ---------------------------------------------------------- その場で表示を新しくする
   // 操作のあとは**ページを読み直さずに**状態を出す(統合 1.2.11。現場の指摘: どのツールでも
@@ -647,8 +666,10 @@
 
   function paint(state) {
     if (!state) { return; }
-    // 描き終えたら、いまの入力を「渡したもの」として覚える
-    setTimeout(function () { sentForm = formKey(); }, 0);
+    // 描き終えたら、いまの入力を「渡したもの」として覚える。**打っている途中で残した欄があれば覚えない**
+    // (まだ渡していない。閉じるときに「保存していない入力」として訊く。統合 1.2.73)
+    var kept = keepTyping($("#kensaNo")) || [1, 2, 3, 4].some(function (i) { return keepTyping($("#coilH" + i)); });
+    if (!kept) { setTimeout(function () { sentForm = formKey(); }, 0); }
     $("#lblKensaNo").textContent = state.lblKensaNo || "";
     $("#lblSize1").textContent = state.lblSize1 || "";
     $("#lblWeight1").textContent = state.lblWeight1 || "";
@@ -659,9 +680,9 @@
       if (nw) { nw.textContent = (state.nw && state.nw[i]) || ""; }
       if (gw) { gw.textContent = (state.gw && state.gw[i]) || ""; }
       if (ta) { ta.textContent = (state.ta && state.ta[i]) || ""; }
-      if (ch && state.coilH && typeof state.coilH[i] === "string") { ch.value = state.coilH[i]; }
+      if (ch && state.coilH && typeof state.coilH[i] === "string" && !keepTyping(ch)) { ch.value = state.coilH[i]; }
     });
-    if (typeof state.kensaNo === "string") { $("#kensaNo").value = state.kensaNo; }
+    if (typeof state.kensaNo === "string" && !keepTyping($("#kensaNo"))) { $("#kensaNo").value = state.kensaNo; }
     if (typeof state.lotNo === "string" && $("#lotNo") && document.activeElement !== $("#lotNo")) {
       $("#lotNo").value = state.lotNo;
     }

@@ -626,6 +626,36 @@ def pena_weights(fr, kensa="w111111", w1="10", w2="12"):
     return pena_toast(fr, "重量を反映しました")
 
 
+def pena_typing_kept(fr):
+    """重量反映の返事が、新検番を打っているあいだに届いても、打った新検番が消えない(ペナラベル・統合 1.2.73)。
+
+    操作は「いまの入力」を添えて送り、返事はその値を返す。以前は返事を待つあいだに打った新検番が、届いた返事で
+    送ったときの値に戻っていた。返事を画面の中で遅らせる。残した入力は「保存していない入力」として訊かれる。
+    """
+    fr.evaluate("""() => {
+        if (!window.__origFetch) window.__origFetch = window.fetch;
+        const orig = window.__origFetch;
+        window.fetch = (url, opts) => String(url).indexOf('/api/apply-weight') >= 0
+            ? orig(url, opts).then(r => new Promise(ok => setTimeout(() => ok(r), 1500)))
+            : orig(url, opts);
+    }""")
+    try:
+        fr.click("button[data-act=applyWeight]")      # 返事は 1.5 秒遅れて届く
+        fr.click("#kensaNo")
+        fr.fill("#kensaNo", "")
+        fr.type("#kensaNo", "w2222", delay=40)        # 次の新検番を打ち始める
+        fr.wait_for_timeout(2300)
+        typed = fr.input_value("#kensaNo")
+        asked = fr.evaluate("() => window.cptUnsaved ? window.cptUnsaved() : []")
+    finally:
+        fr.evaluate("() => { if (window.__origFetch) window.fetch = window.__origFetch; }")
+    check("ペナラベル: 重量反映の返事が、新検番を打っているあいだに届いても、打った新検番が消えない",
+          typed.upper() == "W2222", typed)              # 新検番の欄は大文字にそろえる
+    check("ペナラベル: 残した新検番は「保存していない入力」として訊かれる",
+          any("新検番" in a for a in asked), asked)
+    pena_weights(fr)                                  # 元へ戻す(あとの試験が使う)
+
+
 def pena_tare(fr, counts=("11", "11", "10", "10")):
     for i, n in enumerate(counts, 1):
         fr.fill(f"#coilH{i}", n)
@@ -746,6 +776,7 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
     check("ペナラベル: 検査番号・重量が表に出る",
           text(fr, "#lblKensaNo") == "W111111" and text(fr, "#lblWeight1") == "10kg",
           (text(fr, "#lblKensaNo"), text(fr, "#lblWeight1")))
+    pena_typing_kept(fr)
     err = pena_tare(fr)
     check("ペナラベル: 風袋計算(正味・総重量・高さ)", not err, err)
     with ctx.expect_page() as info:
