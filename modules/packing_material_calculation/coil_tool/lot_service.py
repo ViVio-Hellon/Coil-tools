@@ -190,6 +190,8 @@ def _computed_outer(conn: sqlite3.Connection, lot: str) -> tuple:
         from modules.packing_details.meisai import lot_lookup
         hit = lot_lookup.lookup(lot, kensa=False)
     except Exception as exc:                            # noqa: BLE001 - 引けなくても計算は止めない
+        # 黙って実績に落ちない。理由を記録に残す(ペナラベルの `coil_outer.lookup_lot` と同じ。統合 1.2.73)
+        log.warning("梱包明細の仕掛からコイル外径を引けませんでした(実績を見ます): %s", lot, exc_info=True)
         hit = {"found": False, "reason": f"仕掛を読めません: {exc}"}
     if hit.get("outer") is not None:
         return hit["outer"], "仕掛(LS4LOT)の内径・肉厚"

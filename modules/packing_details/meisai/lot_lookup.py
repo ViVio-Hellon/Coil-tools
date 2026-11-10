@@ -139,6 +139,11 @@ def _text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
+#: `lookup` が必ず返す鍵(統合 1.2.73・構造点検の改善案6)。**ペナラベル(`coil_outer`)と資材計算(`lot_service`)が
+#: この形を読む**ので、名前を変える・消すときは2つの機能も直す(`tests/test_lot_lookup_contract.py` が見張る)
+RESULT_KEYS = ("found", "lot", "kensa", "kensa_file", "outer", "inner", "thick", "file", "notes", "reason")
+
+
 def lookup(lot: str, *, kensa: bool = True) -> dict:
     """ロット番号の行から、検査番号とコイル外径を引く。
 
