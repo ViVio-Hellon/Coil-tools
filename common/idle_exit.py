@@ -417,8 +417,11 @@ class IdleWatch:
                 for k in gone:
                     del self._screens[k]
                 if gone:
-                    log.info("画面を %d 枚見送りました(残り %d 枚)",
-                             len(gone), len(self._screens))
+                    # 残りの名前と裏かどうかも出す(全部閉じても終わらないときの手がかり。統合 1.2.75)
+                    left = ", ".join(f"{k or '名乗らない画面'}{'(裏)' if v.hidden else ''}"
+                                     for k, v in self._screens.items())
+                    log.info("画面を %d 枚見送りました(残り %d 枚: %s)",
+                             len(gone), len(self._screens), left)
                 return None
         # 全部居なくなった。閉じた画面があればそれを理由にする
         reasons = list(gone.values())

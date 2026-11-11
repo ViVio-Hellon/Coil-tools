@@ -2218,7 +2218,9 @@ def scenario_idle(app: App, ctx, sh: Shell, note: dict, minutes: dict) -> None:
         ended = False
     check("放置e: 全部閉じたら自分で終わる", ended, "")
     if not ended:                                  # 手がかり: 自動終了の見張りが最後に何を見ていたか
-        for line in [l for l in app.logs().splitlines() if "idle_exit" in l][-15:]:
+        marks = ("開きました", "閉じました", "開き直され", "見送りました", "裏に回り", "終了")
+        for line in [l for l in app.logs().splitlines()
+                     if "idle_exit" in l and any(m in l for m in marks)][-60:]:
             print("      " + line)
     check("放置e: 終わったあと多重起動の印(ロック)が残らない",
           not (app.local / "runtime" / "main.lock").exists(), "")
