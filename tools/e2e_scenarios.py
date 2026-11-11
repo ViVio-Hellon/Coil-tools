@@ -830,7 +830,10 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
         pena_ready(fr)
         with ctx.expect_page() as info:
             fr.click("#asPrint")
-            _confirm_in_page(fr)
+            if not _confirm_in_page(fr):               # 押したのが表示の書き換えの途中だった。もう1回だけ
+                fr = sh.frame("pena")
+                fr.click("#asPrint")
+                _confirm_in_page(fr)
         sheet = info.value
         sheet.wait_for_load_state()
         check("ペナラベル: 全サイズの印刷ビューが別タブで開く",
