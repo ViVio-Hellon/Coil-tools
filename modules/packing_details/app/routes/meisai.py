@@ -399,7 +399,11 @@ def open_lot():
         board.end_edit(committed=False)     # 了解済み(cancel_edit)。紙は前のまま
     result = session.open_lot(conn, lot_no)
     if not result.found:
-        return jsonify(error_body("not_found", result.message, "lot_no")), 404
+        # 前のロットはもう閉じている(session.open_lot)。画面も描き直せるよう、いまの状態を添える
+        # (統合 1.2.82・現場の指摘: 見つからなかったあとも前のロットの情報と「前工程実績数が0です」が残っていた)
+        body = error_body("not_found", result.message, "lot_no")
+        body["state"] = _state(conn)
+        return jsonify(body), 404
 
     message = ""
     if session.restored():

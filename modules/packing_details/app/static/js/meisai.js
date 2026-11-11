@@ -554,6 +554,8 @@ async function send(path, data, onDone) {
     if (onDone) onDone(body);
     return body;
   } catch (err) {
+    // 断られても、いまの状態が添えてあれば描き直す(ロットが見つからなかったとき。前のロットの表示を残さない)
+    if (err instanceof ApiError && err.body && err.body.state) render(err.body.state, since);
     showError(err);
     return null;
   }
@@ -569,7 +571,14 @@ async function openLot(lotNo, confirm = false, cancelEdit = false) {
     }
     cancelEdit = true;      // サーバは了解(cancel_edit)が無いと修正中のロット切替を断る
   }
+  // 前のロットの知らせ(「該当するﾛｯﾄ情報が見つかりません」など)は、引き直すときに消す(統合 1.2.82・現場の指摘:
+  // ずっと残っていて、いまのロットの情報か分からなかった)
+  notify("");
   const body = await send("/api/lot", { lot_no: lotNo, confirm, cancel_edit: cancelEdit });
+  if (!body) {
+    $("lotNo").value = lotNo;               // 見つからなかった番号は欄に残す(打ち直しやすく)
+    return;
+  }
   if (body && body.confirm === "unprinted") {
     if (await confirmAsk(body.message)) openLot(lotNo, true, cancelEdit);
     else $("lotNo").value = window.APP.state.lot_no || "";

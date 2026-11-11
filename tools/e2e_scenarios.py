@@ -791,8 +791,18 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
 
     # ---- 梱包明細 ----
     fr = sh.tab("details")
+    # 見つからないロットを引くと知らせが出る。次に見つかるロットを引けば、その知らせは消える(統合 1.2.82・現場の指摘:
+    # 「該当するﾛｯﾄ情報が見つかりません」がずっと残り、いまのロットの情報か分からなかった)
+    fr.fill("#lotNo", "")
+    fr.type("#lotNo", "ZZZ9999", delay=20)
+    missing = wait_until(lambda: "見つかりません" in text(fr, "#notice") and visible(fr, "#notice"), 10)
+    check("梱包明細: 見つからないロットは知らせを出し、ロットの情報を出さない(統合 1.2.82)",
+          missing and not visible(fr, "#lotInfo") and fr.input_value("#lotNo") == "ZZZ9999",
+          (text(fr, "#notice"), visible(fr, "#lotInfo"), fr.input_value("#lotNo")))
     check("梱包明細: 取り込まれた台帳でロットが引ける", details_open_lot(fr, "L5160Z0"),
           text(fr, "#warisu") or text(fr, "#notice"))
+    check("梱包明細: 次のロットを引くと、前の「見つかりません」は消える(統合 1.2.82)",
+          not (visible(fr, "#notice") and "見つかりません" in text(fr, "#notice")), text(fr, "#notice"))
     check("梱包明細: 割数(縦割2 × 横割12)", "縦割2" in text(fr, "#warisu") and "横割12" in text(fr, "#warisu"),
           text(fr, "#warisu"))
     details_weights(fr, 250, 248)
