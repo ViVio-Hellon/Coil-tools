@@ -989,7 +989,8 @@ async function checkNewLedger() {
     const newer = body.newer || [];
     if (newer.length) {
       $("newLedgerText").textContent =
-        `${body.message}取り込むと、次にロットを入れたときから新しい台帳で引けます。`;
+        `${body.message}取り込むと、次にロットを入れたときから新しい台帳で引けます`
+        + `(押さなくても 15 分以内に自動で取り込みます。統合 1.2.77)。`;
     }
     $("newLedgerBanner").hidden = !newer.length;
   } catch { /* 次に聞く */ } finally {

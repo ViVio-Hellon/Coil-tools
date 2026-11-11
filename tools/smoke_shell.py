@@ -399,6 +399,8 @@ def main(argv=None) -> int:
     log_text = "".join(p.read_text(encoding="utf-8") for p in (local / "logs").rglob("*.log"))
     check("ログに何の版が違ったかが残る", "別の版を終わらせました(梱包明細 %s → 9.9.9)" % before in log_text)
     check("ログに起動した版の一覧が残る", "版: コイル梱包ツール" in log_text and "梱包明細 9.9.9" in log_text)
+    check("参照パスと手元の写しの見比べ(15 分おき)が始まる(統合 1.2.77)",
+          "参照パスと手元の写しの見比べを 15 分おきに行います" in log_text)
     check("ログに3機能の手元の領域と手元DBが残る",
           all(("%s: 手元の領域" % k) in log_text for k in ("梱包明細", "ペナラベル", "資材計算")))
     made = sorted(str(p.relative_to(copy)) for p in copy.rglob("__pycache__"))

@@ -32,7 +32,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Optional
 
-from common import ls4_source
+from common import ls4_source, source_copy
 
 from . import config, data_sync, source_db
 from .logging_utils import get_logger
@@ -244,6 +244,27 @@ def lookup(lot: str, *, kensa: bool = True) -> dict:
     if out["outer"] is None:
         out["notes"].append(f"ロット {lot} の内径・肉厚が入っていないので、コイル外径を出せません")
     return out
+
+
+def refresh_copies() -> int:
+    """ロット引きが読む共有のファイル(検査番号・外径)の写しを取り直す(15 分おきの見回り。統合 1.2.77)。
+
+    写しは中身(大きさ・更新時刻)が変わっていれば取り直し、同じなら前の写しのまま。届かないファイルは飛ばす
+    (前の写しは消さない)。写せたファイルの数を返す。
+    """
+    paths: list[Path] = []
+    for table in KENSA_TABLES:
+        for path in sources(table):
+            if all(not _same(path, seen) for seen in paths):
+                paths.append(path)
+    done = 0
+    for path in paths:
+        try:
+            source_copy.local_copy(path)
+            done += 1
+        except Exception as exc:                    # noqa: BLE001 - 届かなければ次の回
+            log.info("ロット引きの写しを取り直せませんでした(%s): %s", path.name, exc)
+    return done
 
 
 def forget() -> None:

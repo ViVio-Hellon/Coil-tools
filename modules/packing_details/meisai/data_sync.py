@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -397,12 +398,33 @@ def import_table(conn: sqlite3.Connection, table: str, source_path: Path, *,
     return result
 
 
+#: 取り込みは同時に1つ(「取り込み」ボタン・起動時の自動取り込み・15 分おきの見回り。統合 1.2.77)
+_import_lock = threading.Lock()
+
+
+def is_importing() -> bool:
+    """いま取り込んでいるか。"""
+    return _import_lock.locked()
+
+
 def import_all(conn: sqlite3.Connection, *,
                lot_dir: Optional[Path] = None,
                konpo_dir: Optional[Path] = None,
                progress: Optional[Progress] = None,
                force: bool = False,
                only: Optional[Iterable[str]] = None) -> ImportResult:
+    """4ファイルまとめて取り込む(同時に1つ。ほかが取り込み中なら終わるのを待つ)。"""
+    with _import_lock:
+        return _import_all(conn, lot_dir=lot_dir, konpo_dir=konpo_dir, progress=progress,
+                           force=force, only=only)
+
+
+def _import_all(conn: sqlite3.Connection, *,
+                lot_dir: Optional[Path] = None,
+                konpo_dir: Optional[Path] = None,
+                progress: Optional[Progress] = None,
+                force: bool = False,
+                only: Optional[Iterable[str]] = None) -> ImportResult:
     """4ファイルまとめて取り込む。画面の「取り込み」ボタン用。
 
     `force` が偽なら、**元が前回から変わっていないファイルは飛ばす**。

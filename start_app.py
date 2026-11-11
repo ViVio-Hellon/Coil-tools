@@ -739,6 +739,12 @@ def _initialize(srv, *, watch_idle: bool = True) -> None:
 
     run_initializers(srv, app_module.all_modules())
     _watch_remote_stop(srv, kind="browser" if watch_idle else "desktop")
+    # 15 分おきに参照パスと手元の写しを比べ、変わっていれば写し直す(統合 1.2.77・現場の指示)
+    try:
+        from common import auto_refresh
+        auto_refresh.start()
+    except Exception as exc:                      # noqa: BLE001 - 見回りが無くても使える
+        log().warning("参照パスとの見比べを始められませんでした: %s", exc)
 
 
 def _blocked_by_remote_stop(srv, thread) -> bool:
