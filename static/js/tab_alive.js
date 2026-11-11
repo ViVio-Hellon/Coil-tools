@@ -71,6 +71,26 @@
     } catch (e) { /* 届かなくても次の心拍で直る */ }
   }
 
+  // 閉じた合図は**2つの道で**送る(統合 1.2.79)。sendBeacon 1回だけだと、閉じた瞬間に PC が重いと
+  // 届かないことがあり(通し試験の CI で再現)、その画面が「裏に回ったまま」と数えられ続けて、全部閉じても
+  // 終わらなかった。重なって届いても害は無い(閉じるのをやめれば、次の心拍が取り消す)
+  var leftAt = 0;
+  function leaving(reason) {
+    var now = Date.now();
+    if (now - leftAt < 300) { return; }          // 同じ閉じ方で続けて来たら1回ぶん
+    leftAt = now;
+    var text = body({ leaving: true, reason: reason });
+    try {
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(URL_ALIVE, new Blob([text], { type: "application/json" }));
+      }
+    } catch (e) { /* 下の fetch で */ }
+    try {
+      fetch(URL_ALIVE, { method: "POST", keepalive: true, body: text,
+                         headers: { "Content-Type": "application/json" } }).catch(function () {});
+    } catch (e) { /* 届かなければそれまで */ }
+  }
+
   // 同じタブの前の名乗り(ブラウザが裏のタブを捨てて読み直したとき。shell.js と同じ)
   var PREV_KEY = "cpt.tab." + attr("data-key", "page") + ".client", previous = "";
   try { previous = sessionStorage.getItem(PREV_KEY) || ""; sessionStorage.setItem(PREV_KEY, CLIENT); }
@@ -98,10 +118,13 @@
   window.__cptDialogs = true;
   document.addEventListener("freeze", function () { signal({ reason: "freeze" }); });
   document.addEventListener("resume", function () { alive("resume"); });
+  // 閉じる直前にも言っておく(pagehide まで JavaScript が動かないことがある)。閉じるのを
+  // やめた・読み直しなら、次の心拍が取り消す
+  window.addEventListener("beforeunload", function () { leaving("beforeunload"); });
   window.addEventListener("pagehide", function (e) {
     // 保存状態(bfcache)へ入るだけなら「裏に回った」、本当に閉じたら「閉じた」
     if (e.persisted) { signal({ reason: "hidden" }); }
-    else { signal({ leaving: true, reason: "close" }); }
+    else { leftAt = 0; leaving("close"); }
   });
   window.addEventListener("pageshow", function (e) {
     if (e.persisted) { alive("restore"); }
