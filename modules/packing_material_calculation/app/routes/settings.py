@@ -92,7 +92,7 @@ FIELDS: tuple[dict[str, Any], ...] = (
         "key": config.KEY_KONPO_DB_FILE,
         "label": "第1パス: LS4LOT の名前",
         "detail": ("梱包課共有の仕掛フォルダで探すファイル名。LS4LOT 以外の名前(例: 実績_LS4)なら実績の形式で読む"
-                   "(いまの年月の行だけ。仕様は docs/仕掛ファイルの仕様.md)"),
+                   "(同じロットはいちばん新しい行。仕様は docs/仕掛ファイルの仕様.md)"),
         "vba": "",
         "expect": "",
         "default": config.KONPO_DB_FILE,

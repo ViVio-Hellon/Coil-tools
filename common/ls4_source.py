@@ -11,7 +11,7 @@
         ﾛｯﾄ番号
         BOX設計_縦割数 = 当工程設計_縦割数
         BOX設計_横割数 = 当工程設計_横割数
-        BOX実績_作業開始_日付 … **いまの年月の行だけ**使う(2026-10-21 00:01:56 → 2026-10)
+        BOX実績_作業開始_日付 … 同じロットは**いちばん新しい行**(月を問わない。統合 1.2.80。以前はいまの年月の行だけ)
         BOX実績_ｺｲﾙ内径・BOX実績_ｺｲﾙ肉厚 … コイル外径 = 内径 + 2 × 肉厚(資材計算)
         BOX実績_枚本数 … 検入数(本)(資材計算)。無ければ BOX設計_横割数 × BOX設計_縦割数
 
@@ -69,20 +69,52 @@ def this_month(today: Optional[date] = None) -> tuple[int, int]:
     return today.year, today.month
 
 
-def pick_rows(rows: Iterable[dict], today: Optional[date] = None) -> list[dict]:
-    """実績の行から、**いまの年月の行だけ**を、ロットごとに1行(作業開始がいちばん新しい行)。"""
-    want = this_month(today)
+#: 何か月前までの行を使うか(統合 1.2.80・現場の指示)。None なら月を問わない。
+#: 以前は**いまの年月の行だけ**だったので、先月 LS4 を通ったロットは割数・外径・検入数が出なかった。
+#: 実ファイル(2026-08〜11 の 769 行・765 ロット)では、月を問わなくても読み込みの時間は変わらなかった
+#: (読む 83ms・選ぶ 1ms 未満)。大きくなって遅くなったら、ここで絞る(例: 1 = 今月と先月)
+MONTHS_BACK: Optional[int] = None
+
+
+def _start_key(row: dict) -> tuple:
+    """新しさの順。年月で比べ、同じ年月なら作業開始の文字(区切りを - にそろえる)で比べる。読めない日付はいちばん古い。"""
+    text = str(row.get(COL_START) or "").strip()
+    return (year_month(text) or (0, 0), text.replace("/", "-"))
+
+
+def pick_rows(rows: Iterable[dict], today: Optional[date] = None,
+              months_back: Optional[int] = None) -> list[dict]:
+    """実績の行から、ロットごとに1行(**作業開始がいちばん新しい行** = いまの月に近いほう)。
+
+    `months_back` を渡せば、いまの年月からその月数前までの行だけ(0 = 今月だけ)。省けば `MONTHS_BACK`。
+    """
+    limit = MONTHS_BACK if months_back is None else months_back
+    if limit is not None:
+        y, m = this_month(today)
+        first = (y * 12 + m - 1) - limit                  # 使う最初の月(月の通し番号)
     best: dict[str, dict] = {}
     for row in rows:
-        if year_month(row.get(COL_START)) != want:
-            continue
+        if limit is not None:
+            ym = year_month(row.get(COL_START))
+            if ym is None or not first <= ym[0] * 12 + ym[1] - 1 <= first + limit:
+                continue
         lot = str(row.get(COL_LOT) or "").strip()
         if not lot:
             continue
         known = best.get(lot)
-        if known is None or str(row.get(COL_START) or "") > str(known.get(COL_START) or ""):
+        if known is None or _start_key(row) > _start_key(known):
             best[lot] = row
     return list(best.values())
+
+
+def period_text(today: Optional[date] = None) -> str:
+    """どの月の行を使ったか(取り込みの知らせ用)。"""
+    if MONTHS_BACK is None:
+        return "月を問わず、ロットごとにいちばん新しい行"
+    y, m = this_month(today)
+    if MONTHS_BACK == 0:
+        return f"{y}-{m:02d} の行だけ"
+    return f"{y}-{m:02d} から {MONTHS_BACK} か月前までの行"
 
 
 def _number(value: Any) -> Optional[float]:

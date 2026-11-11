@@ -62,3 +62,28 @@ class SharedClockTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Ls4PickRowsTest(unittest.TestCase):
+    """実績の形式の行の選び方(統合 1.2.80・現場の指示: 月を問わず、今の月に近いほうから)。"""
+
+    def test_月を問わずロットごとにいちばん新しい行(self):
+        from datetime import date
+        from common import ls4_source
+        rows = [{"ﾛｯﾄ番号": "A", "BOX実績_作業開始_日付": "2026-09-30 23:00:00", "v": "先々月"},
+                {"ﾛｯﾄ番号": "A", "BOX実績_作業開始_日付": "2026/10/01 01:00:00", "v": "先月"},
+                {"ﾛｯﾄ番号": "B", "BOX実績_作業開始_日付": "", "v": "日付なし"},
+                {"ﾛｯﾄ番号": "B", "BOX実績_作業開始_日付": "2026-08-01 00:00:00", "v": "8月"}]
+        got = {r["ﾛｯﾄ番号"]: r["v"] for r in ls4_source.pick_rows(rows, date(2026, 11, 11))}
+        self.assertEqual(got, {"A": "先月", "B": "8月"})
+
+    def test_絞るときは何か月前まで(self):
+        from datetime import date
+        from common import ls4_source
+        rows = [{"ﾛｯﾄ番号": "A", "BOX実績_作業開始_日付": "2026-11-02"},
+                {"ﾛｯﾄ番号": "B", "BOX実績_作業開始_日付": "2026-10-31"},
+                {"ﾛｯﾄ番号": "C", "BOX実績_作業開始_日付": "2026-09-30"}]
+        pick = lambda n: sorted(r["ﾛｯﾄ番号"] for r in ls4_source.pick_rows(rows, date(2026, 11, 11), months_back=n))
+        self.assertEqual(pick(0), ["A"])
+        self.assertEqual(pick(1), ["A", "B"])
+        self.assertEqual(ls4_source.MONTHS_BACK, None, "既定は月を問わない")

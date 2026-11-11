@@ -6,7 +6,7 @@
     外径 = BOX実績_ｺｲﾙ内径 + 2 × BOX実績_ｺｲﾙ肉厚
     検入数(本) = BOX実績_枚本数(無ければ BOX設計_横割数 × BOX設計_縦割数。統合 1.2.30)
 
-- BOX実績_作業開始_日付 が**いまの年月**の行だけを使い、同じロットは作業開始がいちばん新しい行
+- 同じロットは作業開始がいちばん新しい行(統合 1.2.80 から月を問わない。以前はいまの年月の行だけ)
   (形式の決まりは梱包明細と同じ部品 `common/ls4_source.py`。仕様は `docs/仕掛ファイルの仕様.md`)
 - 第1パス(梱包課共有のフォルダ・名前) → 第2パス(仕掛台帳の第2パスのフォルダ・LS4LOT の代わりの名前)。
   第1パスに無いロットは第2パスから足す。LS4LOT の生成時刻と合わないときの受け皿。
@@ -77,7 +77,7 @@ class ColumnsMissing(source_db.SourceError):
 
 
 def read_rows(path: Path) -> tuple[list[dict], int]:
-    """いまの年月の行(ロットごとに1行)と、ファイルの全行数。
+    """ロットごとにいちばん新しい行と、ファイルの全行数。
 
     読めなければ `SourceError`、**読めて**要る列が無ければ `ColumnsMissing`。
     表の一覧・列は読めなければ上げる形で読む(統合 1.2.61。以前は読めないと空になり「列がありません」と出た)。
@@ -135,8 +135,7 @@ def import_results(conn: Any):
                 added += 1
             elif _fill_from(merged[lot], row, path):
                 filled += 1
-        year, month = ls4_source.this_month()
-        notes.append(f"{path.name}: {year}-{month:02d} の行 {added:,}ロット(全 {total:,}行)"
+        notes.append(f"{path.name}: {ls4_source.period_text()} {added:,}ロット(全 {total:,}行)"
                      + ("を第2パスから足しました" if index else ""))
     if filled:
         notes.append(f"第1パスで外径・検入数が空だった {filled:,}ロットを第2パスで埋めました")

@@ -195,8 +195,8 @@ def read_source(table: str, path: Path) -> tuple[list[dict[str, Any]], list, str
     """取り込み元の行と、使う対応表と、知らせ(空でよい)。
 
     仕掛当工程のファイル名が LS4LOT 以外なら**実績の形式**で読む(統合 1.2.29・現場の指示):
-    要る列をそろえた表を探し、**いまの年月の行だけ**を、ロットごとに作業開始がいちばん新しい
-    1行にして返す(`common/ls4_source.pick_rows`)。
+    要る列をそろえた表を探し、ロットごとに作業開始がいちばん新しい1行にして返す
+    (`common/ls4_source.pick_rows`。統合 1.2.80 から月を問わない。以前はいまの年月の行だけ)。
     """
     if not is_results_file(table, path):
         return read_table(path), import_specs.IMPORT_SPECS[table], ""
@@ -216,9 +216,8 @@ def read_source(table: str, path: Path) -> tuple[list[dict[str, Any]], list, str
         # 手元を空にしない(統合 1.2.61。読めない・空を「今月は無い」と取り違えて消さない)
         raise SourceEmpty(f"{Path(path).name} の表が空です(書き直し中かもしれません)")
     kept = ls4_source.pick_rows(rows)
-    year, month = ls4_source.this_month()
     note = (f"仕掛当工程: {Path(path).name} は実績の形式で読みました"
-            f"({year}-{month:02d} の行だけ {len(kept):,}ロット / 全 {len(rows):,}行)")
+            f"({ls4_source.period_text()} {len(kept):,}ロット / 全 {len(rows):,}行)")
     return kept, import_specs.RESULTS_SPEC, note
 
 
@@ -333,7 +332,7 @@ def import_table(conn: sqlite3.Connection, table: str, source_path: Path, *,
     if note:
         result.notes.append(note)
 
-    # 実績の形式は、今月の行が無ければ**空にする**(先月の割数を使わない。現場の指示)
+    # 実績の形式は、行が無ければ**空にする**(統合 1.2.80 から月を問わずいちばん新しい行。以前は今月の行だけ)
     if not rows and not results_format:
         # **動きは変えない**(元が空なら入れ替えない ── 空の台帳で手元を消さない)。ただ
         # 「0件」だけだと空にしたように見えるので、前の中身のままだと書き添える(統合 1.2.49)
@@ -532,7 +531,7 @@ def import_results_lots(conn: sqlite3.Connection, paths: list[Path],
 
     - 列は SIKALOT と同じ名前(用途ｺｰﾄﾞ・用途名・製造材質・製造調質・製造板厚・製造板幅・ｵｰﾀﾞｰ板厚・ｵｰﾀﾞｰ板幅・
       ｵｰﾀﾞｰ板丈・設計_設備ｺｰｽ・実績_設備ｺｰｽ)。ロットごとに作業開始がいちばん新しい行。**月は絞らない**
-      (割数は今月の行だけ、の決まりは仕掛当工程のまま)
+      (割数も統合 1.2.80 から月を問わない)
     - 総入れ替え。読めない・空なら入れ替えない(前の中身のまま)
     - 引くときは仕掛ロットを先に見て、無いときだけここを見る(`lot_repo.find_lot`。条件は同じ ｵｰﾀﾞｰ板丈 = 0)
     """

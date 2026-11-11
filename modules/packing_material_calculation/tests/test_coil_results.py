@@ -64,18 +64,18 @@ def test_名前がLS4LOTのままなら読まない(place):
     assert coil_results.outer_for(conn, "A000001") is None
 
 
-def test_実績の形式なら外径は内径と2倍の肉厚_いまの年月の行だけ(place):
+def test_実績の形式なら外径は内径と2倍の肉厚_月を問わない(place):
     konpo, conn = place
     user_settings.save(config.KEY_KONPO_DB_FILE, "実績_LS4")
     _results(konpo / "実績_LS4.sqlite3", [
         ("A000001", f"{_ym()}-21 00:01:56", "508", "200.5"),
-        ("B000001", f"{_ym(1)}-28 08:00:00", "508", "100"),     # 先月は使わない
+        ("B000001", f"{_ym(1)}-28 08:00:00", "508", "100"),     # 先月も使う(統合 1.2.80)
         ("C000001", f"{_ym()}-03 08:00:00", "", "100"),          # 内径が空 → 外径は出さない
     ])
     result = coil_results.import_results(conn)
-    assert result.ok and result.rows == 2, result
+    assert result.ok and result.rows == 3, result
     assert coil_results.outer_for(conn, "A000001") == 909.0
-    assert coil_results.outer_for(conn, "B000001") is None
+    assert coil_results.outer_for(conn, "B000001") == 708.0
     assert coil_results.outer_for(conn, "C000001") is None
 
 

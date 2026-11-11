@@ -51,18 +51,18 @@ class Ls4ResultsTest(unittest.TestCase):
     def import_konpo(self):
         return data_sync.import_all(self.conn, force=True, only=config.KONPO_DB_FILES)
 
-    def test_名前がLS4LOT以外なら実績の形式_いまの年月の行だけ(self):
+    def test_名前がLS4LOT以外なら実績の形式_月を問わない(self):
         now = _ym()
         _db.make_source(self.konpo / "実績_LS4.sqlite3", RESULT_COLUMNS, [
             _row("A000001", "2", "6", f"{now}-21 00:01:56"),
-            _row("B000001", "3", "4", f"{_ym(1)}-28 23:59:00"),          # 先月は使わない
+            _row("B000001", "3", "4", f"{_ym(1)}-28 23:59:00"),          # 先月も使う(統合 1.2.80)
             _row("C000001", "1", "12", f"{now.replace('-', '/')}/02 08:00:00"),   # / 区切りも読む
         ])
         user_settings.save(config.KEY_KONPO_DB_FILE, "実績_LS4")
         result = self.import_konpo()
         self.assertTrue(result.ok, result.errors)
-        self.assertEqual(_warisu(self.conn), {"A000001": (2, 6), "C000001": (1, 12)})
-        self.assertTrue(any("実績の形式" in n and now in n for n in result.notes), result.notes)
+        self.assertEqual(_warisu(self.conn), {"A000001": (2, 6), "B000001": (3, 4), "C000001": (1, 12)})
+        self.assertTrue(any("実績の形式" in n and "月を問わず" in n for n in result.notes), result.notes)
 
     def test_同じロットが何行もあれば作業開始がいちばん新しい行(self):
         now = _ym()
@@ -75,16 +75,27 @@ class Ls4ResultsTest(unittest.TestCase):
         self.import_konpo()
         self.assertEqual(_warisu(self.conn), {"A000001": (2, 12)})
 
-    def test_今月の行が無ければ空にする_先月の割数を使わない(self):
+    def test_先月の行しか無いロットも先月の割数を使う(self):
+        """統合 1.2.80(現場の指示): 月を問わず取る。以前は今月の行だけで、先月 LS4 を通ったロットは割数 0 だった。"""
         _db.make_source(self.konpo / "LS4LOT.sqlite3", _db.TOKOTEI_COLUMNS, [_db.tokotei_row("Z000001")])
         self.import_konpo()
         self.assertIn("Z000001", _warisu(self.conn))
         _db.make_source(self.konpo / "実績_LS4.sqlite3", RESULT_COLUMNS,
                         [_row("B000001", "3", "4", f"{_ym(1)}-28 23:59:00")])
         user_settings.save(config.KEY_KONPO_DB_FILE, "実績_LS4")
-        result = self.import_konpo()
-        self.assertEqual(_warisu(self.conn), {})
-        self.assertTrue(any("0ロット" in n for n in result.notes), result.notes)
+        self.import_konpo()
+        self.assertEqual(_warisu(self.conn), {"B000001": (3, 4)})
+
+    def test_先月と先々月に値があれば今の月に近いほう(self):
+        _db.make_source(self.konpo / "実績_LS4.sqlite3", RESULT_COLUMNS, [
+            _row("E000001", "1", "2", f"{_ym(2)}-27 08:00:00"),            # 先々月
+            _row("E000001", "3", "8", f"{_ym(1)}-03 08:00:00"),            # 先月(こちら)
+            _row("F000001", "2", "2", f"{_ym(2)}-10 08:00:00"),
+            _row("F000001", "4", "6", f"{_ym(1).replace('-', '/')}/02 07:00:00"),   # / 区切りでも月で比べる
+        ])
+        user_settings.save(config.KEY_KONPO_DB_FILE, "実績_LS4")
+        self.import_konpo()
+        self.assertEqual(_warisu(self.conn), {"E000001": (3, 8), "F000001": (4, 6)})
 
     def test_実績の形式の列が無ければ取り込まない(self):
         _db.make_source(self.konpo / "実績_LS4.sqlite3", _db.TOKOTEI_COLUMNS, [_db.tokotei_row("A000001")])
