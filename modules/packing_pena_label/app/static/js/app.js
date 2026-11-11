@@ -95,9 +95,12 @@
   window.pplPost = post;
 
   // 打った時刻を覚える(返事で書き直さないかを決める。`keepTyping`)
-  document.addEventListener("input", function (e) {
+  function markTyped(e) {
     if (e.target && e.target.dataset) { e.target.dataset.typedAt = String(performance.now()); }
-  }, true);
+  }
+  document.addEventListener("input", markTyped, true);
+  // 選ぶボタン(2ケタ・3ケタ)は input が届かないことがあるので change でも(統合 1.2.81)
+  document.addEventListener("change", markTyped, true);
   /**
    * 返事で欄を書き直してよいか(統合 1.2.73・構造点検)。**送ったあとに打ち、いまも焦点のある欄は書き直さない。**
    * 操作は「いまの入力」を添えて送り、返事はその値を返す。返事を待つあいだに打った新検番・高さが、届いた返事で
@@ -114,6 +117,36 @@
   // id で対応させて差し替える。打ちかけの入力・スクロール位置・開いている面はそのまま。
   // `data-live` の中のボタンは document で受ける(差し替えても効くように)。
   //   opts.values: 欄(data-key)の値も新しくする key の配列。"all" ならすべて
+  /**
+   * 差し替える枠の中で、**操作を送ったあとに打った欄**の値は新しい枠へ持ち越す(統合 1.2.81)。
+   * 全サイズは台紙を選ぶと枠(#allSize)ごと差し替える。選んですぐ検番・重量を打ち始めると、差し替えで欄が空に
+   * 戻り、空のまま反映され「重量インプットがありません」になっていた(CI の通し試験で再現)。送る前に打った値は
+   * これまでどおり返事(サーバの値)にする。焦点のあった欄は、差し替えたあとも焦点と打つ位置を戻す。
+   */
+  var refocus = null;
+  function keepTypedInside(oldBox, newBox) {
+    oldBox.querySelectorAll("input, textarea, select").forEach(function (el) {
+      if (!(Number(el.dataset.typedAt || 0) > replySentAt)) { return; }
+      // id で突き合わせる。id の無い欄(2ケタ・3ケタのような選ぶボタン)は名前と値で
+      var twin = null;
+      if (el.id) {
+        twin = newBox.querySelector("#" + CSS.escape(el.id));
+      } else if (el.name && (el.type === "radio" || el.type === "checkbox")) {
+        twin = newBox.querySelector('input[name="' + CSS.escape(el.name) + '"][value="' + CSS.escape(el.value) + '"]');
+      } else if (el.name) {
+        twin = newBox.querySelector('[name="' + CSS.escape(el.name) + '"]');
+      }
+      if (!twin) { return; }
+      if (el.type === "radio" && !el.checked) { return; }   // 選んだほうだけ持ち越す(外れたほうは新しい枠に任せる)
+      if (el.type === "checkbox" || el.type === "radio") { twin.checked = el.checked; }
+      else { twin.value = el.value; }
+      twin.dataset.typedAt = el.dataset.typedAt;
+      if (el === document.activeElement) {
+        refocus = { id: el.id, start: el.selectionStart, end: el.selectionEnd };
+      }
+    });
+  }
+
   function refresh(opts) {
     opts = opts || {};
     return fetch(location.href, { cache: "no-store", headers: headers() }).then(function (r) {
@@ -123,8 +156,19 @@
       var doc = new DOMParser().parseFromString(html, "text/html");
       $$("[data-live]").forEach(function (el) {
         var fresh = el.id ? doc.getElementById(el.id) : null;
-        if (fresh) { el.replaceWith(document.importNode(fresh, true)); }
+        if (!fresh) { return; }
+        var node = document.importNode(fresh, true);
+        keepTypedInside(el, node);
+        el.replaceWith(node);
       });
+      if (refocus) {
+        var again = document.getElementById(refocus.id);
+        if (again && again !== document.activeElement) {
+          again.focus();
+          try { again.setSelectionRange(refocus.start, refocus.end); } catch (e) { /* 選べない欄 */ }
+        }
+        refocus = null;
+      }
       var keys = opts.values;
       if (keys) {
         $$("[data-key]").forEach(function (el) {

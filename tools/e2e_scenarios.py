@@ -660,6 +660,57 @@ def pena_typing_kept(fr):
     pena_weights(fr)                                  # 元へ戻す(あとの試験が使う)
 
 
+def pena_all_size_quick(sh, combos) -> None:
+    """全サイズ: 台紙を選んですぐ検番・重量を打っても、打った値が消えず、反映・印刷できる(統合 1.2.81)。
+
+    台紙を選ぶと「用意する」を送り、返事のあと枠(#allSize)ごと差し替える。以前は差し替えで打ちかけの欄が空に
+    戻り、空のまま反映されて「重量インプットがありません」になった(CI の通し試験で再現)。「用意する」を画面の中で
+    1.5 秒遅らせて送り、そのあいだに打つ(人が選んですぐ打ち始めたとき)。
+    """
+    fr = sh.frame("pena")
+    target = combos[1] if len(combos) > 1 else combos[0]
+    fr.evaluate("""(combo) => {
+        const orig = window.fetch;
+        window.__origFetchAs = orig;
+        window.fetch = (url, opts) => String(url).indexOf('/api/all-size/prepare') >= 0
+            ? new Promise(ok => setTimeout(ok, 1500)).then(() => orig(url, opts))
+            : orig(url, opts);
+        const sel = document.getElementById('asCombo');
+        if (sel.value === combo) { sel.value = ''; }
+        sel.value = combo;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }""", target)
+    fr.fill("#asKen", "W654321")                       # 「用意する」の返事を待たずに打つ
+    fr.fill("#asW1", "10")
+    fr.fill("#asW2", "12")
+    # 2ケタを選ぶ(前の状態で選ばれていると押しても何も起きないので、3ケタを押してから 2ケタ。人が選び直すのと同じ)
+    fr.check('input[name=asDigit][value="3"]')
+    fr.check('input[name=asDigit][value="2"]')
+    fr.click("#asW2")
+    sh.page.wait_for_timeout(3000)                    # 遅らせた「用意する」の返事と差し替えが済むまで
+    fr = sh.frame("pena")
+    kept = fr.evaluate("['asKen','asW1','asW2'].map(id => (document.getElementById(id) || {}).value || '')")
+    fr.evaluate("() => { const t = document.querySelector('#toast'); if (t) t.hidden = true; }")
+    fr.click("#asSubmit")
+    wait_until(lambda: visible(sh.frame("pena"), "#toast"), 8)
+    submitted = text(sh.frame("pena"), "#toast .toast-body")
+    fr = sh.frame("pena")
+    fr.evaluate("() => { const t = document.querySelector('#toast'); if (t) t.hidden = true; }")
+    fr.click("#asPrint")
+    ok_btn = "dialog.pplconfirm[open] button[data-ok]"
+    shown = wait_until(lambda: visible(sh.frame("pena"), ok_btn), 12, 0.05)
+    toast = text(sh.frame("pena"), "#toast .toast-body")
+    fr = sh.frame("pena")
+    if shown:
+        fr.click("dialog.pplconfirm[open] button:not([data-ok])") if fr.locator(
+            "dialog.pplconfirm[open] button:not([data-ok])").count() else fr.keyboard.press("Escape")
+    fr.evaluate("() => { if (window.__origFetchAs) window.fetch = window.__origFetchAs; }")
+    check("ペナラベル: 全サイズで台紙を選んですぐ打った検番・重量が、表示の差し替えで消えない(統合 1.2.81)",
+          kept == ["W654321", "10", "12"], kept)
+    check("ペナラベル: 全サイズで台紙を選んですぐ打っても、反映して印刷できる(統合 1.2.81)",
+          shown, {"反映": submitted, "印刷": toast or "確かめの窓が出ない"})
+
+
 def pena_tare(fr, counts=("11", "11", "10", "10")):
     for i, n in enumerate(counts, 1):
         fr.fill(f"#coilH{i}", n)
@@ -851,6 +902,7 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
             check("ペナラベル: 全サイズの印刷ビューが別タブで開く", False,
                   {"確かめの窓が出ない": notes, "選んだ台紙": fr.evaluate(
                       "() => (document.querySelector('#asCombo') || {}).value || ''")})
+        pena_all_size_quick(sh, combos)
     else:
         check("ペナラベル: 全サイズの候補がある", False, "候補なし")
     fr.goto(app.base + "/pena/")
