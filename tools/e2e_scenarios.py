@@ -1876,6 +1876,13 @@ def scenario_trail(app: App, ctx, sh: Shell, note: dict) -> None:
                               f"frames={[f.url.split('?')[0] for f in sh.page.frames]} "
                               f"text={shown_text[:80]!r}")
     check("後追い: 「中身を見る」で記録が開く(なぜなぜの欄つき)", opened, shown_text[:200] if opened else diag)
+    if lf is not None:
+        # 中身を開く前は、一覧が画面の幅いっぱい(統合 1.2.76。以前は右に中身の欄の場所を空け、左 4 割ほどだった)
+        widths = lf.evaluate("""() => { const d = document.getElementById('incDetail'); const was = d.hidden;
+            d.hidden = true; const w = [document.querySelector('.list').getBoundingClientRect().width,
+            document.querySelector('.cols').getBoundingClientRect().width]; d.hidden = was; return w; }""")
+        check("後追い: 中身を開く前は、エラーの一覧が画面の幅いっぱい(統合 1.2.76)",
+              widths[0] >= widths[1] * 0.95, widths)
     check("後追い: 記録がファイルに残る",
           bool(list((app.local / "logs" / "coilpacking" / "incidents").glob(f"coilpacking_なぜなぜ_*_{eid}.md"))))
     if lf is None:
