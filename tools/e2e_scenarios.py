@@ -828,17 +828,29 @@ def scenario_flow(app: App, ctx, sh: Shell, note: dict) -> None:
         check("ペナラベル: 全サイズの反映", ok, combos[0])
         fr = sh.frame("pena")
         pena_ready(fr)
-        with ctx.expect_page() as info:
+        # 印刷を押すと、画面の中の確かめの窓が出る。出なければ、そのとき出ている知らせを残す
+        # (CI の Linux で窓が出ずに止まったことがある。押したのが表示の書き換えの途中なら、もう1回だけ押す)
+        ok_btn = "dialog.pplconfirm[open] button[data-ok]"
+        notes = []
+        for _ in range(2):
+            fr = sh.frame("pena")
+            fr.evaluate("() => { const t = document.querySelector('#toast'); if (t) t.hidden = true; }")
             fr.click("#asPrint")
-            if not _confirm_in_page(fr):               # 押したのが表示の書き換えの途中だった。もう1回だけ
-                fr = sh.frame("pena")
-                fr.click("#asPrint")
-                _confirm_in_page(fr)
-        sheet = info.value
-        sheet.wait_for_load_state()
-        check("ペナラベル: 全サイズの印刷ビューが別タブで開く",
-              "/pena/all-size/print" in sheet.url and sheet.locator(".lbl").count() > 0, sheet.url)
-        sheet.close()
+            if wait_until(lambda: visible(fr, ok_btn), 10, 0.05):
+                break
+            notes.append(text(fr, "#toast .toast-body") or "(知らせなし)")
+        if visible(fr, ok_btn):
+            with ctx.expect_page() as info:
+                fr.click(ok_btn)
+            sheet = info.value
+            sheet.wait_for_load_state()
+            check("ペナラベル: 全サイズの印刷ビューが別タブで開く",
+                  "/pena/all-size/print" in sheet.url and sheet.locator(".lbl").count() > 0, sheet.url)
+            sheet.close()
+        else:
+            check("ペナラベル: 全サイズの印刷ビューが別タブで開く", False,
+                  {"確かめの窓が出ない": notes, "選んだ台紙": fr.evaluate(
+                      "() => (document.querySelector('#asCombo') || {}).value || ''")})
     else:
         check("ペナラベル: 全サイズの候補がある", False, "候補なし")
     fr.goto(app.base + "/pena/")
