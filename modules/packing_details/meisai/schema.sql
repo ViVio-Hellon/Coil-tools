@@ -53,6 +53,30 @@ CREATE TABLE IF NOT EXISTS 仕掛ロット (
 CREATE INDEX IF NOT EXISTS idx_lot_no ON 仕掛ロット(ロット番号);
 
 -- ------------------------------------------------------------------
+-- 仕掛ロット_実績 (統合 1.2.78)
+--
+-- 仕掛ロット(SIKALOT)に無いロットのための控え。LS4 を通り終えたコイルは SIKALOT から外れるが、
+-- 仕掛当工程の実績の形式のファイル(実績_LS4)には同じ名前の列で残る。ロットごとに1行。
+-- 引くときは仕掛ロットを先に見て、無いときだけここを見る(`lot_repo.find_lot`)。
+-- ------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS 仕掛ロット_実績 (
+    管理番号          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ロット番号        TEXT    NOT NULL,
+    用途コード        TEXT    NOT NULL DEFAULT '',
+    用途名            TEXT    NOT NULL DEFAULT '',
+    製造材質          TEXT    NOT NULL DEFAULT '',
+    製造調質          TEXT    NOT NULL DEFAULT '',
+    製造板厚          REAL    NOT NULL DEFAULT 0,
+    製造板幅          REAL    NOT NULL DEFAULT 0,
+    オーダー板厚      REAL    NOT NULL DEFAULT 0,
+    オーダー板幅      REAL    NOT NULL DEFAULT 0,
+    オーダー板丈      REAL    NOT NULL DEFAULT 0,
+    設計_設備コース    TEXT    NOT NULL DEFAULT '',
+    実績_設備コース    TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_results_lot_no ON 仕掛ロット_実績(ロット番号);
+
+-- ------------------------------------------------------------------
 -- 仕掛引当 (SIKAHIKI.sqlite3 の「仕掛」)
 --
 -- VBA `mDB.GetJuchuBangouList` が引く表。ロット番号で複数行あり、

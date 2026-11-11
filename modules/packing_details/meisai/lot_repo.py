@@ -141,6 +141,17 @@ def find_lot(conn: sqlite3.Connection, lot_no: str) -> LotInfo:
         " WHERE ロット番号 = ? AND オーダー板丈 = 0"
         " ORDER BY 管理番号 LIMIT 1",
         (lot_no,), caller_name="lot_repo.find_lot")
+    if row is None:
+        # 仕掛ロットに無ければ、実績の形式のファイル(実績_LS4)から取り込んだ控えを見る(統合 1.2.78・
+        # 現場の指摘)。LS4 を通り終えたコイルは SIKALOT から外れ、梱包明細だけ引けなかった。条件は同じ
+        row = db.fetch_one(
+            conn,
+            "SELECT * FROM 仕掛ロット_実績"
+            " WHERE ロット番号 = ? AND オーダー板丈 = 0"
+            " ORDER BY 管理番号 LIMIT 1",
+            (lot_no,), caller_name="lot_repo.find_lot(実績)")
+        if row is not None:
+            log.info("find_lot: 仕掛ロットに無いので実績の控えから引きました ロット番号=%s", lot_no)
 
     if row is None:
         log.debug("find_lot: 該当データなし ロット番号=%s", lot_no)

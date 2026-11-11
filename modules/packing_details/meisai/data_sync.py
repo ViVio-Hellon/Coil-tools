@@ -480,12 +480,116 @@ def _import_all(conn: sqlite3.Connection, *,
         if result.errors and table in [e.split(":")[0] for e in result.errors]:
             notify(pct, f"{table} を読み込み中...", False)
 
+    if "仕掛当工程" in wanted:
+        results = [p for p in (found.get("仕掛当工程"), second.get("仕掛当工程"))
+                   if p is not None and is_results_file("仕掛当工程", p)]
+        if results and (force or _results_lots_need(conn, results)):
+            import_results_lots(conn, results, result)
+
     for table, filename in missing_sources(found).items():
         if table in wanted:
             result.errors.append(f"{filename} が見つからないため {table} は更新していません")
 
     notify(100, result.summary(), result.ok)
     return result
+
+
+# ==================================================================
+# 仕掛ロットに無いロットを、実績の形式のファイルから引けるようにする(統合 1.2.78・現場の指摘)
+# ==================================================================
+#: 手元の表と、取り込み記録の名前
+RESULTS_LOT_TABLE = "仕掛ロット_実績"
+RESULTS_LOT_NOTE = "仕掛ロット(実績)"
+
+
+def _results_mark(paths: list[Path]) -> tuple[str, str]:
+    """実績のファイル(1つか2つ)の (場所, 目印) を1つの文字列にまとめる。届かないものがあれば目印は空。"""
+    stamps = [source_db.file_stamp(Path(p)) for p in paths]
+    where = " | ".join(str(p) for p in paths)
+    if any(st is None for st in stamps):
+        return where, ""
+    return where, " | ".join(stamp_text(st) for st in stamps)
+
+
+def _results_lots_need(conn: sqlite3.Connection, paths: list[Path]) -> bool:
+    """実績のファイルが、前に仕掛ロット_実績へ取り込んだときから変わったか(まだなら変わった扱い)。"""
+    where, mark = _results_mark(paths)
+    if not mark:
+        return False                          # 届かない。前の中身のまま
+    row = conn.execute("SELECT ファイル, 目印 FROM 取り込み記録 WHERE テーブル = ?",
+                       (RESULTS_LOT_NOTE,)).fetchone()
+    return row is None or str(row[0]) != where or str(row[1] or "") != mark
+
+
+def import_results_lots(conn: sqlite3.Connection, paths: list[Path],
+                        result: ImportResult) -> int:
+    """実績の形式のファイル(実績_LS4 など)から、ロットの用途・材質・板厚などを `仕掛ロット_実績` へ入れる。
+
+    現場で起きたこと: 資材計算・ペナラベルは LOTNO を引けるのに、梱包明細だけ「該当するﾛｯﾄ情報が見つかりません」
+    (取り込み直しても同じ)。LS4 を通り終えたコイルは**仕掛ロット(SIKALOT)から外れる**が、仕掛引当(SIKAHIKI)と
+    実績_LS4 には残る(2026-10 の実ファイルで、実績_LS4 の 912 ロットのうち 899 ロットが SIKALOT に無かった)。
+    資材計算は仕掛引当、ペナラベルは仕掛引当・実績から引くので見つかり、梱包明細だけ SIKALOT の行を必ず要った。
+
+    - 列は SIKALOT と同じ名前(用途ｺｰﾄﾞ・用途名・製造材質・製造調質・製造板厚・製造板幅・ｵｰﾀﾞｰ板厚・ｵｰﾀﾞｰ板幅・
+      ｵｰﾀﾞｰ板丈・設計_設備ｺｰｽ・実績_設備ｺｰｽ)。ロットごとに作業開始がいちばん新しい行。**月は絞らない**
+      (割数は今月の行だけ、の決まりは仕掛当工程のまま)
+    - 総入れ替え。読めない・空なら入れ替えない(前の中身のまま)
+    - 引くときは仕掛ロットを先に見て、無いときだけここを見る(`lot_repo.find_lot`。条件は同じ ｵｰﾀﾞｰ板丈 = 0)
+    """
+    spec = import_specs.IMPORT_SPECS["仕掛ロット"]
+    best: dict[str, dict] = {}
+    where, mark = _results_mark(paths)                # 目印は読む前に取る(`import_table` と同じ)
+    for path in paths:
+        try:
+            tables = _results_tables(Path(path))
+            picked = ls4_source.choose_table(tables, import_specs.SOURCE_TABLE)
+            if picked is None:
+                continue
+            rows = source_db.read_table(Path(path), picked)
+        except (source_db.SourceError, OSError) as exc:
+            result.errors.append(f"{RESULTS_LOT_NOTE}: {Path(path).name} を読めませんでした({exc})。"
+                                 "前の中身のままです")
+            log.warning("%s: %s を読めません: %s", RESULTS_LOT_NOTE, path, exc)
+            return 0
+        for row in rows:
+            lot = str(row.get(ls4_source.COL_LOT) or "").strip().upper()
+            if not lot:
+                continue
+            known = best.get(lot)
+            start = str(row.get(ls4_source.COL_START) or "")
+            if known is None or start > str(known.get(ls4_source.COL_START) or ""):
+                best[lot] = row
+    if not best:
+        log.info("%s: 実績のファイルにロットの行がありません(前の中身のまま)", RESULTS_LOT_NOTE)
+        return 0
+    columns = [c[0] for c in spec]
+    col_list = ", ".join(f'"{c}"' for c in columns)
+    placeholders = ", ".join("?" for _ in columns)
+    fallbacks = import_specs.NULL_FALLBACKS
+    try:
+        with conn:
+            conn.execute(f'DELETE FROM "{RESULTS_LOT_TABLE}"')
+            for lot, row in best.items():
+                values = {col: conv(row.get(src)) for col, src, conv in spec}
+                values["ロット番号"] = lot
+                conn.execute(f'INSERT INTO "{RESULTS_LOT_TABLE}" ({col_list}) VALUES ({placeholders})',
+                             [values[col] if values[col] is not None else fallbacks.get(conv)
+                              for col, _src, conv in spec])
+    except sqlite3.Error as exc:
+        log.exception("%s: 取り込み中にエラー", RESULTS_LOT_NOTE)
+        result.errors.append(f"{RESULTS_LOT_NOTE}: {exc}")
+        return 0
+    with conn:
+        conn.execute(
+            "INSERT INTO 取り込み記録 (テーブル, ファイル, 更新時刻, 取り込み日時, 元作成日時, 件数, 目印)"
+            " VALUES (?, ?, 0, ?, '', ?, ?)"
+            " ON CONFLICT(テーブル) DO UPDATE SET ファイル=excluded.ファイル,"
+            " 取り込み日時=excluded.取り込み日時, 件数=excluded.件数, 目印=excluded.目印",
+            (RESULTS_LOT_NOTE, where, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), len(best), mark))
+    result.notes.append(f"仕掛ロットに無いロットのために、{', '.join(Path(p).name for p in paths)} から"
+                        f" {len(best):,}ロットの用途・材質・板厚を取り込みました")
+    log.info("%s: %s ロット取り込み", RESULTS_LOT_NOTE, len(best))
+    return len(best)
 
 
 # 2つ目から足すときの「同じもの」の決め方。この鍵が1つ目に無いものだけ足す
