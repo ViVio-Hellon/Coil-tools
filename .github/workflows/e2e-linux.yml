@@ -42,8 +42,10 @@ jobs:
         if: success() || failure()
         run: python tools/e2e_scenarios.py --shots e2e-shots
 
+      # 画面の写真は落ちたときだけ残す(調べ物用。通ったときに出すと、Actions で exe と取り違えやすい。
+      # exe は「デスクトップ版(Windows)」の CoilPackingTools-windows)
       - uses: actions/upload-artifact@v4
-        if: success() || failure()
+        if: failure()
         with:
           name: e2e-shots
           path: e2e-shots
