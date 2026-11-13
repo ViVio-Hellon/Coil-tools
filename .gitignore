@@ -34,3 +34,7 @@ desktop.ini
 # デスクトップ版(Tauri)を作ったときにできるもの。`cargo build` で作り直せる
 src-tauri/target/
 src-tauri/gen/
+
+# Claude Code: 圧縮直前の作業状態の控え(端末ごと)
+/.claude/state_backups/
+/.claude/settings.local.json
